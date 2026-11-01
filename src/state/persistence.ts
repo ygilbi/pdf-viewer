@@ -16,6 +16,7 @@ import { createElement, useEffect } from 'react';
 import { create } from 'zustand';
 import { useViewer } from './store';
 import type { ViewerState } from './store';
+import { sanitizeCategories } from '../core/measurementEngine';
 
 const DB_NAME = 'aluminum-app';
 const DB_VERSION = 1;
@@ -30,6 +31,8 @@ export interface PersistedDocument {
   updatedAt: number;
   calibrations: ViewerState['calibrations'];
   measurements: ViewerState['measurements'];
+  /** Added later — missing in older records (→ default categories). */
+  categories?: ViewerState['categories'];
 }
 
 // ---------------------------------------------------------------------------
@@ -164,6 +167,7 @@ function snapshot(): PersistedDocument | null {
     updatedAt: Date.now(),
     calibrations: s.calibrations,
     measurements: s.measurements,
+    categories: s.categories,
   };
 }
 
@@ -250,9 +254,11 @@ export async function restoreDocument(fingerprint: string, fileName: string): Pr
   const calibrations = rec.calibrations && typeof rec.calibrations === 'object' ? rec.calibrations : {};
   // Merge with anything drawn in the brief window before hydration.
   const ids = new Set(s.measurements.map((m) => m.id));
+  const categories = sanitizeCategories(rec.categories);
   useViewer.setState({
     measurements: [...measurements.filter((m) => !ids.has(m.id)), ...s.measurements],
     calibrations: { ...calibrations, ...s.calibrations },
+    ...(categories ? { categories } : {}),
   });
   const n = measurements.length;
   if (n > 0) useRestoreToast.setState({ count: n, key: Date.now() });
@@ -266,7 +272,12 @@ export async function restoreDocument(fingerprint: string, fileName: string): Pr
 export function usePersistence() {
   useEffect(() => {
     const unsub = useViewer.subscribe((s, prev) => {
-      if (s.measurements !== prev.measurements || s.calibrations !== prev.calibrations) scheduleSave();
+      if (
+        s.measurements !== prev.measurements ||
+        s.calibrations !== prev.calibrations ||
+        s.categories !== prev.categories
+      )
+        scheduleSave();
     });
     const flush = () => {
       if (saveTimer) writeNow(true);

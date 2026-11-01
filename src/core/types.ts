@@ -89,7 +89,7 @@ export interface PdfClient {
 // Measurements
 // ---------------------------------------------------------------------------
 
-export type ToolId = 'pan' | 'calibrate' | 'area' | 'deduct' | 'length';
+export type ToolId = 'pan' | 'calibrate' | 'area' | 'deduct' | 'length' | 'count';
 
 /**
  * What a measurement represents:
@@ -97,8 +97,16 @@ export type ToolId = 'pan' | 'calibrate' | 'area' | 'deduct' | 'length';
  *  - 'deduct' opening (window/door) polygon subtracted from the area that
  *             contains its centroid on the same page
  *  - 'length' open polyline (≥2 points), measured by total length
+ *  - 'count'  item count: each point is one marker (≥1 point), e.g. "W1 ×12"
  */
-export type MeasurementKind = 'area' | 'deduct' | 'length';
+export type MeasurementKind = 'area' | 'deduct' | 'length' | 'count';
+
+/** Work category (חלונות / ויטרינות / חיפוי …). Measurements reference it by `id`. */
+export interface Category {
+  id: string;
+  name: string;
+  color: string;
+}
 
 /** Per-page scale. pixelsPerMeter is in *page units per meter*. */
 export interface Calibration {
@@ -118,7 +126,12 @@ export interface AreaMeasurement {
    * Always read it through `kindOf(m)` (measurementEngine).
    */
   kind?: MeasurementKind;
-  /** Vertices in page units. Polygon (closed implicitly) for area/deduct, open polyline for length. */
+  /**
+   * Vertices in page units. Polygon (closed implicitly) for area/deduct, open
+   * polyline for length, one marker per point for count.
+   */
   points: Point[];
   color: string;
+  /** Category id (see `Category`); missing/undefined = uncategorised (older saves too). */
+  category?: string;
 }

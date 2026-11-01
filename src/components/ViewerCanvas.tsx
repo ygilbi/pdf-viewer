@@ -73,6 +73,31 @@ function toolKind(t: ToolId): MeasurementKind | null {
 }
 const isPolygonTool = (t: ToolId) => t === 'area' || t === 'deduct';
 
+type StoreState = ReturnType<typeof useViewer.getState>;
+
+/** Color + category for a new measurement: follows the active category (openings stay red-hatched). */
+function newMeasurementStyle(s: StoreState, kind: MeasurementKind): Pick<AreaMeasurement, 'color' | 'category'> {
+  const cat = s.activeCategoryId ? s.categories.find((c) => c.id === s.activeCategoryId) : undefined;
+  const color =
+    kind === 'deduct'
+      ? DEDUCT_COLOR
+      : (cat?.color ?? MEASUREMENT_COLORS[s.measurements.length % MEASUREMENT_COLORS.length]);
+  return cat ? { color, category: cat.id } : { color };
+}
+
+/** The selected measurement if it is a count group on the current page. */
+function activeCount(s: StoreState): AreaMeasurement | undefined {
+  if (!s.selectedId) return undefined;
+  return s.measurements.find((m) => m.id === s.selectedId && m.page === s.currentPage && kindOf(m) === 'count');
+}
+
+/** Remove one marker from a count group (the group itself goes when it becomes empty). */
+function removeMarker(s: StoreState, m: AreaMeasurement, index: number) {
+  const points = m.points.filter((_, i) => i !== index);
+  if (points.length === 0) s.removeMeasurement(m.id);
+  else s.updateMeasurement(m.id, { points });
+}
+
 /** Rubber-band colour per tool (keep in sync with MeasureOverlay's draft colours). */
 function toolColor(t: ToolId, bad = false): string {
   if (bad) return OVERLAY_WARN_COLOR;
@@ -82,10 +107,17 @@ function toolColor(t: ToolId, bad = false): string {
   return '#2563eb';
 }
 
-/** Topmost measurement under a page point: lines first, then openings, then areas. */
-function hitTest(p: Point, ms: AreaMeasurement[], page: number, lineSlop: number): AreaMeasurement | undefined {
+/** Topmost measurement under a page point: count markers first, then lines, openings, areas. */
+function hitTest(
+  p: Point,
+  ms: AreaMeasurement[],
+  page: number,
+  lineSlop: number,
+  markerSlop: number,
+): AreaMeasurement | undefined {
   const onPage = ms.filter((m) => m.page === page).reverse();
   return (
+    onPage.find((m) => kindOf(m) === 'count' && nearestVertex(p, m.points, markerSlop) >= 0) ??
     onPage.find((m) => kindOf(m) === 'length' && distanceToPolyline(p, m.points) <= lineSlop) ??
     onPage.find((m) => kindOf(m) === 'deduct' && pointInPolygon(p, m.points)) ??
     onPage.find((m) => kindOf(m) === 'area' && pointInPolygon(p, m.points))
@@ -206,7 +238,9 @@ export default function ViewerCanvas() {
       const closing = closingRef.current;
       const readout = readoutRef.current;
       const p = cursorPage();
-      const drawing = s.numPages > 0 && (toolKind(s.tool) !== null || (s.tool === 'calibrate' && s.draft.length < 2));
+      const drawing =
+        s.numPages > 0 &&
+        (toolKind(s.tool) !== null || s.tool === 'count' || (s.tool === 'calibrate' && s.draft.length < 2));
       const polyTool = isPolygonTool(s.tool);
       const active = drawing && p !== null && gesture.kind !== 'pan' && gesture.kind !== 'pinch' && gesture.kind !== 'vertex';
       const d = s.draft;
@@ -248,7 +282,12 @@ export default function ViewerCanvas() {
         let text = '';
         let warn = false;
         if (active && p) {
-          if (s.tool === 'length') {
+          if (s.tool === 'count') {
+            const g = activeCount(s);
+            text = g
+              ? `${g.label} ×${g.points.length} · לחץ להוספה · Enter לסיום`
+              : 'לחץ לסימון פריט (קבוצת ספירה חדשה)';
+          } else if (s.tool === 'length') {
             if (!ppm) {
               text = 'יש לכייל קנה מידה';
               warn = true;
@@ -325,7 +364,7 @@ export default function ViewerCanvas() {
         kind,
         label: `${KIND_LABEL_PREFIX[kind]} ${nextLabelNumber(s.measurements, kind)}`,
         points: pts,
-        color: kind === 'deduct' ? DEDUCT_COLOR : MEASUREMENT_COLORS[s.measurements.length % MEASUREMENT_COLORS.length],
+        ...newMeasurementStyle(s, kind),
       });
       s.setDraft([]);
     };
@@ -335,8 +374,24 @@ export default function ViewerCanvas() {
       if (s.numPages === 0) return;
       const raw = vp.toPage(sx, sy);
       if (s.tool === 'pan') {
-        const hit = hitTest(raw, s.measurements, s.currentPage, LINE_HIT_PX / vp.zoom);
+        const hit = hitTest(raw, s.measurements, s.currentPage, LINE_HIT_PX / vp.zoom, VERTEX_PX / vp.zoom);
         s.select(hit ? hit.id : null);
+        return;
+      }
+      if (s.tool === 'count') {
+        // Add a marker to the active (selected) count group, or start a new group.
+        const g = activeCount(s);
+        if (g) s.updateMeasurement(g.id, { points: [...g.points, raw] });
+        else {
+          s.addMeasurement({
+            id: newId(),
+            page: s.currentPage,
+            kind: 'count',
+            label: `${KIND_LABEL_PREFIX.count} ${nextLabelNumber(s.measurements, 'count')}`,
+            points: [raw],
+            ...newMeasurementStyle(s, 'count'),
+          });
+        }
         return;
       }
       const d = s.draft;
@@ -392,9 +447,23 @@ export default function ViewerCanvas() {
 
     const onPointerDown = (e: PointerEvent) => {
       if ((e.target as HTMLElement).closest?.('[data-viewer-ui]')) return;
-      if (e.pointerType === 'mouse' && e.button !== 0 && e.button !== 1) return;
       const s = st();
       if (s.numPages === 0) return;
+      // Right-click or Alt+click on a marker of the selected count group removes it.
+      if (e.pointerType === 'mouse' && (e.button === 2 || (e.button === 0 && e.altKey)) && pointers.size === 0) {
+        const g = activeCount(s);
+        if (g) {
+          rect = container.getBoundingClientRect();
+          const q0 = local(e);
+          const idx = nearestVertex(vp.toPage(q0.x, q0.y), g.points, VERTEX_PX / vp.zoom);
+          if (idx >= 0) {
+            e.preventDefault();
+            removeMarker(s, g, idx);
+            return;
+          }
+        }
+      }
+      if (e.pointerType === 'mouse' && e.button !== 0 && e.button !== 1) return;
       rect = container.getBoundingClientRect();
       const q = local(e);
       cursor = q;
@@ -623,6 +692,10 @@ export default function ViewerCanvas() {
           break;
         case 'Backspace':
           if (s.draft.length) s.setDraft(s.draft.slice(0, -1));
+          else if (s.tool === 'count' && activeCount(s)) {
+            const g = activeCount(s)!;
+            removeMarker(s, g, g.points.length - 1);
+          }
           else if (s.selectedId) s.removeMeasurement(s.selectedId);
           else handled = false;
           break;
@@ -633,6 +706,7 @@ export default function ViewerCanvas() {
         case 'Enter':
         case 'NumpadEnter':
           if (toolKind(s.tool) && s.draft.length >= minPoints(toolKind(s.tool)!)) finishDraft();
+          else if (s.tool === 'count' && activeCount(s)) s.select(null); // finish the count group
           else handled = false;
           break;
         default:
@@ -658,7 +732,8 @@ export default function ViewerCanvas() {
       updateCursor();
     };
     const onContextMenu = (e: MouseEvent) => {
-      if (st().draft.length) e.preventDefault();
+      const s = st();
+      if (s.draft.length || s.tool === 'count' || activeCount(s)) e.preventDefault();
     };
 
     container.addEventListener('pointerdown', onPointerDown);
@@ -729,7 +804,7 @@ export default function ViewerCanvas() {
   useEffect(() => {
     hooks.current.updateBand();
     hooks.current.updateCursor();
-  }, [tool, draft, calibration, selectedId]);
+  }, [tool, draft, calibration, selectedId, measurements]);
 
   const showPrompt = tool === 'calibrate' && draft.length === 2;
 

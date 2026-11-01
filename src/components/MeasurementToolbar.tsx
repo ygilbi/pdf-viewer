@@ -30,6 +30,9 @@ import {
   IconZoomOut,
 } from './ui/icons';
 import { baseName, downloadBlob, isTypingTarget } from './ui/util';
+import { CopyTableButton } from './CopyTableButton';
+
+const DOWNLOAD_HINT = "אם ההורדה חסומה, השתמש ב'העתק טבלה'";
 
 interface Props {
   onOpenFile(file: File): void;
@@ -309,12 +312,25 @@ export default function MeasurementToolbar({ onOpenFile }: Props) {
       <div className="flex-1" />
 
       {/* export */}
-      <ToolButton label="ייצוא CSV" disabled={!hasDoc || measurementCount === 0} onClick={exportCSV} showLabel>
+      <ToolButton
+        label="ייצוא CSV"
+        hint={DOWNLOAD_HINT}
+        disabled={!hasDoc || measurementCount === 0}
+        onClick={exportCSV}
+        showLabel
+      >
         <IconDownload />
       </ToolButton>
-      <ToolButton label="ייצוא JSON" disabled={!hasDoc || measurementCount === 0} onClick={exportJSON} showLabel>
+      <ToolButton
+        label="ייצוא JSON"
+        hint={DOWNLOAD_HINT}
+        disabled={!hasDoc || measurementCount === 0}
+        onClick={exportJSON}
+        showLabel
+      >
         <IconDownload />
       </ToolButton>
+      <CopyTableButton disabled={!hasDoc || measurementCount === 0} />
     </header>
   );
 }

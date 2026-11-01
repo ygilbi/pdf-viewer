@@ -3,6 +3,8 @@ import type { ReactNode } from 'react';
 interface ToolButtonProps {
   label: string;
   shortcut?: string;
+  /** Extra line shown under the label in the tooltip. */
+  hint?: string;
   active?: boolean;
   disabled?: boolean;
   onClick?: () => void;
@@ -16,6 +18,7 @@ interface ToolButtonProps {
 export function ToolButton({
   label,
   shortcut,
+  hint,
   active,
   disabled,
   onClick,
@@ -59,6 +62,7 @@ export function ToolButton({
             {shortcut}
           </kbd>
         )}
+        {hint && <div className="mt-0.5 text-[10px] text-slate-400">{hint}</div>}
       </div>
     </div>
   );

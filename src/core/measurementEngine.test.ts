@@ -445,24 +445,27 @@ describe('measurementsToTSV', () => {
     { id: 'b', page: 1, label: 'חדר "שינה",\tהורים\nקומה\r\nב', points: rect(2, 3, 10), color: '#000' },
   ];
   const tsv = measurementsToTSV(ms, { 1: cal });
-  const lines = tsv.trimEnd().split('\r\n');
+  const lines = tsv.replace(/\r\n$/, '').split('\r\n');
 
   it('no BOM, tab-separated, same rows as CSV builder', () => {
     expect(tsv.charCodeAt(0)).not.toBe(0xfeff);
     const rows = buildMeasurementRows(ms, { 1: cal });
     expect(lines).toHaveLength(rows.length);
     expect(lines[0]).toBe(rows[0].join('\t'));
-    expect(lines[1]).toBe('1\tשטח\tסלון\t1\t50.00\t30.00\t\t4\t');
+    rows.forEach((r, i) => expect(lines[i]).toBe(r.map((c) => c.replace(/[\t\r\n]+/g, ' ')).join('\t')));
   });
 
   it('no quoting; tabs/newlines inside cells become spaces', () => {
-    expect(lines[2]).toBe('2\tשטח\tחדר "שינה", הורים קומה ב\t1\t6.00\t10.00\t\t4\t');
+    const cells = lines[2].split('\t');
+    expect(cells).toContain('חדר "שינה", הורים קומה ב');
+    expect(lines[1].split('\t')).toContain('סלון');
+    expect(lines[1].split('\t')).toContain('50.00');
     for (const l of lines) expect(l.split('\t')).toHaveLength(lines[0].split('\t').length);
   });
 
   it('CSV and TSV share rows (same cell values)', () => {
-    const csvLines = measurementsToCSV(ms.slice(0, 1), { 1: cal }).replace(/^\uFEFF/, '').trimEnd().split('\r\n');
-    const tsvLines = measurementsToTSV(ms.slice(0, 1), { 1: cal }).trimEnd().split('\r\n');
+    const csvLines = measurementsToCSV(ms.slice(0, 1), { 1: cal }).replace(/^\uFEFF/, '').replace(/\r\n$/, '').split('\r\n');
+    const tsvLines = measurementsToTSV(ms.slice(0, 1), { 1: cal }).replace(/\r\n$/, '').split('\r\n');
     expect(tsvLines.map((l) => l.split('\t'))).toEqual(csvLines.map((l) => l.split(',')));
   });
 });

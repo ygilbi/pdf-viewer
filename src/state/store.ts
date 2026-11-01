@@ -1,5 +1,6 @@
 import { create } from 'zustand';
-import type { AreaMeasurement, Calibration, PageSize, Point, ToolId } from '../core/types';
+import type { AreaMeasurement, Calibration, Category, PageSize, Point, ToolId } from '../core/types';
+import { DEFAULT_CATEGORIES, MEASUREMENT_COLORS, kindOf } from '../core/measurementEngine';
 
 /**
  * Global UI state. Keep high-frequency state (pan/zoom transform, mouse
@@ -25,6 +26,11 @@ export interface ViewerState {
   measurements: AreaMeasurement[];
   selectedId: string | null;
 
+  // categories (persisted with the document)
+  categories: Category[];
+  /** Category id given to new measurements (null = none). Not persisted. */
+  activeCategoryId: string | null;
+
   // actions
   setDocument(info: { fileName: string; numPages: number; pageSizes: PageSize[] }): void;
   setLoading(loading: boolean): void;
@@ -37,6 +43,11 @@ export interface ViewerState {
   updateMeasurement(id: string, patch: Partial<Omit<AreaMeasurement, 'id'>>): void;
   removeMeasurement(id: string): void;
   select(id: string | null): void;
+  setActiveCategory(id: string | null): void;
+  /** Adds a category (color auto-picked when omitted) and returns its id. */
+  addCategory(name: string, color?: string): string;
+  /** Sets (or clears) a measurement's category; non-deduct measurements adopt the category color. */
+  setMeasurementCategory(id: string, categoryId: string | null): void;
 }
 
 export const useViewer = create<ViewerState>((set, get) => ({
@@ -51,6 +62,8 @@ export const useViewer = create<ViewerState>((set, get) => ({
   calibrations: {},
   measurements: [],
   selectedId: null,
+  categories: DEFAULT_CATEGORIES,
+  activeCategoryId: null,
 
   setDocument: ({ fileName, numPages, pageSizes }) =>
     set({
@@ -63,6 +76,8 @@ export const useViewer = create<ViewerState>((set, get) => ({
       calibrations: {},
       measurements: [],
       selectedId: null,
+      categories: DEFAULT_CATEGORIES,
+      activeCategoryId: null,
     }),
   setLoading: (loading) => set({ loading }),
   setError: (error) => set({ error }),
@@ -84,4 +99,27 @@ export const useViewer = create<ViewerState>((set, get) => ({
       selectedId: s.selectedId === id ? null : s.selectedId,
     })),
   select: (selectedId) => set({ selectedId }),
+  setActiveCategory: (id) =>
+    set((s) => ({ activeCategoryId: id && s.categories.some((c) => c.id === id) ? id : null })),
+  addCategory: (name, color) => {
+    const s = get();
+    const n = s.categories.length;
+    const id = `cat_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}`;
+    const c: Category = { id, name, color: color ?? MEASUREMENT_COLORS[n % MEASUREMENT_COLORS.length] };
+    set({ categories: [...s.categories, c] });
+    return id;
+  },
+  setMeasurementCategory: (id, categoryId) =>
+    set((s) => {
+      const cat = categoryId ? s.categories.find((c) => c.id === categoryId) : undefined;
+      return {
+        measurements: s.measurements.map((m) => {
+          if (m.id !== id) return m;
+          const next: AreaMeasurement = { ...m, category: cat?.id };
+          if (!cat) delete next.category;
+          if (cat && kindOf(m) !== 'deduct') next.color = cat.color;
+          return next;
+        }),
+      };
+    }),
 }));

@@ -2,7 +2,7 @@
  * Pure measurement math. All geometry is in PDF page units (see types.ts).
  * `pixelsPerMeter` = page units per real-world meter.
  */
-import type { AreaMeasurement, Calibration, MeasurementKind, Point } from './types';
+import type { AreaMeasurement, Calibration, Category, MeasurementKind, Point } from './types';
 
 const EPS = 1e-9;
 
@@ -241,7 +241,7 @@ export function parseLengthInput(s: string): number | null {
 
 /** Kind of a measurement; legacy measurements without `kind` are areas. */
 export function kindOf(m: { kind?: MeasurementKind | string | null }): MeasurementKind {
-  return m.kind === 'deduct' || m.kind === 'length' ? m.kind : 'area';
+  return m.kind === 'deduct' || m.kind === 'length' || m.kind === 'count' ? m.kind : 'area';
 }
 
 /** Fill / stroke color used for every deduction (opening). */
@@ -251,6 +251,7 @@ export const KIND_LABELS: Record<MeasurementKind, string> = {
   area: 'שטח',
   deduct: 'ניכוי',
   length: 'אורך',
+  count: 'ספירה',
 };
 
 /** Label prefix for auto-numbered measurements of each kind ("חזית 3", "פתח 1", "קו 2"). */
@@ -258,11 +259,55 @@ export const KIND_LABEL_PREFIX: Record<MeasurementKind, string> = {
   area: 'חזית',
   deduct: 'פתח',
   length: 'קו',
+  count: 'פריט',
 };
 
 /** Minimum number of points a finished measurement of this kind needs. */
 export function minPoints(kind: MeasurementKind): number {
-  return kind === 'length' ? 2 : 3;
+  return kind === 'count' ? 1 : kind === 'length' ? 2 : 3;
+}
+
+// ---------------------------------------------------------------------------
+// Categories
+// ---------------------------------------------------------------------------
+
+/** Default work categories for an aluminum contractor (ids are stable, names editable). */
+export const DEFAULT_CATEGORIES: Category[] = [
+  { id: 'windows', name: 'חלונות', color: '#1f77b4' },
+  { id: 'vitrines', name: 'ויטרינות', color: '#17becf' },
+  { id: 'doors', name: 'דלתות', color: '#9467bd' },
+  { id: 'curtain-wall', name: 'קיר מסך', color: '#2ca02c' },
+  { id: 'cladding', name: 'חיפוי', color: '#ff7f0e' },
+  { id: 'railings', name: 'מעקות', color: '#8c564b' },
+  { id: 'pergolas', name: 'פרגולות', color: '#e377c2' },
+];
+
+export const UNCATEGORIZED_LABEL = 'ללא קטגוריה';
+
+/** Category key of a measurement ('' = uncategorised; tolerant of missing/garbage values in old saves). */
+export function categoryKey(m: { category?: unknown }): string {
+  return typeof m.category === 'string' ? m.category : '';
+}
+
+/** Display name for a category key; unknown ids fall back to the raw key. */
+export function categoryName(key: string, categories: Category[] | undefined): string {
+  if (!key) return UNCATEGORIZED_LABEL;
+  return categories?.find((c) => c.id === key)?.name ?? key;
+}
+
+/** Sanitise a persisted category list; returns null when unusable. */
+export function sanitizeCategories(v: unknown): Category[] | null {
+  if (!Array.isArray(v)) return null;
+  const out: Category[] = [];
+  const seen = new Set<string>();
+  for (const c of v) {
+    if (!c || typeof c !== 'object') continue;
+    const { id, name, color } = c as Record<string, unknown>;
+    if (typeof id !== 'string' || !id || seen.has(id) || typeof name !== 'string') continue;
+    seen.add(id);
+    out.push({ id, name, color: typeof color === 'string' && /^#[0-9a-f]{6}$/i.test(color) ? color : '#64748b' });
+  }
+  return out;
 }
 
 /** Next free number for an auto label of the given kind. */
@@ -403,28 +448,96 @@ export interface MeasurementSummary {
   uncalibrated: number;
   /** Deductions whose centroid lies in no area (excluded from deductM2). */
   orphanDeducts: number;
+  /** Total number of counted items (markers of 'count' measurements; needs no calibration). */
+  count: number;
+  /** Area of the opening (deduct) polygons themselves, incl. orphans (calibrated pages only). */
+  openingsM2: number;
 }
 
+const emptySummary = (): MeasurementSummary => ({
+  grossM2: 0,
+  deductM2: 0,
+  netM2: 0,
+  lengthM: 0,
+  uncalibrated: 0,
+  orphanDeducts: 0,
+  count: 0,
+  openingsM2: 0,
+});
+
+/**
+ * Totals over the measurements accepted by `inGroup`. A deduction is
+ * subtracted from the group of the area it belongs to (so group nets add up
+ * to the document net); its own polygon area counts in `openingsM2` of its
+ * own group. `all` must contain every measurement deductions may belong to.
+ */
 function summarize(
-  measurements: AreaMeasurement[],
+  all: AreaMeasurement[],
   calibrations: Record<number, Calibration>,
+  inGroup: (m: AreaMeasurement) => boolean = () => true,
+  assignment: Map<string, string | null> = assignDeductions(all),
 ): MeasurementSummary {
-  const assignment = assignDeductions(measurements);
-  const s: MeasurementSummary = { grossM2: 0, deductM2: 0, netM2: 0, lengthM: 0, uncalibrated: 0, orphanDeducts: 0 };
-  for (const m of measurements) {
-    const ppm = ppmOf(calibrations, m.page);
-    if (ppm === null) {
-      s.uncalibrated++;
+  const byId = new Map(all.map((m) => [m.id, m]));
+  const s = emptySummary();
+  for (const m of all) {
+    const kind = kindOf(m);
+    const mine = inGroup(m);
+    if (kind === 'count') {
+      if (mine) s.count += m.points.length;
       continue;
     }
-    const kind = kindOf(m);
-    if (kind === 'area') s.grossM2 += polygonAreaM2(m.points, ppm);
-    else if (kind === 'length') s.lengthM += polylineLengthMeters(m.points, ppm);
-    else if (assignment.get(m.id)) s.deductM2 += polygonAreaM2(m.points, ppm);
-    else s.orphanDeducts++;
+    const ppm = ppmOf(calibrations, m.page);
+    if (ppm === null) {
+      if (mine) s.uncalibrated++;
+      continue;
+    }
+    if (kind === 'area') {
+      if (mine) s.grossM2 += polygonAreaM2(m.points, ppm);
+    } else if (kind === 'length') {
+      if (mine) s.lengthM += polylineLengthMeters(m.points, ppm);
+    } else {
+      const a = polygonAreaM2(m.points, ppm);
+      if (mine) s.openingsM2 += a;
+      const parentId = assignment.get(m.id);
+      const parent = parentId ? byId.get(parentId) : undefined;
+      if (parent) {
+        if (inGroup(parent)) s.deductM2 += a;
+      } else if (mine) s.orphanDeducts++;
+    }
   }
   s.netM2 = s.grossM2 - s.deductM2;
   return s;
+}
+
+export interface CategorySummary {
+  /** Category key ('' = uncategorised). */
+  category: string;
+  /** Display name (UNCATEGORIZED_LABEL for ''). */
+  name: string;
+  summary: MeasurementSummary;
+}
+
+/**
+ * Per-category breakdown. Order follows `categories`, then unknown keys, then
+ * uncategorised last. Only categories that have measurements are listed.
+ */
+export function computeCategorySummaries(
+  measurements: AreaMeasurement[],
+  calibrations: Record<number, Calibration>,
+  categories: Category[] = [],
+): CategorySummary[] {
+  const present = new Set(measurements.map(categoryKey));
+  const keys = [
+    ...categories.map((c) => c.id).filter((id) => present.has(id)),
+    ...[...present].filter((k) => k && !categories.some((c) => c.id === k)),
+    ...(present.has('') ? [''] : []),
+  ];
+  const assignment = assignDeductions(measurements);
+  return keys.map((k) => ({
+    category: k,
+    name: categoryName(k, categories),
+    summary: summarize(measurements, calibrations, (m) => categoryKey(m) === k, assignment),
+  }));
 }
 
 /** Totals for one page. */
@@ -454,17 +567,24 @@ function csvCell(v: string | number): string {
 
 /**
  * Table rows shared by the CSV / TSV exports: header row, one row per
- * measurement, then totals rows. Deduction rows carry a negative area; length rows
- * fill only the length column. Totals rows at the end: gross, deductions
- * (negative), net, total length. Deductions outside every area are listed
+ * measurement, per-category subtotal rows (only when some measurement has a
+ * category), then document totals rows. Deduction rows carry a negative area;
+ * length rows fill only the length column; count rows only the quantity
+ * column. Category subtotals show the *net* area of the category's facades
+ * (openings are subtracted from the category of the area they sit in), its
+ * length and its count. Totals rows at the end: gross, deductions (negative),
+ * net, total length, total count. Deductions outside every area are listed
  * but not counted in the totals (their "belongs to" cell is empty).
+ *
+ * `categories` resolves category ids to names (defaults to DEFAULT_CATEGORIES).
  */
 export function buildMeasurementRows(
   measurements: AreaMeasurement[],
   calibrations: Record<number, Calibration>,
+  categories: Category[] = DEFAULT_CATEGORIES,
 ): string[][] {
   const rows: (string | number)[][] = [
-    ['מס׳', 'סוג', 'שם', 'עמוד', 'שטח (מ״ר)', 'היקף (מ׳)', 'אורך (מ׳)', 'מספר נקודות', 'שייך ל'],
+    ['מס׳', 'סוג', 'שם', 'קטגוריה', 'עמוד', 'שטח (מ״ר)', 'היקף (מ׳)', 'אורך (מ׳)', 'כמות', 'מספר נקודות', 'שייך ל'],
   ];
   const assignment = assignDeductions(measurements);
   const byId = new Map(measurements.map((m) => [m.id, m]));
@@ -474,7 +594,9 @@ export function buildMeasurementRows(
     let area = '';
     let perim = '';
     let len = '';
-    if (ppm !== null) {
+    let qty = '';
+    if (kind === 'count') qty = String(m.points.length);
+    else if (ppm !== null) {
       if (kind === 'length') len = polylineLengthMeters(m.points, ppm).toFixed(2);
       else {
         const a = polygonAreaM2(m.points, ppm);
@@ -482,15 +604,29 @@ export function buildMeasurementRows(
         perim = polygonPerimeterMeters(m.points, ppm).toFixed(2);
       }
     }
+    const key = categoryKey(m);
+    const cat = key ? categoryName(key, categories) : '';
     const parentId = assignment.get(m.id);
     const parent = parentId ? (byId.get(parentId)?.label ?? '') : '';
-    rows.push([i + 1, KIND_LABELS[kind], m.label, m.page, area, perim, len, m.points.length, parent]);
+    rows.push([i + 1, KIND_LABELS[kind], m.label, cat, m.page, area, perim, len, qty, m.points.length, parent]);
   });
+  if (measurements.some((m) => categoryKey(m))) {
+    for (const c of computeCategorySummaries(measurements, calibrations, categories)) {
+      const t = c.summary;
+      rows.push(['', '', `סה״כ ${c.name}`, c.name, '', t.netM2.toFixed(2), '', t.lengthM.toFixed(2), t.count, '', '']);
+    }
+  }
   const s = computeDocumentSummary(measurements, calibrations);
-  rows.push(['', '', 'ברוטו', '', s.grossM2.toFixed(2), '', '', '', '']);
-  rows.push(['', '', 'ניכויים', '', (s.deductM2 === 0 ? 0 : -s.deductM2).toFixed(2), '', '', '', '']);
-  rows.push(['', '', 'נטו', '', s.netM2.toFixed(2), '', '', '', '']);
-  rows.push(['', '', 'סה״כ אורך', '', '', '', s.lengthM.toFixed(2), '', '']);
+  const total = (label: string, col: number, v: string | number) => {
+    const r: (string | number)[] = ['', '', label, '', '', '', '', '', '', '', ''];
+    r[col] = v;
+    rows.push(r);
+  };
+  total('ברוטו', 5, s.grossM2.toFixed(2));
+  total('ניכויים', 5, (s.deductM2 === 0 ? 0 : -s.deductM2).toFixed(2));
+  total('נטו', 5, s.netM2.toFixed(2));
+  total('סה״כ אורך', 7, s.lengthM.toFixed(2));
+  total('סה״כ כמות', 8, s.count);
   return rows.map((r) => r.map(String));
 }
 
@@ -498,8 +634,9 @@ export function buildMeasurementRows(
 export function measurementsToCSV(
   measurements: AreaMeasurement[],
   calibrations: Record<number, Calibration>,
+  categories?: Category[],
 ): string {
-  const rows = buildMeasurementRows(measurements, calibrations);
+  const rows = buildMeasurementRows(measurements, calibrations, categories);
   return '\uFEFF' + rows.map((r) => r.map(csvCell).join(',')).join('\r\n') + '\r\n';
 }
 
@@ -514,8 +651,9 @@ function tsvCell(v: string): string {
 export function measurementsToTSV(
   measurements: AreaMeasurement[],
   calibrations: Record<number, Calibration>,
+  categories?: Category[],
 ): string {
-  const rows = buildMeasurementRows(measurements, calibrations);
+  const rows = buildMeasurementRows(measurements, calibrations, categories);
   return rows.map((r) => r.map(tsvCell).join('\t')).join('\r\n') + '\r\n';
 }
 
