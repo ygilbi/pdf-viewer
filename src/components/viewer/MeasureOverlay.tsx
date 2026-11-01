@@ -39,12 +39,15 @@ const HATCH_ID = 'deduct-hatch';
 
 const draftColor = (t: ToolId) => (t === 'calibrate' ? CALIB : t === 'deduct' ? DEDUCT_COLOR : t === 'length' ? LENGTH_DRAFT : DRAFT);
 
+/** Screen-constant marker radius (px) for count items — keep in sync with ViewerCanvas VERTEX_PX. */
+const MARKER_R = 9;
+
 /** Isolate a signed number so RTL text doesn't move its minus sign to the end. */
 const ltr = (s: string) => `\u2066${s}\u2069`;
 const negArea = (m2: number) => `${ltr(`-${formatArea(m2).replace(/\s*מ״ר$/, '')}`)} מ״ר`;
 
 /** Areas first, then openings, then lines → openings and lines paint on top. */
-const KIND_ORDER = { area: 0, deduct: 1, length: 2 } as const;
+const KIND_ORDER = { area: 0, deduct: 1, length: 2, count: 3 } as const;
 
 export interface BandRefs {
   livePoly: Ref<SVGPolygonElement>;
@@ -142,9 +145,47 @@ function MeasureOverlayImpl({ width, height, measurements, selectedId, calibrati
       {/* measurements */}
       {ordered.map((m) => {
         const points = m.points;
-        if (points.length < 2) return null;
         const kind = kindOf(m);
         const selected = m.id === selectedId;
+        if (kind === 'count') {
+          if (points.length === 0) return null;
+          const first = points[0];
+          return (
+            <g key={m.id} data-measurement-id={m.id} data-kind="count" data-count={points.length}>
+              {points.map((p, i) => (
+                <g key={i} data-testid="count-marker">
+                  {selected && (
+                    <circle cx={p.x} cy={p.y} fill="none" stroke="#0f172a" style={{ r: px(MARKER_R + 2.5), strokeWidth: px(1.5) }} />
+                  )}
+                  <circle
+                    cx={p.x}
+                    cy={p.y}
+                    fill={m.color}
+                    fillOpacity={0.9}
+                    stroke="#fff"
+                    style={{ r: px(MARKER_R), strokeWidth: px(1.75) }}
+                  />
+                  <text
+                    x={p.x}
+                    y={p.y}
+                    dy="0.35em"
+                    textAnchor="middle"
+                    fill="#fff"
+                    fontWeight={700}
+                    style={{ fontSize: px(i >= 99 ? 7.5 : 10), fontFamily: 'system-ui, Arial, sans-serif' }}
+                  >
+                    {i + 1}
+                  </text>
+                </g>
+              ))}
+              <text x={first.x} y={first.y} dy="-1.45em" textAnchor="middle" fill="#111827" style={labelStyle(12)}>
+                <tspan fontWeight={600}>{m.label}</tspan>
+                <tspan> {ltr(`×${points.length}`)}</tspan>
+              </text>
+            </g>
+          );
+        }
+        if (points.length < 2) return null;
         const handles =
           selected &&
           points.map((p, i) => (

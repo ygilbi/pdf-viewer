@@ -56,8 +56,8 @@ export function CopyTableButton({ disabled }: { disabled?: boolean }) {
 
   const onClick = () => {
     const s = useViewer.getState();
-    const tsv = measurementsToTSV(s.measurements, s.calibrations);
-    const html = rowsToHtmlTable(buildMeasurementRows(s.measurements, s.calibrations));
+    const tsv = measurementsToTSV(s.measurements, s.calibrations, s.categories);
+    const html = rowsToHtmlTable(buildMeasurementRows(s.measurements, s.calibrations, s.categories));
     // Called synchronously from the click handler so the user gesture is still active.
     void copyToClipboard(tsv, html).then((ok) => (ok ? setToast(Date.now()) : setFallback(tsv)));
   };

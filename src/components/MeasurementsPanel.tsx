@@ -1,9 +1,11 @@
-import { memo, useEffect, useMemo, useRef, useState } from 'react';
+import { Fragment, memo, useEffect, useMemo, useRef, useState } from 'react';
 import { useViewer } from '../state/store';
 import type { AreaMeasurement, Calibration, MeasurementKind } from '../core/types';
 import {
   KIND_LABELS,
   assignDeductions,
+  categoryKey,
+  computeCategorySummaries,
   computeDocumentSummary,
   computeNetAreas,
   computePageSummary,
@@ -13,19 +15,23 @@ import {
   polygonAreaM2,
   polygonPerimeterMeters,
   polylineLengthMeters,
+  type CategorySummary,
   type MeasurementSummary,
 } from '../core/measurementEngine';
-import { IconDeduct, IconLength, IconList, IconPolygon, IconTrash } from './ui/icons';
+import { IconCount, IconDeduct, IconLength, IconList, IconPolygon, IconTrash } from './ui/icons';
+import { MeasurementCategorySelect } from './CategorySelect';
 
 const KIND_BADGE: Record<MeasurementKind, string> = {
   area: 'border-sky-700/70 bg-sky-900/40 text-sky-300',
   deduct: 'border-rose-700/70 bg-rose-900/40 text-rose-300',
   length: 'border-amber-700/70 bg-amber-900/40 text-amber-300',
+  count: 'border-violet-700/70 bg-violet-900/40 text-violet-300',
 };
 const KIND_ICON: Record<MeasurementKind, typeof IconPolygon> = {
   area: IconPolygon,
   deduct: IconDeduct,
   length: IconLength,
+  count: IconCount,
 };
 
 const negArea = (m2: number) => formatArea(m2 === 0 ? 0 : -m2);
@@ -117,8 +123,15 @@ const Row = memo(function Row({ m, calibration, netM2, parentLabel, selected, sh
           <IconTrash size={14} />
         </button>
       </div>
-      <div className="mt-0.5 flex flex-wrap gap-x-3 ps-1 font-mono tabular-nums text-slate-400">
-        {kind === 'length' ? (
+      <div className="mt-0.5 flex flex-wrap items-center gap-x-3 ps-1 font-mono tabular-nums text-slate-400">
+        {kind === 'count' ? (
+          <span title="כמות">
+            <span className="font-sans text-slate-500">כמות </span>
+            <span className="text-slate-100" dir="ltr" data-testid="row-count">
+              ×{m.points.length}
+            </span>
+          </span>
+        ) : kind === 'length' ? (
           <span title="אורך">
             <span className="font-sans text-slate-500">אורך </span>
             <span className={calibration ? 'text-slate-100' : 'text-amber-400'} dir="ltr" data-testid="row-length">
@@ -143,6 +156,9 @@ const Row = memo(function Row({ m, calibration, netM2, parentLabel, selected, sh
             </span>
           </>
         )}
+        <span className="ms-auto font-sans">
+          <MeasurementCategorySelect id={m.id} value={categoryKey(m)} />
+        </span>
       </div>
       {kind === 'area' && netM2 !== undefined && (
         <div className="ps-1 font-mono tabular-nums text-slate-400" data-testid="row-net">
@@ -173,6 +189,8 @@ export default function MeasurementsPanel() {
 
   const [allPages, setAllPages] = useState(false);
   const [collapsed, setCollapsed] = useState(false);
+  const [grouped, setGrouped] = useState(false);
+  const categories = useViewer((s) => s.categories);
 
   const visible = useMemo(
     () =>
@@ -194,6 +212,17 @@ export default function MeasurementsPanel() {
       doc: computeDocumentSummary(measurements, calibrations),
     };
   }, [measurements, calibrations, currentPage]);
+
+  // Group-by-category: visible rows bucketed per category, with subtotals over the same scope.
+  const groups = useMemo(() => {
+    if (!grouped) return null;
+    const scope = allPages ? measurements : measurements.filter((m) => m.page === currentPage);
+    return computeCategorySummaries(scope, calibrations, categories).map((g) => ({
+      ...g,
+      items: visible.filter((m) => categoryKey(m) === g.category),
+      color: categories.find((c) => c.id === g.category)?.color,
+    }));
+  }, [grouped, allPages, measurements, currentPage, calibrations, categories, visible]);
 
   const onSelect = useMemo(
     () => (m: AreaMeasurement) => {
@@ -235,6 +264,16 @@ export default function MeasurementsPanel() {
         <span className="font-semibold text-slate-300">מדידות</span>
         <span>({visible.length})</span>
         <div className="flex-1" />
+        <label className="flex cursor-pointer select-none items-center gap-1" title="קבץ לפי קטגוריה עם סיכומי ביניים">
+          <input
+            type="checkbox"
+            checked={grouped}
+            onChange={(e) => setGrouped(e.target.checked)}
+            className="h-3 w-3 accent-sky-500"
+            data-testid="group-by-category"
+          />
+          לפי קטגוריה
+        </label>
         <label className="flex cursor-pointer select-none items-center gap-1">
           <input
             type="checkbox"
@@ -278,6 +317,11 @@ export default function MeasurementsPanel() {
                 סמן בתוך החזית; השטח ינוכה ממנה
               </li>
               <li>
+                ספירת פריטים <kbd className="rounded bg-slate-700 px-1 font-mono text-[10px]">N</kbd> — לחיצה על כל
+                פריט; <kbd className="rounded bg-slate-700 px-1 font-mono text-[10px]">Enter</kbd> לסיום הקבוצה,
+                קליק ימני / Alt+קליק מסיר סימון
+              </li>
+              <li>
                 מדידת אורך <kbd className="rounded bg-slate-700 px-1 font-mono text-[10px]">L</kbd> — לחיצה כפולה או{' '}
                 <kbd className="rounded bg-slate-700 px-1 font-mono text-[10px]">Enter</kbd> לסיום
               </li>
@@ -285,24 +329,31 @@ export default function MeasurementsPanel() {
           </div>
         ) : (
           <ul>
-            {visible.map((m) => {
-              const net = derived.nets.get(m.id);
-              const parent = derived.assignment.get(m.id);
-              return (
-              <Row
-                key={m.id}
-                m={m}
-                calibration={calibrations[m.page]}
-                netM2={net && net.deductIds.length ? net.netM2 : undefined}
-                parentLabel={parent === undefined ? undefined : parent === null ? null : (derived.labels.get(parent) ?? null)}
-                selected={m.id === selectedId}
-                showPage={allPages}
-                onSelect={onSelect}
-                onRename={onRename}
-                onDelete={removeMeasurement}
-              />
-              );
-            })}
+            {(groups ?? [{ category: '', name: '', summary: null, items: visible, color: undefined }]).map((g) => (
+              <Fragment key={g.category || '_'}>
+                {groups && <CategoryHeader g={g as CategorySummary} color={g.color} count={g.items.length} />}
+                {g.items.map((m) => {
+                  const net = derived.nets.get(m.id);
+                  const parent = derived.assignment.get(m.id);
+                  return (
+                    <Row
+                      key={m.id}
+                      m={m}
+                      calibration={calibrations[m.page]}
+                      netM2={net && net.deductIds.length ? net.netM2 : undefined}
+                      parentLabel={
+                        parent === undefined ? undefined : parent === null ? null : (derived.labels.get(parent) ?? null)
+                      }
+                      selected={m.id === selectedId}
+                      showPage={allPages}
+                      onSelect={onSelect}
+                      onRename={onRename}
+                      onDelete={removeMeasurement}
+                    />
+                  );
+                })}
+              </Fragment>
+            ))}
           </ul>
         )}
       </div>
@@ -361,6 +412,36 @@ function SummaryBlock({
       {row('ניכויים', v(negArea(s.deductM2)), 'deduct', 'text-rose-300')}
       {row('נטו', v(formatArea(s.netM2)), 'net', strong ? 'font-semibold text-sky-300' : 'font-semibold text-emerald-300')}
       {row('סה״כ אורך', v(formatLength(s.lengthM)), 'length', 'text-amber-300')}
+      {s.count > 0 && row('סה״כ כמות', `×${s.count}`, 'count', 'text-violet-300')}
     </div>
+  );
+}
+
+/** Sticky group header with the category's subtotals (net area / length / count). */
+function CategoryHeader({ g, color, count }: { g: CategorySummary; color: string | undefined; count: number }) {
+  const t = g.summary;
+  const parts: string[] = [];
+  if (t.grossM2 > 0 || t.deductM2 > 0) parts.push(`נטו ${formatArea(t.netM2)}`);
+  if (t.openingsM2 > 0) parts.push(`פתחים ${formatArea(t.openingsM2)}`);
+  if (t.lengthM > 0) parts.push(formatLength(t.lengthM));
+  if (t.count > 0) parts.push(`\u2066×${t.count}\u2069`);
+  return (
+    <li
+      className="sticky top-0 z-10 border-b border-slate-700 bg-slate-900/95 px-2 py-1 text-[11px]"
+      data-testid="category-group"
+      data-category={g.category}
+    >
+      <div className="flex items-center gap-1.5">
+        <span
+          className="h-2.5 w-2.5 shrink-0 rounded-full border border-slate-500"
+          style={{ background: color ?? 'transparent' }}
+        />
+        <span className="font-semibold text-slate-200">{g.name}</span>
+        <span className="text-slate-500">({count})</span>
+      </div>
+      <div className="ps-4 font-mono tabular-nums text-sky-300" data-testid="category-subtotal">
+        {parts.length ? parts.join(' · ') : '—'}
+      </div>
+    </li>
   );
 }

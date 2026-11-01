@@ -165,3 +165,13 @@ export const IconLength = (p: IconProps) => (
     <circle cx="21" cy="6" r="1.4" fill="currentColor" />
   </Svg>
 );
+
+/** Count: numbered markers. */
+export const IconCount = (p: IconProps) => (
+  <Svg {...p}>
+    <circle cx="7" cy="7" r="3.2" />
+    <circle cx="17" cy="7" r="3.2" />
+    <circle cx="7" cy="17" r="3.2" />
+    <path d="M14.5 17h5M17 14.5v5" />
+  </Svg>
+);

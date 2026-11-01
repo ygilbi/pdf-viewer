@@ -1,8 +1,14 @@
 import { describe, expect, it } from 'vitest';
 import type { AreaMeasurement, Calibration, Point } from './types';
 import {
+  DEFAULT_CATEGORIES,
   MEASUREMENT_COLORS,
   assignDeductions,
+  categoryKey,
+  categoryName,
+  computeCategorySummaries,
+  minPoints,
+  sanitizeCategories,
   centroid,
   computeDocumentSummary,
   computeNetAreas,
@@ -260,27 +266,28 @@ describe('measurementsToCSV', () => {
   });
 
   it('header row', () => {
-    expect(lines[0]).toBe('מס׳,סוג,שם,עמוד,שטח (מ״ר),היקף (מ׳),אורך (מ׳),מספר נקודות,שייך ל');
+    expect(lines[0]).toBe('מס׳,סוג,שם,קטגוריה,עמוד,שטח (מ״ר),היקף (מ׳),אורך (מ׳),כמות,מספר נקודות,שייך ל');
   });
 
   it('data rows, escaping, uncalibrated page empty area', () => {
-    expect(lines[1]).toBe('1,שטח,סלון,1,50.00,30.00,,4,');
-    expect(lines[2]).toBe('2,שטח,"חדר ""שינה"", הורים",1,6.00,10.00,,4,');
-    expect(lines[3]).toBe('3,שטח,מרפסת,2,,,,4,');
+    expect(lines[1]).toBe('1,שטח,סלון,,1,50.00,30.00,,,4,');
+    expect(lines[2]).toBe('2,שטח,"חדר ""שינה"", הורים",,1,6.00,10.00,,,4,');
+    expect(lines[3]).toBe('3,שטח,מרפסת,,2,,,,,4,');
   });
 
   it('totals rows sum calibrated measurements only', () => {
-    expect(lines).toHaveLength(8);
-    expect(lines[4]).toBe(',,ברוטו,,56.00,,,,');
-    expect(lines[5]).toBe(',,ניכויים,,0.00,,,,');
-    expect(lines[6]).toBe(',,נטו,,56.00,,,,');
-    expect(lines[7]).toBe(',,סה״כ אורך,,,,0.00,,');
+    expect(lines).toHaveLength(9); // no category subtotals when nothing is categorised
+    expect(lines[4]).toBe(',,ברוטו,,,56.00,,,,,');
+    expect(lines[5]).toBe(',,ניכויים,,,0.00,,,,,');
+    expect(lines[6]).toBe(',,נטו,,,56.00,,,,,');
+    expect(lines[7]).toBe(',,סה״כ אורך,,,,,0.00,,,');
+    expect(lines[8]).toBe(',,סה״כ כמות,,,,,,0,,');
   });
 
   it('empty list still has header + totals', () => {
     const out = measurementsToCSV([], {});
     expect(out.startsWith('\uFEFF')).toBe(true);
-    expect(out.trimEnd().split('\r\n')).toHaveLength(5);
+    expect(out.trimEnd().split('\r\n')).toHaveLength(6);
   });
 
   it('kinds: deduct rows negative, length rows in length column', () => {
@@ -291,14 +298,48 @@ describe('measurementsToCSV', () => {
       { id: 'o', page: 1, kind: 'deduct', label: 'פתח 2', points: rect(1, 1, 10, 500, 500), color: '#000' },
     ];
     const out = measurementsToCSV(mixed, { 1: cal }).replace(/^\uFEFF/, '').trimEnd().split('\r\n');
-    expect(out[1]).toBe('1,שטח,חזית 1,1,50.00,30.00,,4,');
-    expect(out[2]).toBe('2,ניכוי,פתח 1,1,-2.00,6.00,,4,חזית 1');
-    expect(out[3]).toBe('3,אורך,קו 1,1,,,7.00,3,');
-    expect(out[4]).toBe('4,ניכוי,פתח 2,1,-1.00,4.00,,4,'); // orphan: listed, not counted
-    expect(out[5]).toBe(',,ברוטו,,50.00,,,,');
-    expect(out[6]).toBe(',,ניכויים,,-2.00,,,,');
-    expect(out[7]).toBe(',,נטו,,48.00,,,,');
-    expect(out[8]).toBe(',,סה״כ אורך,,,,7.00,,');
+    expect(out[1]).toBe('1,שטח,חזית 1,,1,50.00,30.00,,,4,');
+    expect(out[2]).toBe('2,ניכוי,פתח 1,,1,-2.00,6.00,,,4,חזית 1');
+    expect(out[3]).toBe('3,אורך,קו 1,,1,,,7.00,,3,');
+    expect(out[4]).toBe('4,ניכוי,פתח 2,,1,-1.00,4.00,,,4,'); // orphan: listed, not counted
+    expect(out[5]).toBe(',,ברוטו,,,50.00,,,,,');
+    expect(out[6]).toBe(',,ניכויים,,,-2.00,,,,,');
+    expect(out[7]).toBe(',,נטו,,,48.00,,,,,');
+    expect(out[8]).toBe(',,סה״כ אורך,,,,,7.00,,,');
+    expect(out[9]).toBe(',,סה״כ כמות,,,,,,0,,');
+  });
+
+  it('categories + counts: category column, quantity column, per-category subtotal rows', () => {
+    const cats = [
+      { id: 'clad', name: 'חיפוי', color: '#ff7f0e' },
+      { id: 'win', name: 'חלונות', color: '#1f77b4' },
+    ];
+    const mixed: AreaMeasurement[] = [
+      { id: 'a', page: 1, kind: 'area', label: 'חזית 1', points: rect(10, 5, 10), color: '#000', category: 'clad' },
+      { id: 'd', page: 1, kind: 'deduct', label: 'פתח 1', points: rect(2, 1, 10, 20, 20), color: '#000', category: 'win' },
+      { id: 'n', page: 1, kind: 'count', label: 'W1', points: [P(1, 1), P(2, 2), P(3, 3)], color: '#000', category: 'win' },
+      { id: 'u', page: 3, kind: 'count', label: 'D1', points: [P(1, 1), P(2, 2)], color: '#000' }, // uncalibrated page: still counted
+      { id: 'l', page: 1, kind: 'length', label: 'מעקה', points: [P(0, 0), P(30, 40)], color: '#000', category: 'ghost' },
+    ];
+    const out = measurementsToCSV(mixed, { 1: cal }, cats).replace(/^\uFEFF/, '').trimEnd().split('\r\n');
+    expect(out[1]).toBe('1,שטח,חזית 1,חיפוי,1,50.00,30.00,,,4,');
+    expect(out[2]).toBe('2,ניכוי,פתח 1,חלונות,1,-2.00,6.00,,,4,חזית 1');
+    expect(out[3]).toBe('3,ספירה,W1,חלונות,1,,,,3,3,');
+    expect(out[4]).toBe('4,ספירה,D1,,3,,,,2,2,');
+    expect(out[5]).toBe('5,אורך,מעקה,ghost,1,,,5.00,,2,'); // unknown id → raw key
+    // subtotals: order of `cats`, then unknown keys, then uncategorised. The opening is
+    // subtracted from the category of the facade it sits in (חיפוי), not from חלונות.
+    expect(out[6]).toBe(',,סה״כ חיפוי,חיפוי,,48.00,,0.00,0,,');
+    expect(out[7]).toBe(',,סה״כ חלונות,חלונות,,0.00,,0.00,3,,');
+    expect(out[8]).toBe(',,סה״כ ghost,ghost,,0.00,,5.00,0,,');
+    expect(out[9]).toBe(',,סה״כ ללא קטגוריה,ללא קטגוריה,,0.00,,0.00,2,,');
+    expect(out[10]).toBe(',,ברוטו,,,50.00,,,,,');
+    expect(out[13]).toBe(',,סה״כ אורך,,,,,5.00,,,');
+    expect(out[14]).toBe(',,סה״כ כמות,,,,,,5,,');
+    expect(out).toHaveLength(15);
+    // TSV built from the same rows
+    const tsv = measurementsToTSV(mixed, { 1: cal }, cats).replace(/\r\n$/, '').split('\r\n');
+    expect(tsv.map((r) => r.split('\t'))).toEqual(out.map((r) => r.split(',')));
   });
 });
 
@@ -402,6 +443,9 @@ describe('measurement kinds', () => {
     expect(doc.uncalibrated).toBe(1);
     expect(doc.orphanDeducts).toBe(1);
 
+    expect(doc.count).toBe(0);
+    expect(doc.openingsM2).toBeCloseTo(3, 12); // d1 + orphan
+
     expect(computeDocumentSummary([], {})).toEqual({
       grossM2: 0,
       deductM2: 0,
@@ -409,7 +453,79 @@ describe('measurement kinds', () => {
       lengthM: 0,
       uncalibrated: 0,
       orphanDeducts: 0,
+      count: 0,
+      openingsM2: 0,
     });
+  });
+
+  it('count measurements: totals without calibration, kind helpers', () => {
+    expect(kindOf({ kind: 'count' })).toBe('count');
+    expect(minPoints('count')).toBe(1);
+    const ms = [
+      M('c1', 1, 'count', [P(1, 1), P(5, 5)]),
+      M('c2', 3, 'count', [P(1, 1)]), // uncalibrated page
+      M('A', 1, 'area', rect(1, 1, 10)),
+    ];
+    const doc = computeDocumentSummary(ms, cals);
+    expect(doc.count).toBe(3);
+    expect(doc.uncalibrated).toBe(0); // counts need no scale
+    expect(computePageSummary(ms, cals, 3).count).toBe(1);
+    expect(nextLabelNumber(ms, 'count')).toBe(3);
+    // assignDeductions / net areas ignore counts
+    expect(assignDeductions(ms).size).toBe(0);
+    expect(computeNetAreas(ms, cals).size).toBe(1);
+  });
+
+  it('per-category summaries attribute openings to the facade category', () => {
+    const cats = [
+      { id: 'clad', name: 'חיפוי', color: '#ff7f0e' },
+      { id: 'vit', name: 'ויטרינות', color: '#17becf' },
+    ];
+    const ms: AreaMeasurement[] = [
+      { ...M('A', 1, 'area', rect(10, 5, 10)), category: 'clad' },
+      { ...M('B', 2, 'area', rect(3, 3, 10)) }, // uncategorised
+      { ...M('d1', 1, 'deduct', rect(2, 1, 10, 10, 10)), category: 'vit' },
+      { ...M('d2', 2, 'deduct', rect(1, 1, 10, 5, 5)), category: 'vit' },
+      { ...M('orph', 1, 'deduct', rect(1, 1, 10, 500, 500)), category: 'vit' },
+      { ...M('n', 1, 'count', [P(0, 0), P(1, 1)]), category: 'vit' },
+      { ...M('r', 1, 'length', [P(0, 0), P(0, 25)]), category: 'rail' }, // unknown id
+    ];
+    const out = computeCategorySummaries(ms, cals, cats);
+    expect(out.map((c) => [c.category, c.name])).toEqual([
+      ['clad', 'חיפוי'],
+      ['vit', 'ויטרינות'],
+      ['rail', 'rail'],
+      ['', 'ללא קטגוריה'],
+    ]);
+    const by = Object.fromEntries(out.map((c) => [c.category, c.summary]));
+    expect(by.clad.grossM2).toBeCloseTo(50, 12);
+    expect(by.clad.deductM2).toBeCloseTo(2, 12);
+    expect(by.clad.netM2).toBeCloseTo(48, 12);
+    expect(by.vit.grossM2).toBe(0);
+    expect(by.vit.deductM2).toBe(0);
+    expect(by.vit.openingsM2).toBeCloseTo(4, 12);
+    expect(by.vit.orphanDeducts).toBe(1);
+    expect(by.vit.count).toBe(2);
+    expect(by.rail.lengthM).toBeCloseTo(2.5, 12);
+    expect(by[''].netM2).toBeCloseTo(8, 12);
+    // category nets add up to the document net
+    const doc = computeDocumentSummary(ms, cals);
+    expect(out.reduce((a, c) => a + c.summary.netM2, 0)).toBeCloseTo(doc.netM2, 9);
+    expect(out.reduce((a, c) => a + c.summary.count, 0)).toBe(doc.count);
+  });
+
+  it('category helpers tolerate old / bad data', () => {
+    expect(categoryKey({})).toBe('');
+    expect(categoryKey({ category: 5 })).toBe('');
+    expect(categoryKey({ category: 'win' })).toBe('win');
+    expect(categoryName('', DEFAULT_CATEGORIES)).toBe('ללא קטגוריה');
+    expect(categoryName('windows', DEFAULT_CATEGORIES)).toBe('חלונות');
+    expect(sanitizeCategories(undefined)).toBeNull();
+    expect(
+      sanitizeCategories([{ id: 'a', name: 'א', color: 'red' }, { id: 'a', name: 'dup' }, null, { name: 'x' }]),
+    ).toEqual([{ id: 'a', name: 'א', color: '#64748b' }]);
+    expect(new Set(DEFAULT_CATEGORIES.map((c) => c.id)).size).toBe(DEFAULT_CATEGORIES.length);
+    expect(DEFAULT_CATEGORIES.map((c) => c.name)).toEqual(expect.arrayContaining(['חלונות', 'ויטרינות', 'חיפוי', 'מעקות']));
   });
 
   it('nextLabelNumber is per kind', () => {

@@ -19,7 +19,7 @@ export default function DropZone({ onFile }: Props) {
       const res = await fetch(`${import.meta.env.BASE_URL}demo-facade.pdf`);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const blob = await res.blob();
-      onFile(new File([blob], 'demo-facade.pdf', { type: 'application/pdf' }));
+      onFile(new File([blob], 'demo-facade.pdf', { type: 'application/pdf', lastModified: 0 /* stable key so saved measurements restore */ }));
     } catch {
       setDemoError('טעינת קובץ הדוגמה נכשלה');
     } finally {

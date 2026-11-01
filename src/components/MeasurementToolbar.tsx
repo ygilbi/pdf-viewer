@@ -6,6 +6,7 @@ import {
   assignDeductions,
   computeDocumentSummary,
   computeNetAreas,
+  computeCategorySummaries,
   computePageSummary,
   kindOf,
   measurementsToCSV,
@@ -17,6 +18,7 @@ import { ToolButton, ToolbarDivider } from './ui/ToolButton';
 import {
   IconChevronLeft,
   IconChevronRight,
+  IconCount,
   IconDeduct,
   IconDownload,
   IconFilePdf,
@@ -31,6 +33,7 @@ import {
 } from './ui/icons';
 import { baseName, downloadBlob, isTypingTarget } from './ui/util';
 import { CopyTableButton } from './CopyTableButton';
+import { ActiveCategorySelect } from './CategorySelect';
 
 const DOWNLOAD_HINT = "אם ההורדה חסומה, השתמש ב'העתק טבלה'";
 
@@ -44,6 +47,7 @@ const TOOLS: { id: ToolId; label: string; shortcut: string; icon: ReactElement }
   { id: 'area', label: 'מדידת שטח חזית', shortcut: 'A', icon: <IconPolygon /> },
   { id: 'deduct', label: 'פתח לניכוי', shortcut: 'D', icon: <IconDeduct /> },
   { id: 'length', label: 'מדידת אורך', shortcut: 'L', icon: <IconLength /> },
+  { id: 'count', label: 'ספירת פריטים', shortcut: 'N', icon: <IconCount /> },
 ];
 
 export default function MeasurementToolbar({ onOpenFile }: Props) {
@@ -110,6 +114,9 @@ export default function MeasurementToolbar({ onOpenFile }: Props) {
         case 'KeyL':
           s.setTool('length');
           break;
+        case 'KeyN':
+          s.setTool('count');
+          break;
         case 'PageUp':
           s.setPage(s.currentPage - 1);
           break;
@@ -128,7 +135,7 @@ export default function MeasurementToolbar({ onOpenFile }: Props) {
   // ---- export --------------------------------------------------------------
   const exportCSV = () => {
     const s = useViewer.getState();
-    const csv = measurementsToCSV(s.measurements, s.calibrations);
+    const csv = measurementsToCSV(s.measurements, s.calibrations, s.categories);
     downloadBlob(new Blob([csv], { type: 'text/csv;charset=utf-8' }), `${baseName(s.fileName)}-מדידות.csv`);
   };
 
@@ -142,6 +149,7 @@ export default function MeasurementToolbar({ onOpenFile }: Props) {
       exportedAt: new Date().toISOString(),
       units: { geometry: 'PDF points (1/72 inch), page viewport at scale 1', area: 'm2', length: 'm' },
       calibrations: s.calibrations,
+      categories: s.categories,
       measurements: s.measurements.map((m) => {
         const c = s.calibrations[m.page];
         const kind = kindOf(m);
@@ -149,6 +157,7 @@ export default function MeasurementToolbar({ onOpenFile }: Props) {
         if (kind === 'length') {
           return { ...m, kind, lengthM: ppm ? polylineLengthMeters(m.points, ppm) : null };
         }
+        if (kind === 'count') return { ...m, kind, count: m.points.length };
         const area = ppm ? polygonAreaM2(m.points, ppm) : null;
         return {
           ...m,
@@ -163,6 +172,7 @@ export default function MeasurementToolbar({ onOpenFile }: Props) {
       }),
       summary: {
         document: computeDocumentSummary(s.measurements, s.calibrations),
+        categories: computeCategorySummaries(s.measurements, s.calibrations, s.categories),
         pages: Object.fromEntries(
           [...new Set(s.measurements.map((m) => m.page))]
             .sort((a, b) => a - b)
@@ -218,6 +228,8 @@ export default function MeasurementToolbar({ onOpenFile }: Props) {
             disabled={!hasDoc}
             onClick={() => setTool(t.id)}
             showLabel
+            // Narrow screens: only the active tool shows its name (tooltips still name every tool).
+            labelClassName={hasDoc && tool === t.id ? '' : 'hidden min-[1760px]:inline'}
           >
             {t.icon}
           </ToolButton>
@@ -308,6 +320,13 @@ export default function MeasurementToolbar({ onOpenFile }: Props) {
             לא מכויל
           </button>
         ))}
+
+      {hasDoc && (
+        <>
+          <ToolbarDivider />
+          <ActiveCategorySelect />
+        </>
+      )}
 
       <div className="flex-1" />
 

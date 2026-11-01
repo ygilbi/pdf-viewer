@@ -11,6 +11,8 @@ interface ToolButtonProps {
   children: ReactNode;
   /** Show the label text next to the icon. */
   showLabel?: boolean;
+  /** Extra classes for the label text (e.g. responsive hiding). */
+  labelClassName?: string;
   className?: string;
 }
 
@@ -24,6 +26,7 @@ export function ToolButton({
   onClick,
   children,
   showLabel,
+  labelClassName = '',
   className = '',
 }: ToolButtonProps) {
   return (
@@ -46,7 +49,7 @@ export function ToolButton({
         }
       >
         {children}
-        {showLabel && <span className="whitespace-nowrap">{label}</span>}
+        {showLabel && <span className={`whitespace-nowrap ${labelClassName}`}>{label}</span>}
       </button>
       <div
         role="tooltip"
