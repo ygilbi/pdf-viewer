@@ -1,4 +1,4 @@
-import { Fragment, memo, useEffect, useMemo, useRef, useState } from 'react';
+import { Fragment, memo, type ReactNode, useEffect, useMemo, useRef, useState } from 'react';
 import { useViewer } from '../state/store';
 import type { AreaMeasurement, Calibration, MeasurementKind } from '../core/types';
 import {
@@ -177,7 +177,14 @@ const Row = memo(function Row({ m, calibration, netM2, parentLabel, selected, sh
   );
 });
 
-export default function MeasurementsPanel() {
+interface PanelProps {
+  /** When given (drawer mode), the header button hides the drawer instead of collapsing in place. */
+  onHide?: () => void;
+  /** Extra header buttons (e.g. the drawer's pin toggle). */
+  headerActions?: ReactNode;
+}
+
+export default function MeasurementsPanel({ onHide, headerActions }: PanelProps = {}) {
   const numPages = useViewer((s) => s.numPages);
   const currentPage = useViewer((s) => s.currentPage);
   const measurements = useViewer((s) => s.measurements);
@@ -283,10 +290,12 @@ export default function MeasurementsPanel() {
           />
           כל הדפים
         </label>
+        {headerActions}
         <button
           type="button"
-          onClick={() => setCollapsed(true)}
-          title="הסתר"
+          onClick={() => (onHide ? onHide() : setCollapsed(true))}
+          title={onHide ? 'סגור (M)' : 'הסתר'}
+          aria-label="סגור רשימת מדידות"
           className="rounded p-0.5 text-slate-400 hover:bg-slate-700 hover:text-white"
         >
           <IconList size={14} />

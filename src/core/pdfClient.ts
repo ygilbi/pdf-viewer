@@ -344,6 +344,11 @@ class PdfClientImpl implements PdfClient {
         const p = this.pendingOpen;
         if (!p || (msg.seq !== undefined && msg.seq !== p.seq)) return;
         this.pendingOpen = null;
+        try {
+          performance.mark('viewer:opened');
+        } catch {
+          /* ignore */
+        }
         p.resolve({ numPages: msg.numPages, pageSizes: msg.pageSizes });
         break;
       }

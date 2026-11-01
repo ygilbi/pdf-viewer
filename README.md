@@ -27,3 +27,22 @@ Enter סגירת פוליגון · Backspace מחיקת נקודה אחרונה 
 ## פריסה
 - **Vercel** (מומלץ, עובד גם עם מאגר פרטי): Import Project → בחירת המאגר → Deploy. ההגדרות ב-`vercel.json`.
 - **GitHub Pages**: Settings → Pages → Source: GitHub Actions. כל push ל-`main` מריץ בדיקות ומפרסם (`.github/workflows/deploy-pages.yml`). במאגר פרטי דורש מנוי GitHub בתשלום.
+
+## התקנה כאפליקציה ו-PDF ברירת מחדל ב-Windows
+האפליקציה היא PWA עם File Handling API, כך שאפשר להתקין אותה ולפתוח איתה קובצי PDF ישירות מסייר הקבצים.
+
+**התקנה**
+1. פותחים את האתר ב-**Edge** או ב-**Chrome** (בכתובת HTTPS: Vercel או GitHub Pages).
+2. לוחצים על אייקון ההתקנה בשורת הכתובת (מסך עם חץ ⊕), או על הכפתור "התקן כאפליקציה" בתוך האפליקציה, ומאשרים.
+   ב-Edge אפשר גם: תפריט ⋯ → אפליקציות → התקן אתר זה כאפליקציה.
+
+**הגדרה כברירת מחדל ל-PDF**
+- לחיצה ימנית על קובץ PDF → **פתח באמצעות** → **בחר אפליקציה אחרת** → בוחרים "Aluminum PDF Takeoff" → **תמיד**.
+- או: הגדרות → אפליקציות → אפליקציות ברירת מחדל → מקלידים `.pdf` → בוחרים "Aluminum PDF Takeoff".
+- בפתיחה הראשונה הדפדפן ישאל אם לאפשר לאפליקציה לפתוח קובצי PDF — מאשרים (אפשר לסמן "זכור").
+
+**הערות**
+- נדרש אירוח ב-HTTPS (Vercel / GitHub Pages; `localhost` עובד לבדיקה). פתיחת קבצים מהמערכת נתמכת בדפדפני Chromium (Edge/Chrome) ב-Windows, macOS, Linux ו-ChromeOS; Firefox ו-Safari אינם תומכים ב-File Handling.
+- כשהאפליקציה כבר פתוחה, קובץ חדש נפתח באותו חלון (`launch_type: single-client`).
+- Service Worker (בבנייה לפרודקשן בלבד) שומר את מעטפת האפליקציה במטמון: טעינות חוזרות מהירות ועבודה גם ללא רשת. קובצי CMap/גופנים של pdf.js נשמרים לפי דרישה.
+- הקבצים: `public/manifest.webmanifest`, `public/icons/` (נוצרים ע״י `python3 scripts/make-icons.py`), `src/pwa/` (רישום SW, `useFileLaunch`, `<InstallButton/>`), ו-`sw.js` שנוצר בבנייה ע״י `src/pwa/swPlugin.ts`.

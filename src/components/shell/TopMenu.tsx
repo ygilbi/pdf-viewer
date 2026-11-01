@@ -1,0 +1,298 @@
+import { useEffect, useRef, useState } from 'react';
+import { useViewer } from '../../state/store';
+import { useUi } from '../../state/uiStore';
+import { useZoom, viewerCommands } from '../viewer/commands';
+import { ToolButton, ToolbarDivider } from '../ui/ToolButton';
+import {
+  IconChevronLeft,
+  IconChevronRight,
+  IconDownload,
+  IconFilePdf,
+  IconFit,
+  IconFolderOpen,
+  IconFullscreen,
+  IconFullscreenExit,
+  IconList,
+  IconPages,
+  IconX,
+  IconZoomIn,
+  IconZoomOut,
+} from '../ui/icons';
+import { CopyTableButton } from '../CopyTableButton';
+import { ActiveCategorySelect } from '../CategorySelect';
+import { DOWNLOAD_HINT, exportCSV, exportJSON, fullscreenSupported, toggleFullscreen, useIsFullscreen } from '../toolActions';
+import { InstallButton } from '../../pwa';
+
+function Group({ children, label }: { children: React.ReactNode; label: string }) {
+  return (
+    <div className="flex items-center gap-0.5" role="group" aria-label={label}>
+      {children}
+    </div>
+  );
+}
+
+/**
+ * Slide-down top bar with everything that is not a drawing tool. Always
+ * mounted (hidden when closed) so the copy-table toast / fallback survive
+ * closing it; `inert` keeps it out of the tab order while hidden.
+ */
+export function TopMenu({ onOpenFile }: { onOpenFile(file: File): void }) {
+  const open = useUi((s) => s.menuOpen);
+  const setMenuOpen = useUi((s) => s.setMenuOpen);
+  const thumbsOpen = useUi((s) => s.thumbsOpen);
+  const measOpen = useUi((s) => s.measurementsOpen);
+  const toggleDrawer = useUi((s) => s.toggleDrawer);
+
+  const fileName = useViewer((s) => s.fileName);
+  const numPages = useViewer((s) => s.numPages);
+  const currentPage = useViewer((s) => s.currentPage);
+  const setPage = useViewer((s) => s.setPage);
+  const setTool = useViewer((s) => s.setTool);
+  const calibration = useViewer((s) => s.calibrations[s.currentPage]);
+  const measurementCount = useViewer((s) => s.measurements.length);
+  const zoom = useZoom().percent;
+  const isFs = useIsFullscreen();
+  const hasDoc = numPages > 0;
+
+  const ref = useRef<HTMLElement>(null);
+  const fileInput = useRef<HTMLInputElement>(null);
+
+  // Click outside closes.
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (e: PointerEvent) => {
+      const t = e.target as Element | null;
+      if (!t || ref.current?.contains(t)) return;
+      if (t.closest?.('[data-menu-toggle]') || t.closest?.('[role="dialog"]')) return;
+      setMenuOpen(false);
+    };
+    document.addEventListener('pointerdown', onDown, true);
+    return () => document.removeEventListener('pointerdown', onDown, true);
+  }, [open, setMenuOpen]);
+
+  // Move focus into the menu when it opens (keyboard users), back out when it closes.
+  useEffect(() => {
+    if (!open) return;
+    const prev = document.activeElement as HTMLElement | null;
+    const first = ref.current?.querySelector<HTMLElement>('button:not([disabled])');
+    first?.focus({ preventScroll: true });
+    return () => {
+      if (ref.current?.contains(document.activeElement)) prev?.focus?.({ preventScroll: true });
+    };
+  }, [open]);
+
+  // null while not editing → the input mirrors currentPage.
+  const [pageText, setPageText] = useState<string | null>(null);
+  const commitPage = () => {
+    if (pageText == null) return;
+    const n = parseInt(pageText, 10);
+    if (Number.isFinite(n)) setPage(n);
+    setPageText(null);
+  };
+
+  return (
+    <header
+      ref={ref}
+      id="top-menu"
+      data-testid="top-menu"
+      data-open={open ? 'true' : 'false'}
+      aria-label="תפריט"
+      aria-hidden={!open}
+      inert={!open}
+      className={
+        'absolute inset-x-0 top-0 z-40 border-b border-slate-700/80 bg-slate-800/95 text-slate-200 shadow-xl shadow-black/40 backdrop-blur ' +
+        'transition-[transform,visibility] duration-200 ease-out motion-reduce:transition-none ' +
+        (open ? 'visible translate-y-0' : 'invisible -translate-y-full')
+      }
+    >
+      <input
+        ref={fileInput}
+        type="file"
+        accept="application/pdf,.pdf"
+        className="hidden"
+        onChange={(e) => {
+          const f = e.target.files?.[0];
+          if (f) {
+            setMenuOpen(false);
+            onOpenFile(f);
+          }
+          e.target.value = '';
+        }}
+      />
+      <div className="flex flex-wrap items-center gap-x-1 gap-y-1.5 px-2 py-1.5">
+        {/* file */}
+        <Group label="קובץ">
+          <ToolButton label="פתח קובץ PDF" onClick={() => fileInput.current?.click()} showLabel>
+            <IconFolderOpen />
+          </ToolButton>
+          {fileName && (
+            <div className="flex max-w-[14rem] items-center gap-1 truncate px-1 text-xs text-slate-400" title={fileName}>
+              <IconFilePdf size={14} className="shrink-0 text-red-400" />
+              <span className="truncate" dir="auto">
+                {fileName}
+              </span>
+            </div>
+          )}
+        </Group>
+
+        <ToolbarDivider />
+
+        {/* pages */}
+        <Group label="דפים">
+          <ToolButton
+            label="הדף הקודם"
+            shortcut="PageUp"
+            disabled={!hasDoc || currentPage <= 1}
+            onClick={() => setPage(currentPage - 1)}
+          >
+            <IconChevronRight />
+          </ToolButton>
+          <div className="flex items-center gap-1 text-xs text-slate-400">
+            <span>דף</span>
+            <input
+              type="text"
+              inputMode="numeric"
+              aria-label="מספר דף"
+              disabled={!hasDoc}
+              value={hasDoc ? (pageText ?? String(currentPage)) : ''}
+              onChange={(e) => setPageText(e.target.value.replace(/[^\d]/g, ''))}
+              onKeyDown={(e) => {
+                e.stopPropagation();
+                if (e.key === 'Enter') {
+                  commitPage();
+                  (e.target as HTMLInputElement).blur();
+                } else if (e.key === 'Escape') {
+                  setPageText(null);
+                  requestAnimationFrame(() => (e.target as HTMLInputElement).blur());
+                }
+              }}
+              onBlur={commitPage}
+              onFocus={(e) => e.target.select()}
+              className="h-6 w-12 rounded border border-slate-600 bg-slate-900 text-center font-mono text-xs text-slate-100 focus:border-sky-500 focus:outline-none disabled:opacity-40"
+            />
+            <span className="whitespace-nowrap">מתוך {hasDoc ? numPages : '—'}</span>
+          </div>
+          <ToolButton
+            label="הדף הבא"
+            shortcut="PageDown"
+            disabled={!hasDoc || currentPage >= numPages}
+            onClick={() => setPage(currentPage + 1)}
+          >
+            <IconChevronLeft />
+          </ToolButton>
+        </Group>
+
+        <ToolbarDivider />
+
+        {/* zoom */}
+        <Group label="זום">
+          <ToolButton label="הקטן" shortcut="-" disabled={!hasDoc} onClick={() => viewerCommands.zoomOut()}>
+            <IconZoomOut />
+          </ToolButton>
+          <div className="w-12 text-center font-mono text-xs tabular-nums text-slate-300" aria-label="זום">
+            {hasDoc ? `${Math.round(zoom)}%` : '—'}
+          </div>
+          <ToolButton label="הגדל" shortcut="+" disabled={!hasDoc} onClick={() => viewerCommands.zoomIn()}>
+            <IconZoomIn />
+          </ToolButton>
+          <ToolButton label="התאם לדף" shortcut="0 / F" disabled={!hasDoc} onClick={() => viewerCommands.fit()}>
+            <IconFit />
+          </ToolButton>
+        </Group>
+
+        <ToolbarDivider />
+
+        {/* calibration + category */}
+        <Group label="כיול וקטגוריה">
+          {hasDoc &&
+            (calibration ? (
+              <div
+                className="flex h-6 items-center gap-1 whitespace-nowrap rounded-full border border-emerald-700/70 bg-emerald-900/40 px-2 text-[11px] text-emerald-300"
+                title={`כויל לפי ${calibration.meters} מ׳ בדף ${currentPage}`}
+              >
+                <span className="h-1.5 w-1.5 rounded-full bg-emerald-400" />
+                קנ״מ: 1 מ׳ = {calibration.pixelsPerMeter.toFixed(2)} יח׳
+              </div>
+            ) : (
+              <button
+                type="button"
+                onClick={() => {
+                  setTool('calibrate');
+                  setMenuOpen(false);
+                }}
+                className="flex h-6 items-center gap-1 whitespace-nowrap rounded-full border border-amber-600/70 bg-amber-900/30 px-2 text-[11px] text-amber-300 hover:bg-amber-900/60"
+                title="לחץ כדי לכייל את קנה המידה של הדף"
+              >
+                <span className="h-1.5 w-1.5 rounded-full bg-amber-400" />
+                לא מכויל
+              </button>
+            ))}
+          <span className="w-1" />
+          {hasDoc && <ActiveCategorySelect />}
+        </Group>
+
+        <ToolbarDivider />
+
+        {/* export */}
+        <Group label="ייצוא">
+          <ToolButton
+            label="ייצוא CSV"
+            hint={DOWNLOAD_HINT}
+            disabled={!hasDoc || measurementCount === 0}
+            onClick={exportCSV}
+            showLabel
+          >
+            <IconDownload />
+          </ToolButton>
+          <ToolButton
+            label="ייצוא JSON"
+            hint={DOWNLOAD_HINT}
+            disabled={!hasDoc || measurementCount === 0}
+            onClick={exportJSON}
+            showLabel
+          >
+            <IconDownload />
+          </ToolButton>
+          <CopyTableButton disabled={!hasDoc || measurementCount === 0} />
+        </Group>
+
+        <div className="flex-1" />
+
+        {/* view */}
+        <Group label="תצוגה">
+          <ToolButton
+            label="תצוגת דפים"
+            shortcut="T"
+            active={thumbsOpen}
+            disabled={!hasDoc}
+            onClick={() => toggleDrawer('thumbs')}
+          >
+            <IconPages />
+          </ToolButton>
+          <ToolButton
+            label="רשימת מדידות"
+            shortcut="M"
+            active={measOpen}
+            disabled={!hasDoc}
+            onClick={() => toggleDrawer('measurements')}
+          >
+            <IconList />
+          </ToolButton>
+          {fullscreenSupported() && (
+            <ToolButton label={isFs ? 'צא ממסך מלא' : 'מסך מלא'} shortcut="Shift+F" active={isFs} onClick={toggleFullscreen}>
+              {isFs ? <IconFullscreenExit /> : <IconFullscreen />}
+            </ToolButton>
+          )}
+          <InstallButton
+            label="התקן"
+            className="flex h-8 items-center gap-1.5 rounded px-2 text-xs text-sky-300 hover:bg-slate-700 hover:text-white focus:outline-none focus-visible:ring-1 focus-visible:ring-sky-400"
+          />
+          <ToolbarDivider />
+          <ToolButton label="סגור תפריט" shortcut="Esc" onClick={() => setMenuOpen(false)}>
+            <IconX />
+          </ToolButton>
+        </Group>
+      </div>
+    </header>
+  );
+}

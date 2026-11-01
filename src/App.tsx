@@ -1,14 +1,13 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useViewer } from './state/store';
 import { getPdfClient } from './core/pdfClient';
-import MeasurementToolbar from './components/MeasurementToolbar';
-import ThumbnailSidebar from './components/ThumbnailSidebar';
-import MeasurementsPanel from './components/MeasurementsPanel';
+import { ErrorToast, ViewerShell } from './components/shell/ViewerShell';
 import DropZone from './components/DropZone';
 import ViewerCanvas from './components/ViewerCanvas';
-import { IconAlert, IconFilePdf, IconX } from './components/ui/icons';
+import { IconFilePdf } from './components/ui/icons';
 import { formatBytes } from './components/ui/util';
 import { RestoreToast, detachDocument, fingerprintFile, restoreDocument, usePersistence } from './state/persistence';
+import { useFileLaunch } from './pwa/fileHandling';
 
 function isPdf(file: File) {
   return file.type === 'application/pdf' || /\.pdf$/i.test(file.name);
@@ -29,8 +28,6 @@ export default function App() {
   const numPages = useViewer((s) => s.numPages);
   const fileName = useViewer((s) => s.fileName);
   const loading = useViewer((s) => s.loading);
-  const error = useViewer((s) => s.error);
-  const setError = useViewer((s) => s.setError);
 
   const [pending, setPending] = useState<{ name: string; size: number } | null>(null);
   const openSeq = useRef(0);
@@ -68,6 +65,7 @@ export default function App() {
       }
     }
   }, []);
+  useFileLaunch(openFile); // PWA: open PDFs launched via "Open with" / default app
 
   // Window-wide drag & drop (replace the document at any time).
   const [dragging, setDragging] = useState(false);
@@ -112,43 +110,25 @@ export default function App() {
   const hasDoc = numPages > 0;
 
   return (
-    <div className="relative flex h-full flex-col bg-slate-900 text-slate-100 antialiased">
-      <MeasurementToolbar onOpenFile={openFile} />
-
-      {error && (
-        <div
-          role="alert"
-          className="flex shrink-0 items-center gap-2 border-b border-red-800 bg-red-950/80 px-3 py-1.5 text-sm text-red-200"
-        >
-          <IconAlert className="shrink-0 text-red-400" />
-          <span className="flex-1">
-            {error}
-          </span>
-          <button
-            type="button"
-            onClick={() => setError(null)}
-            aria-label="סגור הודעה"
-            className="rounded p-0.5 text-red-300 hover:bg-red-900 hover:text-white"
+    // Full-window shell: once a document is open the viewer covers 100% of the
+    // window and every other control floats over it (pill, palette, drawers, menu).
+    <div className="fixed inset-0 overflow-hidden bg-slate-900 text-slate-100 antialiased">
+      {hasDoc ? (
+        <>
+          <main
+            className="absolute inset-0 overflow-hidden bg-slate-950"
+            aria-label={fileName ?? undefined}
+            data-testid="viewer-main"
           >
-            <IconX size={14} />
-          </button>
-        </div>
+            <ViewerCanvas />
+          </main>
+          <ViewerShell onOpenFile={openFile} />
+        </>
+      ) : (
+        <main className="absolute inset-0">{!loading && <DropZone onFile={openFile} />}</main>
       )}
 
-      <div className="flex min-h-0 flex-1">
-        {hasDoc ? (
-          <>
-            {/* RTL: first child sits on the right */}
-            <ThumbnailSidebar />
-            <main className="relative min-w-0 flex-1 overflow-hidden bg-slate-950" aria-label={fileName ?? undefined}>
-              <ViewerCanvas />
-            </main>
-            <MeasurementsPanel />
-          </>
-        ) : (
-          <main className="relative flex-1">{!loading && <DropZone onFile={openFile} />}</main>
-        )}
-      </div>
+      <ErrorToast />
 
       {loading && (
         <div className="absolute inset-0 z-40 flex items-center justify-center bg-slate-950/70 backdrop-blur-sm">

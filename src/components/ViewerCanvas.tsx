@@ -754,8 +754,15 @@ export default function ViewerCanvas() {
     ro.observe(container);
     vp.setContainerSize(rect.width, rect.height);
 
-    if (import.meta.env.DEV) {
-      (window as unknown as { __viewer?: unknown }).__viewer = { vp, layers };
+    if (import.meta.env.DEV || /[?&]bench\b/.test(window.location.search)) {
+      // Test / benchmark hook (dev builds, or any build opened with ?bench).
+      (window as unknown as { __viewer?: unknown }).__viewer = {
+        vp,
+        layers,
+        isSharp: () => layers.isSharp(vp.zoom, vp.visibleRect()),
+        setPage: (n: number) => useViewer.getState().setPage(n),
+        client: getPdfClient(),
+      };
     }
 
     return () => {

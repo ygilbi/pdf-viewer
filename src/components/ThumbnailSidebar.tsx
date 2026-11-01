@@ -1,4 +1,4 @@
-import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { memo, type ReactNode, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useViewer } from '../state/store';
 import { getPdfClient } from '../core/pdfClient';
 import type { PageSize } from '../core/types';
@@ -245,7 +245,14 @@ const Thumb = memo(function Thumb({
 // ---------------------------------------------------------------------------
 // Sidebar
 // ---------------------------------------------------------------------------
-export default function ThumbnailSidebar() {
+interface SidebarProps {
+  /** When given (drawer mode), the header button hides the drawer instead of collapsing in place. */
+  onHide?: () => void;
+  /** Extra header buttons (e.g. the drawer's pin toggle). */
+  headerActions?: ReactNode;
+}
+
+export default function ThumbnailSidebar({ onHide, headerActions }: SidebarProps = {}) {
   const numPages = useViewer((s) => s.numPages);
   const pageSizes = useViewer((s) => s.pageSizes);
   const currentPage = useViewer((s) => s.currentPage);
@@ -395,12 +402,15 @@ export default function ThumbnailSidebar() {
 
   return (
     <aside className="flex w-[184px] shrink-0 flex-col border-e border-slate-700 bg-slate-800/80">
-      <div className="flex h-8 shrink-0 items-center justify-between border-b border-slate-700 px-2 text-[11px] text-slate-400">
+      <div className="flex h-8 shrink-0 items-center gap-1 border-b border-slate-700 px-2 text-[11px] text-slate-400">
         <span>דפים ({numPages})</span>
+        <div className="flex-1" />
+        {headerActions}
         <button
           type="button"
-          onClick={() => setCollapsed(true)}
-          title="הסתר"
+          onClick={() => (onHide ? onHide() : setCollapsed(true))}
+          title={onHide ? 'סגור (T)' : 'הסתר'}
+          aria-label="סגור תצוגת דפים"
           className="rounded p-0.5 text-slate-400 hover:bg-slate-700 hover:text-white"
         >
           <IconPanel size={14} />

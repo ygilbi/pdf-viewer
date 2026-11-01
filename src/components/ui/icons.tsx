@@ -175,3 +175,41 @@ export const IconCount = (p: IconProps) => (
     <path d="M14.5 17h5M17 14.5v5" />
   </Svg>
 );
+
+export const IconMenu = (p: IconProps) => (
+  <Svg {...p}>
+    <path d="M4 6h16M4 12h16M4 18h16" />
+  </Svg>
+);
+
+export const IconFullscreen = (p: IconProps) => (
+  <Svg {...p}>
+    <path d="M4 9V4h5M15 4h5v5M20 15v5h-5M9 20H4v-5" />
+  </Svg>
+);
+
+export const IconFullscreenExit = (p: IconProps) => (
+  <Svg {...p}>
+    <path d="M9 4v5H4M20 9h-5V4M15 20v-5h5M4 15h5v5" />
+  </Svg>
+);
+
+export const IconPin = (p: IconProps) => (
+  <Svg {...p}>
+    <path d="M12 17v5" />
+    <path d="M9 3h6l-1 6 4 4v2H6v-2l4-4Z" />
+  </Svg>
+);
+
+export const IconPages = (p: IconProps) => (
+  <Svg {...p}>
+    <rect x="4" y="3" width="11" height="14" rx="1.5" />
+    <path d="M9 21h9.5a1.5 1.5 0 0 0 1.5-1.5V8" />
+  </Svg>
+);
+
+export const IconCollapse = (p: IconProps) => (
+  <Svg {...p}>
+    <path d="m7 14 5-5 5 5" />
+  </Svg>
+);

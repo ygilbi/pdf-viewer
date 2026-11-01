@@ -1,3 +1,4 @@
+import { createPortal } from 'react-dom';
 import { useEffect, useRef, useState } from 'react';
 import { useViewer } from '../state/store';
 import { buildMeasurementRows, measurementsToTSV } from '../core/measurementEngine';
@@ -67,16 +68,20 @@ export function CopyTableButton({ disabled }: { disabled?: boolean }) {
       <ToolButton label="העתק טבלה" hint="להדבקה באקסל / Google Sheets" disabled={disabled} onClick={onClick} showLabel>
         <IconCopy />
       </ToolButton>
-      {toast > 0 && (
+      {/* Portaled: the button may live inside a transformed (sliding) menu, which would re-anchor `fixed`. */}
+      {toast > 0 &&
+        createPortal(
         <div
           role="status"
           data-testid="copy-toast"
           className="pointer-events-none fixed bottom-4 left-1/2 z-50 -translate-x-1/2 rounded-md border border-emerald-700 bg-emerald-950/90 px-4 py-2 text-sm text-emerald-100 shadow-lg"
         >
           הטבלה הועתקה — הדבק באקסל
-        </div>
-      )}
-      {fallback != null && <CopyFallbackModal text={fallback} onClose={() => setFallback(null)} />}
+        </div>,
+          document.body,
+        )}
+      {fallback != null &&
+        createPortal(<CopyFallbackModal text={fallback} onClose={() => setFallback(null)} />, document.body)}
     </>
   );
 }

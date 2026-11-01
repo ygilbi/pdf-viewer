@@ -14,7 +14,15 @@ interface ToolButtonProps {
   /** Extra classes for the label text (e.g. responsive hiding). */
   labelClassName?: string;
   className?: string;
+  /** Which side of the button the tooltip appears on (physical sides). */
+  tooltipSide?: 'bottom' | 'left' | 'right';
 }
+
+const TOOLTIP_SIDE = {
+  bottom: 'left-1/2 top-full mt-1.5 -translate-x-1/2',
+  left: 'right-full top-1/2 mr-2 -translate-y-1/2',
+  right: 'left-full top-1/2 ml-2 -translate-y-1/2',
+} as const;
 
 /** Compact CAD-style toolbar button with a hover tooltip (label + shortcut). */
 export function ToolButton({
@@ -28,6 +36,7 @@ export function ToolButton({
   showLabel,
   labelClassName = '',
   className = '',
+  tooltipSide = 'bottom',
 }: ToolButtonProps) {
   return (
     <div className="group relative">
@@ -54,7 +63,9 @@ export function ToolButton({
       <div
         role="tooltip"
         className={
-          'pointer-events-none absolute left-1/2 top-full z-50 mt-1.5 -translate-x-1/2 whitespace-nowrap ' +
+          'pointer-events-none absolute z-50 whitespace-nowrap ' +
+          TOOLTIP_SIDE[tooltipSide] +
+          ' [@media(hover:none)]:hidden ' +
           'rounded border border-slate-600 bg-slate-950 px-2 py-1 text-[11px] text-slate-200 opacity-0 shadow-lg ' +
           'transition-opacity delay-300 group-hover:opacity-100'
         }

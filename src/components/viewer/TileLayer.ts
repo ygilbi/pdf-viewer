@@ -148,6 +148,22 @@ export class PageLayers {
   get tileCount(): number {
     return this.tiles.length;
   }
+  /** 0 = nothing drawn, 1 = preview, 2 = full base. */
+  get baseQuality(): number {
+    return this.baseLevel;
+  }
+
+  /**
+   * True when what is on screen is as sharp as it is going to get for this
+   * view: the full base when it suffices, otherwise a shown sharp tile at the
+   * planned scale covering the visible part of the page. (Benchmarks / tests.)
+   */
+  isSharp(zoom: number, visible: Rect): boolean {
+    if (!this.page || this.baseLevel < 1) return false;
+    const plan = this.plan(zoom, visible);
+    if (!plan) return this.baseLevel === 2;
+    return this.tiles.some((t) => t.shown && t.scale >= plan.scale * 0.98 && contains(t.region, plan.need));
+  }
 
   /** Show `page`. `docKey` identifies the open document (caches reset when it changes). */
   setPage(docKey: unknown, page: number, size: PageSize): void {
@@ -162,6 +178,7 @@ export class PageLayers {
     this.page = page;
     this.size = size;
     this.baseLevel = 0;
+    mark('viewer:setPage');
     const longest = Math.max(size.width, size.height);
     if (!(longest > 0)) return;
     this.baseScale = baseLongSide() / longest;
@@ -230,6 +247,7 @@ export class PageLayers {
     this.cancelSharp();
 
     const page = this.page;
+    mark('viewer:sharp-req');
     const task = this.client.render({ page, scale: plan.scale, region: plan.region, priority: PRIO_SHARP });
     const entry: Inflight = { task, page, scale: plan.scale, region: plan.region };
     this.inflight = entry;
@@ -329,6 +347,7 @@ export class PageLayers {
     c.style.transform = `scale(${this.size.width / bitmap.width}, ${this.size.height / bitmap.height})`;
     c.style.visibility = 'visible';
     this.baseLevel = level;
+    mark(level === 2 ? 'viewer:base' : 'viewer:preview');
   }
 
   private addTile(r: RenderResult): void {
@@ -372,6 +391,7 @@ export class PageLayers {
     // Sharper tiles on top.
     [...this.tiles].sort((a, b) => a.scale - b.scale).forEach((t, i) => (t.canvas.style.zIndex = String(i + 1)));
     this.onTile?.({ scale: tile.scale, region });
+    mark('viewer:tile');
   }
 
   private setShown(t: Tile, shown: boolean): void {
@@ -403,4 +423,12 @@ export class PageLayers {
 
 function dpr(): number {
   return (typeof window !== 'undefined' && window.devicePixelRatio) || 1;
+}
+
+function mark(name: string): void {
+  try {
+    performance.mark(name);
+  } catch {
+    /* ignore */
+  }
 }
