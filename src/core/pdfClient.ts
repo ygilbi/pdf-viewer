@@ -396,5 +396,13 @@ export function createPdfClient(): PdfClient {
 let singleton: PdfClient | null = null;
 
 export function getPdfClient(): PdfClient {
-  return (singleton ??= createPdfClient());
+  if (!singleton) {
+    singleton = createPdfClient();
+    if (typeof window !== 'undefined' && /[?&]bench\b/.test(window.location.search)) {
+      (window as unknown as { __pdfClient?: PdfClient }).__pdfClient = singleton; // benchmark hook
+    }
+  }
+  return singleton;
 }
+
+if (typeof window !== 'undefined' && /[?&]bench\b/.test(window.location.search)) getPdfClient(); // expose the benchmark hook early

@@ -74,9 +74,12 @@ export function TopMenu({ onOpenFile }: { onOpenFile(file: File): void }) {
   useEffect(() => {
     if (!open) return;
     const prev = document.activeElement as HTMLElement | null;
-    const first = ref.current?.querySelector<HTMLElement>('button:not([disabled])');
-    first?.focus({ preventScroll: true });
+    // Next frame: `inert` / visibility must be cleared before focus() is accepted.
+    const raf = requestAnimationFrame(() =>
+      ref.current?.querySelector<HTMLElement>('button:not([disabled])')?.focus({ preventScroll: true }),
+    );
     return () => {
+      cancelAnimationFrame(raf);
       if (ref.current?.contains(document.activeElement)) prev?.focus?.({ preventScroll: true });
     };
   }, [open]);
@@ -101,8 +104,9 @@ export function TopMenu({ onOpenFile }: { onOpenFile(file: File): void }) {
       inert={!open}
       className={
         'absolute inset-x-0 top-0 z-40 border-b border-slate-700/80 bg-slate-800/95 text-slate-200 shadow-xl shadow-black/40 backdrop-blur ' +
-        'transition-[transform,visibility] duration-200 ease-out motion-reduce:transition-none ' +
-        (open ? 'visible translate-y-0' : 'invisible -translate-y-full')
+        'duration-200 ease-out motion-reduce:transition-none ' +
+        // Opening: visible at once (so focus() works); closing: stay visible until the slide ends.
+        (open ? 'visible translate-y-0 transition-transform' : 'invisible -translate-y-full transition-[transform,visibility]')
       }
     >
       <input

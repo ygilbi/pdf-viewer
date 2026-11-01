@@ -88,6 +88,12 @@ export interface SchedulerJob {
  * Priority queue with limited concurrency. Highest priority first; among equal
  * priorities the most recently enqueued wins (LIFO), which is what an
  * interactive viewer wants (the latest viewport matters most).
+ *
+ * A job with a higher priority than everything running may start even when
+ * all `concurrency` slots are busy (up to `concurrency + PREEMPT_SLOTS`), so a
+ * viewport render never waits for background renders (prefetch, thumbnails)
+ * to finish. Running jobs are interleaved by priority at their yield points
+ * (see PriorityYield), so the low-priority ones effectively pause.
  */
 export class RenderScheduler<J extends SchedulerJob> {
   private queue: { job: J; seq: number }[] = [];
@@ -122,21 +128,34 @@ export class RenderScheduler<J extends SchedulerJob> {
     return jobs;
   }
 
-  private takeNext(): J | undefined {
-    if (this.queue.length === 0) return undefined;
+  /** Re-evaluate after a job's priority changed. */
+  reprioritize(): void {
+    this.pump();
+  }
+
+  private bestIndex(): number {
     let best = 0;
     for (let i = 1; i < this.queue.length; i++) {
       const a = this.queue[i];
       const b = this.queue[best];
       if (a.job.priority > b.job.priority || (a.job.priority === b.job.priority && a.seq > b.seq)) best = i;
     }
-    return this.queue.splice(best, 1)[0].job;
+    return best;
+  }
+
+  private canStart(job: J): boolean {
+    if (this.running.size < this.concurrency) return true;
+    if (this.running.size >= this.concurrency + PREEMPT_SLOTS) return false;
+    for (const r of this.running.values()) if (r.priority >= job.priority) return false;
+    return true;
   }
 
   private pump(): void {
-    while (this.running.size < this.concurrency) {
-      const job = this.takeNext();
-      if (!job) return;
+    while (this.queue.length > 0) {
+      const i = this.bestIndex();
+      const job = this.queue[i].job;
+      if (!this.canStart(job)) return;
+      this.queue.splice(i, 1);
       this.running.set(job.id, job);
       this.runJob(job)
         .catch(() => {})
@@ -145,6 +164,47 @@ export class RenderScheduler<J extends SchedulerJob> {
           this.pump();
         });
     }
+  }
+}
+
+/** Extra slots a higher-priority job may use while background jobs occupy the normal ones. */
+export const PREEMPT_SLOTS = 2;
+
+/**
+ * Cooperative scheduling of pdf.js render slices. pdf.js renders in ~15 ms
+ * slices and calls `onContinue(cont)` between them; this queue resumes the
+ * highest-priority waiting slice first, so a viewport render runs at full speed
+ * while lower-priority renders in the same thread wait (they resume whenever
+ * the urgent render is idle, e.g. waiting for its operator list). `post`
+ * schedules a macrotask (MessageChannel in the worker — not clamped like
+ * nested setTimeout).
+ */
+export class PriorityYield {
+  private waiting: { prio: () => number; cont: () => void; seq: number }[] = [];
+  private seq = 0;
+
+  constructor(private readonly post: () => void) {}
+
+  /** Returns an `onContinue` for a render whose priority is read lazily (it may change). */
+  forJob(prio: () => number): (cont: () => void) => void {
+    return (cont) => {
+      this.waiting.push({ prio, cont, seq: this.seq++ });
+      this.post();
+    };
+  }
+
+  /** Call once per `post()`. Runs the most urgent waiting slice (FIFO among equals). */
+  runNext(): void {
+    if (this.waiting.length === 0) return;
+    let best = 0;
+    for (let i = 1; i < this.waiting.length; i++) {
+      const a = this.waiting[i];
+      const b = this.waiting[best];
+      const pa = a.prio();
+      const pb = b.prio();
+      if (pa > pb || (pa === pb && a.seq < b.seq)) best = i;
+    }
+    this.waiting.splice(best, 1)[0].cont();
   }
 }
 

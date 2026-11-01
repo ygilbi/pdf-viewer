@@ -16,6 +16,7 @@ import pdfjsWorkerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
 import type { Rect, WorkerRequest, WorkerResponse } from './types';
 import {
   PageCache,
+  PriorityYield,
   RenderScheduler,
   UNSUPPORTED_PREFIX,
   describeLoadError,
@@ -219,15 +220,12 @@ interface Job {
 const jobs = new Map<number, Job>();
 
 // Yield to the event loop between pdf.js render slices so `cancel` messages
-// (and higher-priority requests) are processed mid-render. MessageChannel is
-// not clamped like nested setTimeout.
+// (and higher-priority requests) are processed mid-render, and resume the most
+// urgent render first (see PriorityYield). MessageChannel is not clamped like
+// nested setTimeout.
 const yieldChannel = new MessageChannel();
-const yieldQueue: (() => void)[] = [];
-yieldChannel.port1.onmessage = () => yieldQueue.shift()?.();
-const yieldToEventLoop = (cont: () => void) => {
-  yieldQueue.push(cont);
-  yieldChannel.port2.postMessage(0);
-};
+const slices = new PriorityYield(() => yieldChannel.port2.postMessage(0));
+yieldChannel.port1.onmessage = () => slices.runNext();
 
 const scheduler = new RenderScheduler<Job>(runJob);
 
@@ -243,7 +241,7 @@ async function runJob(job: Job): Promise<void> {
     const canvas = new OffscreenCanvas(plan.width, plan.height);
     const ctx = canvas.getContext('2d', { alpha: false });
     if (!ctx) throw new Error(UNSUPPORTED_PREFIX + 'OffscreenCanvas 2D context is not available');
-    await renderInto(page, ctx, plan, job.active, yieldToEventLoop);
+    await renderInto(page, ctx, plan, job.active, slices.forJob(() => job.priority));
     if (job.active.cancelled) throw makeCancelError();
     const bitmap = canvas.transferToImageBitmap();
     canvas.width = canvas.height = 0;
@@ -308,6 +306,14 @@ self.onmessage = (ev: MessageEvent<WorkerRequest & { seq?: number }>) => {
     case 'cancel':
       cancelJob(msg.id);
       break;
+    case 'priority': {
+      const job = jobs.get(msg.id);
+      if (job) {
+        job.priority = msg.priority;
+        scheduler.reprioritize();
+      }
+      break;
+    }
     case 'close':
       gen++;
       closeDoc();

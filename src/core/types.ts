@@ -50,6 +50,8 @@ export type WorkerRequest =
       priority: number;
     }
   | { type: 'cancel'; id: number }
+  /** Change the priority of a queued or running render (e.g. a prefetch became the visible page). */
+  | { type: 'priority'; id: number; priority: number }
   | { type: 'close' };
 
 export type WorkerResponse =
@@ -72,6 +74,8 @@ export interface RenderResult {
 export interface RenderTask {
   promise: Promise<RenderResult>;
   cancel(): void;
+  /** Change the priority while queued / running (no-op once finished). */
+  setPriority?(priority: number): void;
 }
 
 export interface PdfDocumentInfo {
