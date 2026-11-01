@@ -46,7 +46,7 @@ import { emitZoom, registerViewer } from './viewer/commands';
 /** Debounce after the last view change before rendering the sharp layer. */
 const SETTLE_MS = 50;
 /** After a zoom animation's target changes (wheel notch / button), render the target view this soon. */
-const TARGET_MS = 40;
+const TARGET_MS = 70;
 /** While panning continuously at a fixed zoom, render the uncovered view at most this often. */
 const PAN_RENDER_MS = 150;
 const CLOSE_PX = 10; // close polygon when clicking this close to the first vertex
@@ -220,7 +220,7 @@ export default function ViewerCanvas() {
       updateBand();
       clearTimeout(settleTimer);
       settleTimer = window.setTimeout(settle, SETTLE_MS);
-      if (target && !/[?&]notarget\b/.test(location.search)) {
+      if (target) {
         // Start the sharp render for where the animation will END while it plays.
         // Rounded: the target pan is recomputed every frame (float noise must not reset the timer).
         const tk = `${target.zoom.toPrecision(6)}|${target.visible.x.toFixed(1)}|${target.visible.y.toFixed(1)}`;

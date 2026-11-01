@@ -33,7 +33,7 @@ import type { PageSize, PdfClient, Rect, RenderResult, RenderTask } from '../../
  * first, so background work pauses while a visible render runs).
  */
 
-const MAX_TILES = 4;
+const MAX_TILES = 8;
 const TILE_PIXEL_BUDGET = 36 * 1024 * 1024;
 const MAX_SIDE = 4096;
 const MAX_PIXELS = 16 * 1024 * 1024;
@@ -96,6 +96,16 @@ function contains(outer: Rect, inner: Rect, eps = 1e-3): boolean {
     inner.x + inner.width <= outer.x + outer.width + eps &&
     inner.y + inner.height <= outer.y + outer.height + eps
   );
+}
+
+/**
+ * Does tile `t` cover `r`? Tolerance of one output pixel: a tile's extent is
+ * its whole-pixel bitmap size / scale, which at the page's right/bottom edge
+ * ends a fraction of a pixel short of the page (the view would otherwise never
+ * count as covered there and be re-rendered on every settle).
+ */
+function covers(t: { region: Rect; scale: number }, r: Rect): boolean {
+  return contains(t.region, r, Math.max(1e-3, 1 / t.scale));
 }
 
 class LRU<V extends CachedBitmap> {
@@ -194,7 +204,7 @@ export class PageLayers {
     if (!this.page || this.baseLevel < 2) return false;
     const plan = this.plan(zoom, visible);
     if (!plan) return true;
-    return this.tiles.some((t) => t.shown && t.scale >= plan.scale * 0.98 && contains(t.region, plan.need));
+    return this.tiles.some((t) => t.shown && t.scale >= plan.scale * 0.98 && covers(t, plan.need));
   }
 
   /**
@@ -265,8 +275,7 @@ export class PageLayers {
   viewChanged(zoom: number, visible: Rect, target?: View | null): void {
     if (!this.page) return;
     this.lastView = { zoom, visible };
-    const desired = zoom * dpr();
-    for (const t of this.tiles) this.setShown(t, t.scale <= desired * 3);
+    this.updateVisibility();
     if (this.inflight) {
       const plan = this.plan(zoom, visible);
       const tplan = target ? this.plan(target.zoom, target.visible) : null;
@@ -299,10 +308,11 @@ export class PageLayers {
       return;
     }
     const covering = this.tiles.find(
-      (t) => t.scale >= plan.scale * 0.98 && t.scale <= plan.desired * 3 && contains(t.region, plan.need),
+      (t) => t.scale >= plan.scale * 0.98 && t.scale <= plan.desired * 3 && covers(t, plan.need),
     );
     if (covering) {
       covering.used = ++this.useCounter;
+      this.startHalo(plan.scale, { zoom, visible });
       return;
     }
     if (this.inflight && this.inflightServes(this.inflight, plan)) return;
@@ -373,9 +383,8 @@ export class PageLayers {
   }
 
   /** After a sharp tile: render a larger region at the same scale in the background. */
-  private startHalo(scale: number): void {
-    const v = this.lastView;
-    if (/[?&]nohalo\b/.test(location.search)) return; // TEMP
+  private startHalo(scale: number, view: View | null = this.lastView): void {
+    const v = view;
     if (!v || this.halo || this.inflight) return;
     const plan = this.plan(v.zoom, v.visible);
     if (!plan || Math.abs(plan.scale / scale - 1) > 0.02) return;
@@ -395,7 +404,7 @@ export class PageLayers {
       f -= 0.1;
     }
     if (!region) return;
-    const covered = this.tiles.find((t) => t.scale >= scale * 0.98 && contains(t.region, region!));
+    const covered = this.tiles.find((t) => t.scale >= scale * 0.98 && covers(t, region!));
     const best = this.tiles.filter((t) => Math.abs(t.scale / scale - 1) < 0.02).reduce((a, t) => Math.max(a, t.region.width * t.region.height), 0);
     if (covered || region.width * region.height < best * 1.3) return;
     region = snapToGrid(region, scale, pw, ph);
@@ -503,8 +512,6 @@ export class PageLayers {
     s.height = `${h}px`;
     s.transform = `translate(${region.x}px, ${region.y}px) scale(${1 / r.scale})`;
     const tile: Tile = { canvas, scale: r.scale, region, pixels: w * h, used: ++this.useCounter, shown: true };
-    if (this.lastView) tile.shown = tile.scale <= this.lastView.zoom * dpr() * 3;
-    if (!tile.shown) s.display = 'none';
 
     // Drop tiles that the new one makes redundant (fully covered, not sharper).
     for (const t of [...this.tiles]) {
@@ -515,15 +522,62 @@ export class PageLayers {
     // Budget: evict least-recently-used (never the new one).
     let total = this.tiles.reduce((a, t) => a + t.pixels, 0);
     while (this.tiles.length > MAX_TILES || total > TILE_PIXEL_BUDGET) {
-      const victim = this.tiles.filter((t) => t !== tile).sort((a, b) => a.used - b.used)[0];
+      // Prefer tiles that others already cover (e.g. overlapping slivers left by
+      // renders during a pan), so a distinct view the user may return to survives.
+      const candidates = this.tiles.filter((t) => t !== tile).sort((a, b) => a.used - b.used);
+      const victim = candidates.find((t) => this.isRedundant(t)) ?? candidates[0];
       if (!victim) break;
       total -= victim.pixels;
       this.removeTile(victim);
     }
     // Sharper tiles on top.
     [...this.tiles].sort((a, b) => a.scale - b.scale).forEach((t, i) => (t.canvas.style.zIndex = String(i + 1)));
+    this.updateVisibility();
     this.onTile?.({ scale: tile.scale, region });
     mark('viewer:tile');
+  }
+
+  /** True if other tiles at ≥ this scale cover all of `t` (5×5 sample points). */
+  private isRedundant(t: Tile): boolean {
+    const others = this.tiles.filter((o) => o !== t && o.scale >= t.scale * 0.98);
+    if (others.length === 0) return false;
+    for (let i = 0; i < 5; i++) {
+      for (let j = 0; j < 5; j++) {
+        const x = t.region.x + (t.region.width * (i + 0.5)) / 5;
+        const y = t.region.y + (t.region.height * (j + 0.5)) / 5;
+        if (!others.some((o) => x >= o.region.x && x <= o.region.x + o.region.width && y >= o.region.y && y <= o.region.y + o.region.height)) {
+          return false;
+        }
+      }
+    }
+    return true;
+  }
+
+  /**
+   * Show only what can be seen: tiles that would be heavily minified are
+   * hidden (GPU scaling has no mipmaps → thin lines would shimmer; the base is
+   * better), and tiles / the base fully covered (within the view) by a sharper
+   * shown tile are hidden too, so the compositor doesn't blend several large
+   * layers on every frame of a zoom or pan.
+   */
+  private updateVisibility(): void {
+    const v = this.lastView;
+    const desired = (v?.zoom ?? 0) * dpr();
+    const pageRect = { x: 0, y: 0, width: this.size.width, height: this.size.height };
+    const need = v ? intersect(v.visible, pageRect) : null;
+    const shown: Tile[] = [];
+    for (const t of [...this.tiles].sort((a, b) => b.scale - a.scale)) {
+      let on = !v || t.scale <= desired * 3;
+      if (on && need) {
+        const part = intersect(t.region, need);
+        on = !!part && !shown.some((o) => covers(o, part));
+      }
+      this.setShown(t, on);
+      if (on) shown.push(t);
+    }
+    const baseCovered = !!need && shown.some((o) => covers(o, need));
+    const vis = this.baseLevel >= 2 && !baseCovered ? 'visible' : 'hidden';
+    if (this.baseCanvas.style.visibility !== vis) this.baseCanvas.style.visibility = vis;
   }
 
   private setShown(t: Tile, shown: boolean): void {

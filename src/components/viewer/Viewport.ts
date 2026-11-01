@@ -48,6 +48,7 @@ export class ViewportController {
 
   private world: HTMLElement | null = null;
   private frame = 0;
+  private lastFrameT = 0;
   private anim: Anim | null = null;
   private listeners = new Set<ViewListener>();
   private lastWritten = '';
@@ -251,6 +252,9 @@ export class ViewportController {
 
   private stepAnim(now: number): void {
     const a = this.anim;
+    // Frame-rate independent: a dropped frame advances the animation further.
+    const dt = this.lastFrameT ? Math.min(100, Math.max(1, now - this.lastFrameT)) : 16.7;
+    this.lastFrameT = now;
     if (!a) return;
     if (a.kind === 'smooth') {
       const ratio = a.target / this.zoom;
@@ -258,8 +262,9 @@ export class ViewportController {
         this.applyZoomAbout(a.target, a.ax, a.ay);
         this.anim = null;
       } else {
-        // exponential approach in log space: ~95% in 6 frames, done in ~9
-        this.applyZoomAbout(this.zoom * Math.pow(ratio, 0.4), a.ax, a.ay);
+        // exponential approach in log space: 40% per 60 Hz frame → ~95% in 100 ms, done in ~150 ms
+        const k = 1 - Math.pow(0.6, dt / 16.7);
+        this.applyZoomAbout(this.zoom * Math.pow(ratio, k), a.ax, a.ay);
       }
       return;
     }
@@ -286,6 +291,7 @@ export class ViewportController {
 
   private apply = (now: number): void => {
     this.frame = 0;
+    if (!this.anim) this.lastFrameT = 0; // first frame of a new animation uses a nominal dt
     this.stepAnim(now);
     if (this.anim) this.invalidate();
     const w = this.world;
