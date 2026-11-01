@@ -23,6 +23,7 @@ import { openExportDialog } from '../../export/exportUi';
 import { ActiveCategorySelect } from '../CategorySelect';
 import { fullscreenSupported, toggleFullscreen, useIsFullscreen } from '../toolActions';
 import { InstallButton, currentOs, openDefaultAppDialog } from '../../pwa';
+import { WINDOWS_DOWNLOAD_URL, showWindowsDownload } from '../../pwa/desktopDownload';
 
 function Group({ children, label }: { children: React.ReactNode; label: string }) {
   return (
@@ -297,6 +298,18 @@ export function TopMenu({ onOpenFile }: { onOpenFile(file: File): void }) {
               <IconFilePdf size={14} className="text-red-400" />
               הגדר כברירת מחדל ל‑PDF
             </button>
+          )}
+          {showWindowsDownload() && (
+            <a
+              href={WINDOWS_DOWNLOAD_URL}
+              target="_blank"
+              rel="noopener noreferrer"
+              data-testid="menu-download-windows"
+              title="מתקין לשולחן העבודה של Windows"
+              className="flex h-8 items-center gap-1.5 whitespace-nowrap rounded px-2 text-xs text-sky-300 hover:bg-slate-700 hover:text-white focus:outline-none focus-visible:ring-1 focus-visible:ring-sky-400"
+            >
+              הורד גרסת Windows
+            </a>
           )}
           <InstallButton
             label="התקן"

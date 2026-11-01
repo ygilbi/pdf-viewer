@@ -3,3 +3,6 @@ dist
 *.log
 .vite
 *.tsbuildinfo
+desktop/web-dist
+desktop/release
+desktop/test/out

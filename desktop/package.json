@@ -1,0 +1,20 @@
+{
+  "name": "pdf-viewer-desktop",
+  "productName": "PDF Viewer",
+  "version": "0.1.0",
+  "private": true,
+  "description": "PDF Viewer — מציג תוכניות PDF ומדידת שטחי חזיתות אלומיניום (Windows desktop app)",
+  "author": "ygilbi",
+  "license": "UNLICENSED",
+  "main": "main.cjs",
+  "scripts": {
+    "build:web": "node scripts/build-web.cjs",
+    "start": "electron .",
+    "build:win": "electron-builder --win nsis --x64 --publish never",
+    "dist": "npm run build:web && npm run build:win"
+  },
+  "devDependencies": {
+    "electron": "44.10.0",
+    "electron-builder": "26.18.0"
+  }
+}

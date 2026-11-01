@@ -28,6 +28,7 @@ import {
 } from './defaultApp';
 import { lastFileLaunch, onFileLaunch } from './fileHandling';
 import { useInstallPrompt } from './installPrompt';
+import { WINDOWS_DOWNLOAD_URL, showWindowsDownload } from './desktopDownload';
 
 /** Grace period for launchQueue to deliver files before deciding to auto-prompt. */
 const AUTO_PROMPT_DELAY_MS = 1200;
@@ -230,6 +231,15 @@ function DefaultAppDialog() {
               <p className="text-xs text-slate-500">
                 ב‑Windows 10: בעמוד „אפליקציות ברירת מחדל” לחץ „בחר אפליקציות ברירת מחדל לפי סוג קובץ” ← <span dir="ltr">.pdf</span> ← PDF Viewer.
               </p>
+              {showWindowsDownload() && (
+                <Alt>
+                  <b>מעדיפים תוכנה רגילה?</b>{' '}
+                  <a href={WINDOWS_DOWNLOAD_URL} target="_blank" rel="noopener noreferrer" data-testid="download-windows" className="font-semibold text-sky-300 underline hover:text-sky-200">
+                    הורד גרסת Windows
+                  </a>{' '}
+                  — מתקין שמגדיר את סמל קובצי ה‑PDF ורושם את התוכנה ברשימת ברירות המחדל.
+                </Alt>
+              )}
               <Alt>
                 <b>דרך נוספת:</b> לחיצה ימנית על קובץ PDF כלשהו ← <b>פתח באמצעות</b> ← <b>בחר אפליקציה אחרת</b> ← <b>PDF Viewer</b> ← <b>תמיד</b>.
               </Alt>

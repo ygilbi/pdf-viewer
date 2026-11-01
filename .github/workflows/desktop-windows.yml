@@ -1,0 +1,127 @@
+name: Desktop (Windows installer)
+
+on:
+  workflow_dispatch:
+    inputs:
+      release:
+        description: 'Publish a GitHub Release with the installer'
+        type: boolean
+        default: false
+  push:
+    # Path filters are not evaluated for tag pushes, so every desktop-v* tag builds.
+    tags: ['desktop-v*']
+    branches: [main]
+    paths:
+      - 'desktop/**'
+      - 'src/**'
+      - 'public/**'
+      - '.github/workflows/desktop-windows.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: desktop-windows-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref_type != 'tag' }}
+
+jobs:
+  build-win:
+    runs-on: windows-latest
+    timeout-minutes: 45
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            desktop/package-lock.json
+
+      - name: Install web dependencies
+        run: npm ci
+
+      - name: Install desktop dependencies
+        working-directory: desktop
+        run: npm ci
+
+      - name: Read desktop version
+        id: version
+        shell: pwsh
+        run: |
+          $v = node -p "require('./desktop/package.json').version"
+          "version=$v" >> $env:GITHUB_OUTPUT
+          Write-Host "Desktop version: $v"
+
+      - name: Build web app into desktop/web-dist
+        run: npm --prefix desktop run build:web
+
+      - name: Build NSIS installer
+        run: npm --prefix desktop run build:win
+
+      - name: Upload installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: PDF-Viewer-Setup-${{ steps.version.outputs.version }}
+          path: desktop/release/PDF-Viewer-Setup-*.exe
+          if-no-files-found: error
+
+      - name: Smoke test (install, registry, launch, uninstall)
+        shell: pwsh
+        run: >-
+          ./desktop/test/smoke.ps1
+          -Installer "desktop/release/PDF-Viewer-Setup-${{ steps.version.outputs.version }}.exe"
+          -Pdf "public/demo-facade.pdf"
+          -OutDir "desktop/test/out"
+
+      - name: Upload smoke test screenshot
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: smoke-screenshot
+          path: desktop/test/out/
+          if-no-files-found: warn
+
+  release:
+    needs: build-win
+    if: startsWith(github.ref, 'refs/tags/desktop-v') || (github.event_name == 'workflow_dispatch' && inputs.release)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: PDF-Viewer-Setup-${{ needs.build-win.outputs.version }}
+          path: dist-installer
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || format('desktop-v{0}', needs.build-win.outputs.version) }}
+          target_commitish: ${{ github.sha }}
+          name: PDF Viewer ${{ needs.build-win.outputs.version }} (Windows)
+          make_latest: true
+          fail_on_unmatched_files: true
+          files: dist-installer/*.exe
+          body: |
+            ## PDF Viewer ${{ needs.build-win.outputs.version }} ל-Windows
+
+            ### התקנה
+            1. הורידו את הקובץ `PDF-Viewer-Setup-${{ needs.build-win.outputs.version }}.exe` מהרשימה למטה (Assets).
+            2. הפעילו אותו בלחיצה כפולה. ההתקנה היא למשתמש הנוכחי בלבד ואינה דורשת הרשאות מנהל.
+            3. בסיום ההתקנה התוכנה מופיעה בתפריט התחל בשם **PDF Viewer**.
+
+            ### אזהרת SmartScreen
+            המתקין אינו חתום דיגיטלית (code signing), ולכן Windows עשויה להציג את ההודעה **"Windows protected your PC"** (Windows הגן על המחשב שלך).
+            לוחצים על **More info** (מידע נוסף) ← **Run anyway** (הפעל בכל זאת).
+
+            ### הגדרה כתוכנת ברירת מחדל ל-PDF
+            - המתקין רושם את PDF Viewer כתוכנה שיודעת לפתוח קובצי PDF, ומגדיר לקובצי ה-PDF את הסמל שלה.
+            - Windows לא מאפשרת לאף תוכנה להפוך את עצמה לברירת המחדל לבד. לכן בסוף ההתקנה נפתח עמוד **הגדרות ← אפליקציות ← אפליקציות ברירת מחדל** של PDF Viewer: בוחרים בו את PDF Viewer עבור `.pdf` — פעם אחת בלבד.
+            - דרך חלופית: לחיצה ימנית על קובץ PDF ← **פתח באמצעות** ← **בחר אפליקציה אחרת** ← **PDF Viewer** ← **תמיד**.
+
+            ### הסרה
+            הגדרות ← אפליקציות ← אפליקציות מותקנות ← **PDF Viewer** ← הסר התקנה. ההסרה מוחקת גם את רישומי סוג הקובץ.

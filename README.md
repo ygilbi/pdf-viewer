@@ -55,3 +55,27 @@ Enter סגירת פוליגון · Backspace מחיקת נקודה אחרונה 
 - כשהאפליקציה כבר פתוחה, קובץ חדש נפתח באותו חלון (`launch_type: single-client`).
 - Service Worker (בבנייה לפרודקשן בלבד) שומר את מעטפת האפליקציה במטמון: טעינות חוזרות מהירות ועבודה גם ללא רשת. קובצי CMap/גופנים של pdf.js נשמרים לפי דרישה.
 - הקבצים: `public/manifest.webmanifest`, `public/icons/` (נוצרים ע״י `python3 scripts/make-icons.py`), `src/pwa/` (רישום SW, `useFileLaunch`, `<InstallButton/>`, `<DefaultAppPrompt/>` + לוגיקת ההחלטה ב-`defaultApp.ts`), ו-`sw.js` שנוצר בבנייה ע״י `src/pwa/swPlugin.ts`.
+
+## גרסת Windows (מתקין)
+בנוסף ל-PWA יש גרסת שולחן עבודה ל-Windows (Electron, תיקיית `desktop/`) עם מתקין NSIS רגיל.
+
+**הורדה והתקנה**
+1. נכנסים ל-[Releases](https://github.com/ygilbi/pdf-viewer/releases/latest) ומורידים את `PDF-Viewer-Setup-<גרסה>.exe` (גם מהאפליקציה: תפריט עליון → **הורד גרסת Windows**, מוצג רק בדפדפן ב-Windows).
+2. מפעילים את הקובץ. ההתקנה היא למשתמש הנוכחי בלבד ואינה דורשת הרשאות מנהל.
+3. **SmartScreen:** המתקין אינו חתום דיגיטלית, ולכן ייתכן שיופיע "Windows protected your PC" — לוחצים **More info** (מידע נוסף) ← **Run anyway** (הפעל בכל זאת).
+
+**מה המתקין עושה אוטומטית**
+- מתקין את `PDFViewer.exe` ויוצר קיצור דרך בתפריט התחל.
+- רושם את סוג הקובץ `PDFViewer.Document` (פקודת פתיחה + סמל קובץ PDF מ-`resources\file-pdf.ico`), מוסיף אותו ל-"פתח באמצעות" של `.pdf`, ורושם את התוכנה ב-`RegisteredApplications` כך שתופיע ברשימת אפליקציות ברירת המחדל של Windows.
+- בסיום פותח את עמוד **הגדרות ← אפליקציות ← אפליקציות ברירת מחדל** של PDF Viewer.
+
+**האישור החד-פעמי ש-Windows דורשת**
+Windows 10/11 אינה מאפשרת לתוכנה להגדיר את עצמה כברירת מחדל. בעמוד ההגדרות שנפתח בוחרים את **PDF Viewer** עבור `.pdf` (ב-Windows 11: לוחצים על השורה `.pdf` ← PDF Viewer ← **הגדר ברירת מחדל**). לחלופין: לחיצה ימנית על PDF ← **פתח באמצעות** ← **בחר אפליקציה אחרת** ← PDF Viewer ← **תמיד**. זה נעשה פעם אחת בלבד.
+
+**הסרה**
+הגדרות ← אפליקציות ← אפליקציות מותקנות ← **PDF Viewer** ← **הסר התקנה**. ההסרה מוחקת גם את רישומי סוג הקובץ מהרישום.
+
+**בנייה ו-CI**
+- `.github/workflows/desktop-windows.yml` רץ על `windows-latest`: בונה את האתר ל-`desktop/web-dist`, בונה את המתקין, ומריץ בדיקת עשן (`desktop/test/smoke.ps1`): התקנה שקטה (`/S`), בדיקת מפתחות הרישום וקובץ הסמל, הפעלת התוכנה עם `public/demo-facade.pdf` וצילום מסך, והסרה שקטה. המתקין וצילום המסך נשמרים כ-artifacts של הריצה.
+- פרסום Release: דוחפים תג `desktop-v<גרסה>` (למשל `git tag desktop-v0.1.0 && git push origin desktop-v0.1.0`), או Actions ← **Desktop (Windows installer)** ← **Run workflow** עם `release` מסומן.
+- בנייה מקומית ב-Windows: `npm ci && npm --prefix desktop ci && npm --prefix desktop run dist`; בדיקת עשן מקומית: `powershell -ExecutionPolicy Bypass -File desktop\test\smoke.ps1`.
