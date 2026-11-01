@@ -21,17 +21,18 @@ const CACHE_LIMIT = 60;
 // ---------------------------------------------------------------------------
 let cacheDoc: PageSize[] | null = null;
 let docSeq = 0;
-const cache = new Map<number, ImageBitmap>();
+/** Cached thumbs are small, already-downsampled canvases (cheap to keep ~60). */
+type Thumbnail = OffscreenCanvas | HTMLCanvasElement;
+const cache = new Map<number, Thumbnail>();
 
 function cacheReset(doc: PageSize[]): number {
   if (cacheDoc === doc) return docSeq;
   cacheDoc = doc;
   docSeq++;
-  for (const b of cache.values()) b.close();
   cache.clear();
   return docSeq;
 }
-function cacheGet(page: number): ImageBitmap | undefined {
+function cacheGet(page: number): Thumbnail | undefined {
   const b = cache.get(page);
   if (b) {
     cache.delete(page);
@@ -39,16 +40,54 @@ function cacheGet(page: number): ImageBitmap | undefined {
   }
   return b;
 }
-function cachePut(page: number, bitmap: ImageBitmap) {
-  const old = cache.get(page);
-  if (old && old !== bitmap) old.close();
+function cachePut(page: number, bitmap: Thumbnail) {
   cache.delete(page);
   cache.set(page, bitmap);
   while (cache.size > CACHE_LIMIT) {
-    const [k, b] = cache.entries().next().value as [number, ImageBitmap];
+    const k = cache.keys().next().value as number;
     cache.delete(k);
-    b.close();
   }
+}
+
+/**
+ * Thumbnails are rendered SUPERSAMPLE× larger than displayed and then
+ * box-filtered down. pdf.js strokes hairlines at ≥1 device px, so dense CAD
+ * drawings rendered directly at ~0.1 scale come out solid black; rendering
+ * bigger and averaging gives a faithful grey preview. Render time is dominated
+ * by vector work, not pixel count, so this costs little.
+ */
+const SUPERSAMPLE = 4;
+const MAX_RENDER_PX = 1400;
+
+function makeCanvas(w: number, h: number): Thumbnail {
+  if (typeof OffscreenCanvas !== 'undefined') return new OffscreenCanvas(w, h);
+  const c = document.createElement('canvas');
+  c.width = w;
+  c.height = h;
+  return c;
+}
+
+/** Downsample by repeated halving (good-quality box filter), then to exact size. */
+function downsample(src: ImageBitmap, w: number, h: number): Thumbnail {
+  let cur: CanvasImageSource = src;
+  let cw = src.width;
+  let ch = src.height;
+  while (cw / 2 >= w && ch / 2 >= h) {
+    const nw = Math.max(1, Math.round(cw / 2));
+    const nh = Math.max(1, Math.round(ch / 2));
+    const c = makeCanvas(nw, nh);
+    const ctx = c.getContext('2d') as CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D;
+    ctx.imageSmoothingQuality = 'high';
+    ctx.drawImage(cur, 0, 0, nw, nh);
+    cur = c;
+    cw = nw;
+    ch = nh;
+  }
+  const out = makeCanvas(w, h);
+  const ctx = out.getContext('2d') as CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D;
+  ctx.imageSmoothingQuality = 'high';
+  ctx.drawImage(cur, 0, 0, w, h);
+  return out;
 }
 
 /** Dev-only counter used by e2e checks to verify lazy rendering. */
@@ -104,7 +143,7 @@ const Thumb = memo(function Thumb({
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
-    const draw = (bmp: ImageBitmap) => {
+    const draw = (bmp: Thumbnail) => {
       canvas.width = bmp.width;
       canvas.height = bmp.height;
       canvas.getContext('2d')?.drawImage(bmp, 0, 0);
@@ -121,7 +160,9 @@ const Thumb = memo(function Thumb({
     let task: { cancel(): void } | null = null;
     const timer = window.setTimeout(() => {
       const dpr = Math.min(window.devicePixelRatio || 1, 2);
-      const scale = (w / pageWidth) * dpr;
+      const outW = Math.max(1, Math.round(w * dpr));
+      const outH = Math.max(1, Math.round(h * dpr));
+      const scale = Math.min(SUPERSAMPLE * outW, MAX_RENDER_PX) / pageWidth;
       countRender();
       const t = getPdfClient().render({ page, scale, priority: 0 });
       task = t;
@@ -132,8 +173,10 @@ const Thumb = memo(function Thumb({
             res.bitmap.close();
             return;
           }
-          cachePut(page, res.bitmap);
-          draw(res.bitmap);
+          const thumb = downsample(res.bitmap, outW, outH);
+          res.bitmap.close();
+          cachePut(page, thumb);
+          draw(thumb);
         },
         (err: unknown) => {
           task = null;
@@ -149,7 +192,7 @@ const Thumb = memo(function Thumb({
       window.clearTimeout(timer);
       task?.cancel();
     };
-  }, [page, ready, w, pageWidth]);
+  }, [page, ready, w, h, pageWidth]);
 
   return (
     <div className="absolute inset-x-0 flex flex-col items-center" style={{ top, paddingTop: ITEM_PAD }}>

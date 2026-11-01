@@ -13,6 +13,13 @@ function isPdf(file: File) {
   return file.type === 'application/pdf' || /\.pdf$/i.test(file.name);
 }
 
+/** Hebrew wording for the common open() failures; falls back to the raw message. */
+function describeOpenError(msg: string): string {
+  if (/password|encrypt/i.test(msg)) return 'הקובץ מוגן בסיסמה — קבצים מוגנים אינם נתמכים';
+  if (/not a valid pdf|corrupt|invalid pdf|missing pdf/i.test(msg)) return 'הקובץ אינו PDF תקין או שהוא פגום';
+  return msg;
+}
+
 function hasFiles(e: DragEvent) {
   return !!e.dataTransfer && Array.from(e.dataTransfer.types).includes('Files');
 }
@@ -46,7 +53,7 @@ export default function App() {
     } catch (err) {
       if (seq !== openSeq.current) return;
       const msg = err instanceof Error ? err.message : String(err);
-      useViewer.getState().setError(`שגיאה בפתיחת הקובץ "${file.name}": ${msg}`);
+      useViewer.getState().setError(`שגיאה בפתיחת הקובץ ${file.name}: ${describeOpenError(msg)}`);
     } finally {
       if (seq === openSeq.current) {
         useViewer.getState().setLoading(false);
@@ -107,7 +114,7 @@ export default function App() {
           className="flex shrink-0 items-center gap-2 border-b border-red-800 bg-red-950/80 px-3 py-1.5 text-sm text-red-200"
         >
           <IconAlert className="shrink-0 text-red-400" />
-          <span className="flex-1" dir="auto">
+          <span className="flex-1">
             {error}
           </span>
           <button
