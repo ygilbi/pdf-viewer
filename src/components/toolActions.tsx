@@ -2,19 +2,6 @@ import { useEffect, useSyncExternalStore, type ReactElement } from 'react';
 import { useViewer } from '../state/store';
 import type { ToolId } from '../core/types';
 import {
-  assignDeductions,
-  computeCategorySummaries,
-  computeDocumentSummary,
-  computeNetAreas,
-  computePageSummary,
-  isMarkupKind,
-  kindOf,
-  measurementsToCSV,
-  polygonAreaM2,
-  polygonPerimeterMeters,
-  polylineLengthMeters,
-} from '../core/measurementEngine';
-import {
   IconAreaM2,
   IconArrow,
   IconCloud,
@@ -29,7 +16,7 @@ import {
   IconRuler,
   IconText,
 } from './ui/icons';
-import { baseName, downloadBlob, isTypingTarget } from './ui/util';
+import { isTypingTarget } from './ui/util';
 
 export const DOWNLOAD_HINT = "אם ההורדה חסומה, השתמש ב'העתק טבלה'";
 

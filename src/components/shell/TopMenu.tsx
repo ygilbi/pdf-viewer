@@ -19,8 +19,9 @@ import {
   IconZoomOut,
 } from '../ui/icons';
 import { CopyTableButton } from '../CopyTableButton';
+import { openExportDialog } from '../../export/exportUi';
 import { ActiveCategorySelect } from '../CategorySelect';
-import { DOWNLOAD_HINT, exportCSV, exportJSON, fullscreenSupported, toggleFullscreen, useIsFullscreen } from '../toolActions';
+import { fullscreenSupported, toggleFullscreen, useIsFullscreen } from '../toolActions';
 import { InstallButton } from '../../pwa';
 
 function Group({ children, label }: { children: React.ReactNode; label: string }) {
@@ -240,19 +241,14 @@ export function TopMenu({ onOpenFile }: { onOpenFile(file: File): void }) {
         {/* export */}
         <Group label="ייצוא">
           <ToolButton
-            label="ייצוא CSV"
-            hint={DOWNLOAD_HINT}
-            disabled={!hasDoc || measurementCount === 0}
-            onClick={exportCSV}
-            showLabel
-          >
-            <IconDownload />
-          </ToolButton>
-          <ToolButton
-            label="ייצוא JSON"
-            hint={DOWNLOAD_HINT}
-            disabled={!hasDoc || measurementCount === 0}
-            onClick={exportJSON}
+            label="ייצוא"
+            shortcut="E"
+            hint="PDF או CSV — בחירת דפים, קבצים ותוכן"
+            disabled={!hasDoc}
+            onClick={() => {
+              setMenuOpen(false);
+              openExportDialog();
+            }}
             showLabel
           >
             <IconDownload />
