@@ -17,11 +17,18 @@ const LAZY_DATA_RE = /[\\/](cmaps|standard_fonts)[\\/]|\.(bcmap|pfb|ttf)(\?|$)/;
 /** Static files from public/ that belong to the app shell. */
 const PUBLIC_SHELL = [
   'manifest.webmanifest',
+  'icons/favicon.ico',
+  'icons/favicon-32.png',
   'icons/icon-192.png',
   'icons/icon-512.png',
   'icons/maskable-192.png',
   'icons/maskable-512.png',
+  'icons/apple-touch-icon.png',
+  'icons/logo-wordmark-white.png',
+  'icons/file-pdf-32.png',
+  'icons/file-pdf-48.png',
   'icons/file-pdf-256.png',
+  'icons/file-pdf-512.png',
 ];
 
 /** FNV-1a 32-bit, hex. Enough to version a cache by file list. */
