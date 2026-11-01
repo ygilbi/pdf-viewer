@@ -19,6 +19,8 @@ import {
   isSelfIntersecting,
   lengthMeters,
   measurementsToCSV,
+  measurementsToTSV,
+  buildMeasurementRows,
   nearestVertex,
   newId,
   parseLengthInput,
@@ -433,5 +435,34 @@ describe('misc', () => {
     expect(MEASUREMENT_COLORS).toHaveLength(8);
     expect(new Set(MEASUREMENT_COLORS.map((c) => c.toLowerCase())).size).toBe(8);
     for (const c of MEASUREMENT_COLORS) expect(c).toMatch(/^#[0-9a-fA-F]{6}$/);
+  });
+});
+
+describe('measurementsToTSV', () => {
+  const cal: Calibration = { pixelsPerMeter: 10, p1: P(0, 0), p2: P(100, 0), meters: 10 };
+  const ms: AreaMeasurement[] = [
+    { id: 'a', page: 1, label: 'סלון', points: rect(10, 5, 10), color: '#000' },
+    { id: 'b', page: 1, label: 'חדר "שינה",\tהורים\nקומה\r\nב', points: rect(2, 3, 10), color: '#000' },
+  ];
+  const tsv = measurementsToTSV(ms, { 1: cal });
+  const lines = tsv.trimEnd().split('\r\n');
+
+  it('no BOM, tab-separated, same rows as CSV builder', () => {
+    expect(tsv.charCodeAt(0)).not.toBe(0xfeff);
+    const rows = buildMeasurementRows(ms, { 1: cal });
+    expect(lines).toHaveLength(rows.length);
+    expect(lines[0]).toBe(rows[0].join('\t'));
+    expect(lines[1]).toBe('1\tשטח\tסלון\t1\t50.00\t30.00\t\t4\t');
+  });
+
+  it('no quoting; tabs/newlines inside cells become spaces', () => {
+    expect(lines[2]).toBe('2\tשטח\tחדר "שינה", הורים קומה ב\t1\t6.00\t10.00\t\t4\t');
+    for (const l of lines) expect(l.split('\t')).toHaveLength(lines[0].split('\t').length);
+  });
+
+  it('CSV and TSV share rows (same cell values)', () => {
+    const csvLines = measurementsToCSV(ms.slice(0, 1), { 1: cal }).replace(/^\uFEFF/, '').trimEnd().split('\r\n');
+    const tsvLines = measurementsToTSV(ms.slice(0, 1), { 1: cal }).trimEnd().split('\r\n');
+    expect(tsvLines.map((l) => l.split('\t'))).toEqual(csvLines.map((l) => l.split(',')));
   });
 });

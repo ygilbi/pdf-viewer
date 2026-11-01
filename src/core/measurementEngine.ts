@@ -453,15 +453,16 @@ function csvCell(v: string | number): string {
 }
 
 /**
- * CSV (UTF-8 BOM, CRLF). Deduction rows carry a negative area; length rows
+ * Table rows shared by the CSV / TSV exports: header row, one row per
+ * measurement, then totals rows. Deduction rows carry a negative area; length rows
  * fill only the length column. Totals rows at the end: gross, deductions
  * (negative), net, total length. Deductions outside every area are listed
  * but not counted in the totals (their "belongs to" cell is empty).
  */
-export function measurementsToCSV(
+export function buildMeasurementRows(
   measurements: AreaMeasurement[],
   calibrations: Record<number, Calibration>,
-): string {
+): string[][] {
   const rows: (string | number)[][] = [
     ['מס׳', 'סוג', 'שם', 'עמוד', 'שטח (מ״ר)', 'היקף (מ׳)', 'אורך (מ׳)', 'מספר נקודות', 'שייך ל'],
   ];
@@ -490,7 +491,32 @@ export function measurementsToCSV(
   rows.push(['', '', 'ניכויים', '', (s.deductM2 === 0 ? 0 : -s.deductM2).toFixed(2), '', '', '', '']);
   rows.push(['', '', 'נטו', '', s.netM2.toFixed(2), '', '', '', '']);
   rows.push(['', '', 'סה״כ אורך', '', '', '', s.lengthM.toFixed(2), '', '']);
+  return rows.map((r) => r.map(String));
+}
+
+/** CSV (UTF-8 BOM, CRLF, RFC-4180 quoting) of {@link buildMeasurementRows}. */
+export function measurementsToCSV(
+  measurements: AreaMeasurement[],
+  calibrations: Record<number, Calibration>,
+): string {
+  const rows = buildMeasurementRows(measurements, calibrations);
   return '\uFEFF' + rows.map((r) => r.map(csvCell).join(',')).join('\r\n') + '\r\n';
+}
+
+function tsvCell(v: string): string {
+  return v.replace(/[\t\r\n]+/g, ' ');
+}
+
+/**
+ * TSV for the clipboard (paste into Excel / Google Sheets): tab-separated,
+ * CRLF, no BOM, no quoting — tabs/newlines inside cells become spaces.
+ */
+export function measurementsToTSV(
+  measurements: AreaMeasurement[],
+  calibrations: Record<number, Calibration>,
+): string {
+  const rows = buildMeasurementRows(measurements, calibrations);
+  return rows.map((r) => r.map(tsvCell).join('\t')).join('\r\n') + '\r\n';
 }
 
 let idCounter = 0;
