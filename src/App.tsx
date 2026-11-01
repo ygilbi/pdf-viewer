@@ -8,6 +8,7 @@ import DropZone from './components/DropZone';
 import ViewerCanvas from './components/ViewerCanvas';
 import { IconAlert, IconFilePdf, IconX } from './components/ui/icons';
 import { formatBytes } from './components/ui/util';
+import { RestoreToast, detachDocument, fingerprintFile, restoreDocument, usePersistence } from './state/persistence';
 
 function isPdf(file: File) {
   return file.type === 'application/pdf' || /\.pdf$/i.test(file.name);
@@ -33,6 +34,7 @@ export default function App() {
 
   const [pending, setPending] = useState<{ name: string; size: number } | null>(null);
   const openSeq = useRef(0);
+  usePersistence();
 
   const openFile = useCallback(async (file: File) => {
     const s = useViewer.getState();
@@ -40,8 +42,9 @@ export default function App() {
       s.setError(`הקובץ "${file.name}" אינו קובץ PDF`);
       return;
     }
-    if (s.measurements.length > 0 && !window.confirm('פתיחת קובץ חדש תמחק את המדידות הקיימות. להמשיך?')) return;
+    // No confirm: measurements are auto-saved per file and restored on reopen.
     const seq = ++openSeq.current;
+    const fingerprint = fingerprintFile(file); // hashes 2×256KB slices, in parallel with open()
     s.setError(null);
     s.setLoading(true);
     setPending({ name: file.name, size: file.size });
@@ -49,7 +52,11 @@ export default function App() {
       const info = await getPdfClient().open(file);
       if (seq !== openSeq.current) return;
       if (!info.numPages) throw new Error('המסמך אינו מכיל דפים');
+      detachDocument(); // flush + stop saving the previous file before the store is reset
       useViewer.getState().setDocument({ fileName: file.name, numPages: info.numPages, pageSizes: info.pageSizes });
+      const fp = await fingerprint;
+      if (seq !== openSeq.current) return;
+      await restoreDocument(fp, file.name);
     } catch (err) {
       if (seq !== openSeq.current) return;
       const msg = err instanceof Error ? err.message : String(err);
@@ -162,6 +169,8 @@ export default function App() {
           </div>
         </div>
       )}
+
+      <RestoreToast />
 
       {dragging && (
         <div className="pointer-events-none absolute inset-0 z-50 flex items-center justify-center border-4 border-dashed border-sky-400 bg-sky-950/60">

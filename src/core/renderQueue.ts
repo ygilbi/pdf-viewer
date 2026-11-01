@@ -24,48 +24,54 @@ export const PAGE_CACHE_SIZE = 20;
 // they work in dev and in `vite build` output without copying to public/.
 // ---------------------------------------------------------------------------
 
-const cmapUrls = basenameMap(
+// Each asset is inlined as a base64 data URI inside its own lazily-loaded JS
+// chunk. Only plain .js files are emitted, so the build can be hosted on any
+// static host (some refuse unknown binary types like .bcmap/.pfb), and an
+// asset is downloaded only when a PDF actually needs it.
+type Loader = () => Promise<string>;
+const cmapLoaders = basenameMap(
   import.meta.glob('../../node_modules/pdfjs-dist/cmaps/*.bcmap', {
-    query: '?url&no-inline',
+    query: '?inline',
     import: 'default',
-    eager: true,
-  }) as Record<string, string>,
+  }) as Record<string, Loader>,
 );
-const standardFontUrls = basenameMap(
+const standardFontLoaders = basenameMap(
   import.meta.glob(['../../node_modules/pdfjs-dist/standard_fonts/*.pfb', '../../node_modules/pdfjs-dist/standard_fonts/*.ttf'], {
-    query: '?url&no-inline',
+    query: '?inline',
     import: 'default',
-    eager: true,
-  }) as Record<string, string>,
+  }) as Record<string, Loader>,
 );
 
-function basenameMap(m: Record<string, string>): Map<string, string> {
-  const out = new Map<string, string>();
+function basenameMap(m: Record<string, Loader>): Map<string, Loader> {
+  const out = new Map<string, Loader>();
   for (const [k, v] of Object.entries(m)) out.set(k.slice(k.lastIndexOf('/') + 1), v);
   return out;
 }
 
-async function fetchBytes(url: string): Promise<Uint8Array> {
-  const res = await fetch(url);
-  if (!res.ok) throw new Error(`HTTP ${res.status} for ${url}`);
-  return new Uint8Array(await res.arrayBuffer());
+async function loadBytes(load: Loader): Promise<Uint8Array> {
+  const dataUri = await load();
+  const b64 = dataUri.slice(dataUri.indexOf(',') + 1);
+  const bin = atob(b64);
+  const out = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+  return out;
 }
 
 export class AssetCMapReaderFactory {
   constructor(_opts: unknown) {}
   async fetch({ name }: { name: string }) {
-    const url = cmapUrls.get(`${name}.bcmap`);
-    if (!url) throw new Error(`Unknown CMap: ${name}`);
-    return { cMapData: await fetchBytes(url), isCompressed: true };
+    const load = cmapLoaders.get(`${name}.bcmap`);
+    if (!load) throw new Error(`Unknown CMap: ${name}`);
+    return { cMapData: await loadBytes(load), isCompressed: true };
   }
 }
 
 export class AssetStandardFontDataFactory {
   constructor(_opts: unknown) {}
   async fetch({ filename }: { filename: string }) {
-    const url = standardFontUrls.get(filename);
-    if (!url) throw new Error(`Unknown standard font: ${filename}`);
-    return fetchBytes(url);
+    const load = standardFontLoaders.get(filename);
+    if (!load) throw new Error(`Unknown standard font: ${filename}`);
+    return loadBytes(load);
   }
 }
 
