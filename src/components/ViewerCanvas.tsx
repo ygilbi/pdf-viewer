@@ -186,6 +186,8 @@ function hitTest(
 export default function ViewerCanvas() {
   const numPages = useViewer((s) => s.numPages);
   const pageSizes = useViewer((s) => s.pageSizes);
+  const docs = useViewer((s) => s.docs);
+  const fileName = useViewer((s) => s.fileName);
   const currentPage = useViewer((s) => s.currentPage);
   const tool = useViewer((s) => s.tool);
   const draft = useViewer((s) => s.draft);
@@ -1089,6 +1091,9 @@ export default function ViewerCanvas() {
   // ---------------------------------------------------------------------------
   const pw = size?.width ?? 0;
   const ph = size?.height ?? 0;
+  const pageSizesRef = useRef(pageSizes);
+  pageSizesRef.current = pageSizes;
+  const layoutKey = useLayoutEpoch(docs, fileName, numPages);
   useEffect(() => {
     const layers = layersRef.current;
     setOverride(null);
@@ -1100,8 +1105,13 @@ export default function ViewerCanvas() {
     }
     vp.setPageSize(pw, ph);
     vp.fit(false);
-    layers.setPage(pageSizes, currentPage, { width: pw, height: ph }, pageSizes);
-  }, [vp, pageSizes, currentPage, pw, ph]);
+    layers.setPage(layoutKey, currentPage, { width: pw, height: ph }, pageSizesRef.current);
+  }, [vp, layoutKey, currentPage, pw, ph]);
+
+  // A new pageSizes array alone (e.g. a file appended to the workspace) only refreshes the prefetch list.
+  useEffect(() => {
+    layersRef.current?.setSizes(pageSizes);
+  }, [pageSizes]);
 
   // Rubber band / cursor depend on tool + draft + calibration.
   useEffect(() => {
@@ -1248,4 +1258,32 @@ function CalibrationPrompt({ p1, p2 }: { p1: Point; p2: Point }) {
       </form>
     </div>
   );
+}
+
+/**
+ * Identity of the page layout for raster caches: changes only when existing
+ * global page numbers may now show different content (a doc removed /
+ * reordered, or another document opened) — NOT when a file is appended to the
+ * workspace (all old global pages keep their doc + local page).
+ */
+function useLayoutEpoch(
+  docs: { id: string; pageOffset: number; numPages: number }[] | undefined,
+  fileName: string | null,
+  numPages: number,
+): number {
+  const ref = useRef<{ epoch: number; layout: { id: string; pageOffset: number; numPages: number }[]; fileName: string | null } | null>(null);
+  const layout = (docs ?? []).map((d) => ({ id: d.id, pageOffset: d.pageOffset, numPages: d.numPages }));
+  const prev = ref.current;
+  if (!prev) {
+    ref.current = { epoch: 0, layout, fileName };
+    return 0;
+  }
+  const extends_ =
+    layout.length > 0 && prev.layout.length > 0
+      ? prev.fileName === fileName &&
+        prev.layout.every((o) => layout.some((n) => n.id === o.id && n.pageOffset === o.pageOffset && n.numPages === o.numPages))
+      : prev.fileName === fileName && prev.layout.length === layout.length && numPages > 0;
+  if (!extends_) ref.current = { epoch: prev.epoch + 1, layout, fileName };
+  else ref.current = { ...prev, layout, fileName };
+  return ref.current.epoch;
 }

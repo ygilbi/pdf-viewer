@@ -211,6 +211,11 @@ export class PageLayers {
    * Show `page`. `docKey` identifies the open document (caches reset when it
    * changes); `sizes` (all page sizes) enables prefetching the neighbours.
    */
+  /** Update the page-size list (neighbour prefetch) without touching the shown page. */
+  setSizes(sizes: PageSize[]): void {
+    this.sizes = sizes;
+  }
+
   setPage(docKey: unknown, page: number, size: PageSize, sizes?: PageSize[]): void {
     if (docKey !== this.docKey) {
       this.docKey = docKey;

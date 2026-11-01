@@ -9,7 +9,7 @@ import boldFontUrl from './fonts/Alef-Bold.ttf?url';
 import { useViewer } from '../state/store';
 import { downloadBlob } from '../components/ui/util';
 import { buildExportCsv } from './csvExport';
-import { docBytes, exportDocs, pageSizeMap, pageSpecs } from './sources';
+import { docBytes, pageSizeMap, pageSpecs } from './sources';
 import type { CsvOptions, ExportFormat, PdfBuildInput, PdfContentOptions, ProgressStage } from './types';
 
 export interface ExportRequest {
@@ -141,7 +141,7 @@ export function startExport(req: ExportRequest, onProgress: ProgressCb = () => {
       if (signal.cancelled) throw new ExportAbort();
     };
     const s = useViewer.getState();
-    const docs = exportDocs(s);
+    const docs = s.docs;
     const pages = pageSpecs(docs, req.pages);
     if (!pages.length) throw new Error('לא נבחרו דפים לייצוא');
     let blob: Blob;
@@ -154,7 +154,7 @@ export function startExport(req: ExportRequest, onProgress: ProgressCb = () => {
       const usedDocs = docs.filter((d) => pages.some((p) => p.docId === d.id));
       const [fonts, ...buffers] = await Promise.all([
         loadFonts(),
-        ...(req.pdf.drawings ? usedDocs.map((d) => docBytes(d, docs.indexOf(d))) : []),
+        ...(req.pdf.drawings ? usedDocs.map((d) => docBytes(d.id)) : []),
       ]);
       check();
       const bytes: Record<string, ArrayBuffer> = {};

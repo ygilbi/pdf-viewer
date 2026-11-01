@@ -115,62 +115,6 @@ export function useToolShortcuts() {
   }, []);
 }
 
-// ---- export ----------------------------------------------------------------
-
-export function exportCSV() {
-  const s = useViewer.getState();
-  const csv = measurementsToCSV(s.measurements, s.calibrations, s.categories);
-  downloadBlob(new Blob([csv], { type: 'text/csv;charset=utf-8' }), `${baseName(s.fileName)}-מדידות.csv`);
-}
-
-export function exportJSON() {
-  const s = useViewer.getState();
-  const assignment = assignDeductions(s.measurements);
-  const nets = computeNetAreas(s.measurements, s.calibrations, assignment);
-  const data = {
-    fileName: s.fileName,
-    numPages: s.numPages,
-    exportedAt: new Date().toISOString(),
-    units: { geometry: 'PDF points (1/72 inch), page viewport at scale 1', area: 'm2', length: 'm' },
-    calibrations: s.calibrations,
-    categories: s.categories,
-    measurements: s.measurements.map((m) => {
-      const c = s.calibrations[m.page];
-      const kind = kindOf(m);
-      if (isMarkupKind(kind)) return { ...m, kind, markup: true };
-      const ppm = c?.pixelsPerMeter;
-      if (kind === 'length') {
-        return { ...m, kind, lengthM: ppm ? polylineLengthMeters(m.points, ppm) : null };
-      }
-      if (kind === 'count') return { ...m, kind, count: m.points.length };
-      const area = ppm ? polygonAreaM2(m.points, ppm) : null;
-      return {
-        ...m,
-        kind,
-        /** Signed: deductions are negative. */
-        areaM2: area === null ? null : kind === 'deduct' ? -area : area,
-        perimeterM: ppm ? polygonPerimeterMeters(m.points, ppm) : null,
-        ...(kind === 'area'
-          ? { netAreaM2: ppm ? (nets.get(m.id)?.netM2 ?? area) : null }
-          : { deductFromId: assignment.get(m.id) ?? null }),
-      };
-    }),
-    summary: {
-      document: computeDocumentSummary(s.measurements, s.calibrations),
-      categories: computeCategorySummaries(s.measurements, s.calibrations, s.categories),
-      pages: Object.fromEntries(
-        [...new Set(s.measurements.map((m) => m.page))]
-          .sort((a, b) => a - b)
-          .map((p) => [p, computePageSummary(s.measurements, s.calibrations, p)]),
-      ),
-    },
-  };
-  downloadBlob(
-    new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' }),
-    `${baseName(s.fileName)}-מדידות.json`,
-  );
-}
-
 // ---- fullscreen -------------------------------------------------------------
 
 type FsDoc = Document & { webkitFullscreenElement?: Element | null; webkitExitFullscreen?: () => Promise<void> };
