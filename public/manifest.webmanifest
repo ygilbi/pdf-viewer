@@ -1,7 +1,7 @@
 {
   "id": "./",
-  "name": "Aluminum PDF Takeoff",
-  "short_name": "Aluminum PDF",
+  "name": "PDF Viewer",
+  "short_name": "PDF Viewer",
   "description": "מציג תוכניות PDF ומדידת שטחי חזיתות אלומיניום",
   "lang": "he",
   "dir": "rtl",
