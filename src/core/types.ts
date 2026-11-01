@@ -139,3 +139,55 @@ export interface AreaMeasurement {
   /** Category id (see `Category`); missing/undefined = uncategorised (older saves too). */
   category?: string;
 }
+
+// ---------------------------------------------------------------------------
+// Multi-file workspace (contract — implemented in pdfClient / store)
+// ---------------------------------------------------------------------------
+//
+// Several PDFs can be open together. All their pages form ONE continuous list
+// of *global* page numbers (1-based): file A pages 1..nA, then file B pages
+// nA+1..nA+nB, … Everything that already uses a page number (measurements,
+// calibrations, ViewerCanvas, thumbnails, render()) keeps working with the
+// global number. Only pdfClient and export need to map global → (doc, local).
+
+export interface WorkspaceDoc {
+  /** Stable id for this open file (also used as persistence key part). */
+  id: string;
+  name: string;
+  /** Persistence fingerprint of the file (see state/persistence.ts). */
+  fingerprint?: string;
+  numPages: number;
+  /** Global page number of this doc's first page minus 1. */
+  pageOffset: number;
+  /** Page sizes for this doc's pages (local order). */
+  pageSizes: PageSize[];
+}
+
+export interface PageLocation {
+  docId: string;
+  /** 1-based page number inside that doc. */
+  localPage: number;
+}
+
+/**
+ * Multi-document client. render({page}) takes the GLOBAL page number.
+ * `open(file)` (single-file API above) = close all + addFile(file).
+ */
+export interface WorkspaceClient extends PdfClient {
+  addFile(file: File): Promise<WorkspaceDoc>;
+  removeDoc(docId: string): Promise<void>;
+  docs(): WorkspaceDoc[];
+  locate(globalPage: number): PageLocation | null;
+  /** Original bytes of an open file (for PDF export with pdf-lib). */
+  getFileBytes(docId: string): Promise<ArrayBuffer>;
+}
+
+// ---------------------------------------------------------------------------
+// Markup / annotation kinds (contract)
+// ---------------------------------------------------------------------------
+//
+// Annotations are stored in the same `measurements` array as AreaMeasurement
+// objects with one of these kinds, plus optional `text` / `strokeWidth`.
+// They are NOT takeoff quantities: summaries, CSV totals and category
+// subtotals must ignore them (use `isMarkupKind`).
+export type MarkupKind = 'note' | 'text' | 'rect' | 'cloud' | 'arrow' | 'pen' | 'highlight';
