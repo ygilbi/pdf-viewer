@@ -233,6 +233,24 @@ function DefaultAppDialog() {
               <Alt>
                 <b>דרך נוספת:</b> לחיצה ימנית על קובץ PDF כלשהו ← <b>פתח באמצעות</b> ← <b>בחר אפליקציה אחרת</b> ← <b>PDF Viewer</b> ← <b>תמיד</b>.
               </Alt>
+              <div className="rounded-lg border border-amber-500/40 bg-amber-500/10 p-3 text-sm text-amber-100" data-testid="fix-icon">
+                <b>קובצי ה‑PDF מופיעים בלי אייקון?</b> Chrome לא תמיד מעביר ל‑Windows את אייקון הקבצים.
+                <div className="mt-2 flex flex-wrap items-center gap-2">
+                  <a
+                    href={`${BASE}tools/fix-pdf-icon.ps1`}
+                    download="fix-pdf-icon.ps1"
+                    className="rounded-md bg-amber-500 px-3 py-1.5 font-semibold text-slate-900 hover:bg-amber-400"
+                  >
+                    הורד כלי תיקון אייקון
+                  </a>
+                  <span className="text-xs text-amber-200/80">
+                    בתיקיית ההורדות: לחיצה ימנית ← „פתח במסוף” ← הדבק:
+                  </span>
+                </div>
+                <code dir="ltr" className="mt-2 block select-all rounded bg-slate-950/60 px-2 py-1 text-xs text-slate-200">
+                  powershell -ExecutionPolicy Bypass -File .\fix-pdf-icon.ps1
+                </code>
+              </div>
             </>
           )}
 
