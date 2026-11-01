@@ -91,6 +91,7 @@ async function flush() {
       console.error('[desktop] cannot read', p, err);
     }
   }
+  if (process.env.PDF_VIEWER_DEBUG) console.log('[desktop] sending', files.map((f) => `${f.name} (${f.bytes.length} B)`).join(', '));
   if (files.length && win && !win.isDestroyed()) win.webContents.send('pdf:open-files', files);
 }
 
@@ -102,6 +103,7 @@ function focusWindow() {
 }
 
 app.on('second-instance', (_e, argv, workingDirectory) => {
+  if (process.env.PDF_VIEWER_DEBUG) console.log('[desktop] second-instance', JSON.stringify({ argv, workingDirectory }));
   queueFiles(pdfPathsFromArgv(argv, workingDirectory));
   focusWindow();
 });
@@ -252,6 +254,7 @@ function createWindow() {
   win.on('page-title-updated', (e) => e.preventDefault());
 
   const wc = win.webContents;
+  if (process.env.PDF_VIEWER_DEBUG) wc.on('console-message', (e) => console.log('[renderer]', e.level, e.message));
   wc.setWindowOpenHandler(({ url }) => {
     if (!isAppUrl(url) && !url.startsWith('blob:')) openExternalSafe(url);
     return { action: 'deny' };
@@ -320,7 +323,7 @@ function captureForTest(out) {
           version: window.pdfDesktop ? window.pdfDesktop.version : null,
           serviceWorker: !!(navigator.serviceWorker && navigator.serviceWorker.controller),
           openFile: (document.querySelector('[data-testid=viewer-main]') || {}).ariaLabel || null,
-          pages: document.querySelectorAll('[data-page-number],[data-page]').length,
+          pageLabel: (document.querySelector('[data-testid=pill-page]') || {}).ariaLabel || null,
           defaultAppDialog: !!document.querySelector('[data-testid=default-app-dialog]'),
           error: (document.querySelector('[role=alert]') || {}).textContent || null,
         })`);

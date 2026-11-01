@@ -112,6 +112,25 @@ export function shouldAutoPrompt({ os, standalone, launchedWithFile, state, now 
   return now >= state.remindAt;
 }
 
+export interface DesktopPromptContext {
+  /** From the registry (UserChoice ProgId): true = already PDF Viewer, null = unknown. */
+  isDefault: boolean | null;
+  state: PromptState;
+  now: number;
+}
+
+/**
+ * Desktop app (installed by the Windows installer): the registry says whether we
+ * are the .pdf default, so ask exactly while we are not — unless the user chose
+ * "never" or postponed. "done" is re-asked (the user may have picked another app
+ * since); unknown (no UserChoice / reg failed) asks too, a launch with a file does not suppress it.
+ */
+export function shouldAutoPromptDesktop({ isDefault, state, now }: DesktopPromptContext): boolean {
+  if (isDefault === true) return false;
+  if (state.status === 'never') return false;
+  return now >= state.remindAt;
+}
+
 export function applyChoice(state: PromptState, choice: PromptChoice, now: number): PromptState {
   switch (choice) {
     case 'done':
@@ -166,3 +185,5 @@ export function saveState(state: PromptState): void {
 
 /** Windows Settings › Apps › Default apps. Chrome/Edge ask "Open Settings?" first. */
 export const WINDOWS_DEFAULT_APPS_URI = 'ms-settings:defaultapps';
+/** Desktop app: Settings › Apps › Default apps › PDF Viewer (registered by the installer under RegisteredApplications). */
+export const WINDOWS_APP_DEFAULTS_URI = 'ms-settings:defaultapps?registeredAppUser=PDF%20Viewer';

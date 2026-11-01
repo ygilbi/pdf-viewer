@@ -10,6 +10,7 @@ import { RestoreToast, detachDoc, detachDocument, fingerprintFile, restoreDocume
 import { useFileLaunch } from './pwa/fileHandling';
 import { DefaultAppPrompt } from './pwa/DefaultAppPrompt';
 import { useFileQueue } from './state/fileQueue';
+import { useDesktopFileOpen } from './desktop/bridge';
 
 function isPdf(file: File) {
   return file.type === 'application/pdf' || /\.pdf$/i.test(file.name);
@@ -150,6 +151,8 @@ export default function App() {
 
   // PWA: PDFs launched via "Open with" / default app — added to an open workspace.
   useFileLaunch(addFiles);
+  // Windows desktop app (Electron): PDFs double-clicked in Explorer / passed on the command line.
+  useDesktopFileOpen(addFiles);
 
   // Window-wide drag & drop: adds the dropped PDFs to the workspace (opens them when empty).
   const [dragging, setDragging] = useState(false);

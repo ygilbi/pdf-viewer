@@ -1,7 +1,8 @@
 /**
  * PWA bootstrap, loaded from index.html (<script type="module">).
  * - starts capturing `beforeinstallprompt` immediately
- * - registers the service worker in production only, top-level window only
+ * - registers the service worker in production only, top-level window only,
+ *   and never inside the Windows desktop app (Electron serves the files itself)
  */
 import './installPrompt';
 
@@ -10,6 +11,7 @@ function registerServiceWorker(): void {
   try {
     if (!('serviceWorker' in navigator)) return;
     if (window.top !== window) return; // iframes / embedded previews
+    if ((window as { pdfDesktop?: unknown }).pdfDesktop) return; // desktop app (desktop/preload.cjs)
     const url = `${import.meta.env.BASE_URL}sw.js`;
     const register = () => {
       navigator.serviceWorker.register(url).catch((err) => console.warn('[pwa] SW registration failed', err));

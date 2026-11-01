@@ -1,9 +1,9 @@
 {
-  "name": "pdf-viewer-desktop",
+  "name": "pdf-viewer",
   "productName": "PDF Viewer",
   "version": "0.1.0",
   "private": true,
-  "description": "PDF Viewer — מציג תוכניות PDF ומדידת שטחי חזיתות אלומיניום (Windows desktop app)",
+  "description": "PDF Viewer",
   "author": "ygilbi",
   "license": "UNLICENSED",
   "main": "main.cjs",
@@ -16,5 +16,69 @@
   "devDependencies": {
     "electron": "44.10.0",
     "electron-builder": "26.18.0"
+  },
+  "build": {
+    "appId": "com.ygilbi.pdfviewer",
+    "productName": "PDF Viewer",
+    "executableName": "PDFViewer",
+    "copyright": "Copyright (c) ygilbi",
+    "directories": {
+      "output": "release",
+      "buildResources": "build"
+    },
+    "files": [
+      "main.cjs",
+      "preload.cjs",
+      "build/icon.ico",
+      "build/icon.png",
+      "web-dist/**/*",
+      "!web-dist/sw.js",
+      "!web-dist/tools/**",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "build/file-pdf.ico",
+        "to": "file-pdf.ico"
+      }
+    ],
+    "asar": true,
+    "fileAssociations": [
+      {
+        "ext": "pdf",
+        "name": "PDFViewer.Document",
+        "description": "PDF Document",
+        "icon": "file-pdf.ico",
+        "role": "Viewer",
+        "mimeType": "application/pdf"
+      }
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "build/icon.ico",
+      "legalTrademarks": "PDF Viewer"
+    },
+    "nsis": {
+      "oneClick": true,
+      "perMachine": false,
+      "allowElevation": false,
+      "runAfterFinish": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "PDF Viewer",
+      "uninstallDisplayName": "PDF Viewer",
+      "artifactName": "PDF-Viewer-Setup-${version}.${ext}",
+      "include": "build/installer.nsh",
+      "deleteAppDataOnUninstall": false,
+      "installerIcon": "build/icon.ico",
+      "uninstallerIcon": "build/icon.ico"
+    }
   }
 }

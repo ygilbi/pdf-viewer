@@ -79,3 +79,6 @@ Windows 10/11 אינה מאפשרת לתוכנה להגדיר את עצמה כב
 - `.github/workflows/desktop-windows.yml` רץ על `windows-latest`: בונה את האתר ל-`desktop/web-dist`, בונה את המתקין, ומריץ בדיקת עשן (`desktop/test/smoke.ps1`): התקנה שקטה (`/S`), בדיקת מפתחות הרישום וקובץ הסמל, הפעלת התוכנה עם `public/demo-facade.pdf` וצילום מסך, והסרה שקטה. המתקין וצילום המסך נשמרים כ-artifacts של הריצה.
 - פרסום Release: דוחפים תג `desktop-v<גרסה>` (למשל `git tag desktop-v0.1.0 && git push origin desktop-v0.1.0`), או Actions ← **Desktop (Windows installer)** ← **Run workflow** עם `release` מסומן.
 - בנייה מקומית ב-Windows: `npm ci && npm --prefix desktop ci && npm --prefix desktop run dist`; בדיקת עשן מקומית: `powershell -ExecutionPolicy Bypass -File desktop\test\smoke.ps1`.
+- פיתוח: `npm --prefix desktop run build:web && npm --prefix desktop start -- path\to\file.pdf`. האפליקציה מגישה את `desktop/web-dist` מ-`app://pdf-viewer/` (ללא service worker), ומעבירה קובצי PDF משורת הפקודה / מופע שני ל-`window.pdfDesktop` (`src/desktop/bridge.ts`).
+- סמלים: `python3 desktop/scripts/make-icons.py` יוצר את `desktop/build/icon.ico` (16–256) ומעתיק את `file-pdf.ico` מ-`public/icons/`. הגדרות המתקין ורישומי הרישום: `desktop/package.json` (`build`) ו-`desktop/build/installer.nsh`.
+- אין עדכון אוטומטי עדיין — גרסה חדשה מותקנת ע"י הרצת המתקין החדש (מעדכן במקום).

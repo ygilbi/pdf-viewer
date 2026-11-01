@@ -9,6 +9,8 @@ const { contextBridge, ipcRenderer } = require('electron');
 /** @type {Set<(files: {name: string, bytes: ArrayBuffer}[]) => void>} */
 const listeners = new Set();
 let readySent = false;
+/** Files that arrived while nobody was subscribed (e.g. between React effect re-runs). */
+let held = [];
 
 ipcRenderer.on('pdf:open-files', (_e, files) => {
   const list = (Array.isArray(files) ? files : []).map((f) => {
@@ -16,6 +18,10 @@ ipcRenderer.on('pdf:open-files', (_e, files) => {
     return { name: String(f.name), bytes: u8.buffer.slice(u8.byteOffset, u8.byteOffset + u8.byteLength) };
   });
   if (!list.length) return;
+  if (!listeners.size) {
+    held.push(...list);
+    return;
+  }
   for (const cb of listeners) {
     try {
       cb(list);
@@ -33,6 +39,11 @@ contextBridge.exposeInMainWorld('pdfDesktop', {
   onOpenFiles(cb) {
     if (typeof cb !== 'function') return () => {};
     listeners.add(cb);
+    if (held.length) {
+      const list = held;
+      held = [];
+      queueMicrotask(() => cb(list));
+    }
     if (!readySent) {
       readySent = true;
       ipcRenderer.send('pdf:renderer-ready');

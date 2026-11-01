@@ -9,6 +9,7 @@ import {
   parseState,
   recordFileLaunch,
   shouldAutoPrompt,
+  shouldAutoPromptDesktop,
   type PromptContext,
 } from './defaultApp';
 
@@ -102,5 +103,24 @@ describe('parseState', () => {
     expect(parseState('{oops')).toEqual(INITIAL_STATE);
     expect(parseState('{"status":"weird","remindAt":"x"}')).toEqual(INITIAL_STATE);
     expect(parseState('{"status":"never","remindAt":5,"coldFileLaunches":1}')).toEqual({ status: 'never', remindAt: 5, coldFileLaunches: 1 });
+  });
+});
+
+describe('shouldAutoPromptDesktop', () => {
+  const now = 1_000_000;
+  it('asks while the registry says another app (or nothing) is the default', () => {
+    expect(shouldAutoPromptDesktop({ isDefault: false, state: INITIAL_STATE, now })).toBe(true);
+    expect(shouldAutoPromptDesktop({ isDefault: null, state: INITIAL_STATE, now })).toBe(true);
+    expect(shouldAutoPromptDesktop({ isDefault: false, state: { ...INITIAL_STATE, status: 'done' }, now })).toBe(true);
+    expect(shouldAutoPromptDesktop({ isDefault: false, state: { ...INITIAL_STATE, status: 'likely-default' }, now })).toBe(true);
+  });
+  it('never asks when already default or the user opted out', () => {
+    expect(shouldAutoPromptDesktop({ isDefault: true, state: INITIAL_STATE, now })).toBe(false);
+    expect(shouldAutoPromptDesktop({ isDefault: false, state: { ...INITIAL_STATE, status: 'never' }, now })).toBe(false);
+  });
+  it('respects "remind me later"', () => {
+    const later = applyChoice(INITIAL_STATE, 'later', now);
+    expect(shouldAutoPromptDesktop({ isDefault: false, state: later, now: now + 1 })).toBe(false);
+    expect(shouldAutoPromptDesktop({ isDefault: false, state: later, now: now + REMIND_LATER_MS })).toBe(true);
   });
 });
