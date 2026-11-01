@@ -6,6 +6,8 @@ import { formatPageRanges, parsePageRanges } from './pageSelection';
 import { hatchSegments } from './hatch';
 import { buildExportPdf, numberNotes } from './buildPdf';
 import { buildExportCsv } from './csvExport';
+import { forPdfLib } from './pdfCommon';
+import fontkit from '@pdf-lib/fontkit';
 import { DEFAULT_CATEGORIES } from '../core/measurementEngine';
 import { DEFAULT_CSV_OPTIONS, DEFAULT_PDF_OPTIONS, type PdfBuildInput } from './types';
 import type { AreaMeasurement, Calibration } from '../core/types';
@@ -39,6 +41,19 @@ describe('bidi toVisual', () => {
     expect(paragraphIsRtl('abc שלום')).toBe(false);
     expect(paragraphIsRtl('12 שלום')).toBe(true);
     expect(paragraphIsRtl('123')).toBe(true);
+  });
+});
+
+describe('fontkit glyph order', () => {
+  it('glyphs come out in visual order for Hebrew, mixed and Latin strings', async () => {
+    const { regular } = await fonts();
+    const font = fontkit.create(regular as Uint8Array);
+    for (const logical of ['סיכום כמויות', 'עמוד 3', 'תאריך: 1.11.2026', 'נטו 12.50 מ״ר', 'לבדוק (A-101) גובה', 'W1 ×3', 'demo.pdf']) {
+      const visual = toVisual(logical);
+      const glyphs = font.layout(forPdfLib(visual)).glyphs;
+      const got = glyphs.map((g: { codePoints: number[] }) => String.fromCodePoint(...g.codePoints)).join('');
+      expect(got).toBe(visual);
+    }
   });
 });
 

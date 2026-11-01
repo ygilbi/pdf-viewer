@@ -2,7 +2,8 @@ import { useEffect, useRef, useState } from 'react';
 import { useViewer } from '../../state/store';
 import { useUi } from '../../state/uiStore';
 import { useZoom, viewerCommands } from '../viewer/commands';
-import { IconList, IconMenu, IconPages } from '../ui/icons';
+import { IconList, IconMenu, IconPages, IconDownload } from '../ui/icons';
+import { openExportDialog } from '../../export/exportUi';
 import { TOOLS } from '../toolActions';
 
 const IDLE_MS = 2500;
@@ -173,6 +174,16 @@ export function FloatingChrome() {
           data-testid="pill-zoom"
         >
           <span dir="ltr">{Math.round(zoom)}%</span>
+        </button>
+        <button
+          type="button"
+          onClick={() => openExportDialog()}
+          title="ייצוא PDF / CSV (E)"
+          aria-label="ייצוא"
+          className={chipBtn}
+          data-testid="pill-export"
+        >
+          <IconDownload />
         </button>
         {!calibrated && (
           <button

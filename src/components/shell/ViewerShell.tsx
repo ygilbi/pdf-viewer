@@ -10,6 +10,8 @@ import { Drawer } from './Drawer';
 import { FloatingChrome } from './FloatingChrome';
 import { TopMenu } from './TopMenu';
 import { ToolPalette } from './ToolPalette';
+import { ExportDialog } from '../ExportDialog';
+import { openExportDialog, useExportUi } from '../../export/exportUi';
 
 /**
  * Shell keys. Registered in the CAPTURE phase on window so they run before
@@ -22,6 +24,7 @@ function useShellKeys() {
       if (e.defaultPrevented || e.ctrlKey || e.metaKey || e.altKey) return;
       if (isTypingTarget(e.target)) return;
       if (useViewer.getState().numPages === 0) return;
+      if (useExportUi.getState().open) return; // the export dialog handles its own keys
       const ui = useUi.getState();
       let handled = true;
       switch (e.code) {
@@ -32,6 +35,12 @@ function useShellKeys() {
         case 'KeyT':
           if (!e.shiftKey) ui.toggleDrawer('thumbs');
           else handled = false;
+          break;
+        case 'KeyE':
+          if (!e.shiftKey) {
+            ui.setMenuOpen(false);
+            openExportDialog();
+          } else handled = false;
           break;
         case 'KeyM':
           if (!e.shiftKey) ui.toggleDrawer('measurements');
@@ -72,6 +81,7 @@ export function ViewerShell({ onOpenFile }: { onOpenFile(file: File): void }) {
         {(p) => <MeasurementsPanel {...p} />}
       </Drawer>
       <TopMenu onOpenFile={onOpenFile} />
+      <ExportDialog />
     </>
   );
 }

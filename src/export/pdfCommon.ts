@@ -16,10 +16,33 @@ export const BLACK = rgb(0.1, 0.11, 0.13);
 export const WHITE = rgb(1, 1, 1);
 export const GREY = rgb(0.42, 0.45, 0.5);
 
-/** Visual-order text + its advance width. Characters the font lacks are dropped (pdf-lib would draw .notdef boxes). */
+/**
+ * fontkit (used by pdf-lib for custom fonts) reverses the WHOLE glyph run when
+ * the first character with a non-Common script is RTL (no bidi, no mirroring).
+ * Mirrors fontkit's `Script.forString` closely enough for Hebrew / Latin text.
+ */
+export function fontkitReverses(s: string): boolean {
+  for (const ch of s) {
+    const cp = ch.codePointAt(0)!;
+    if ((cp >= 0x0590 && cp <= 0x05ff) || (cp >= 0xfb1d && cp <= 0xfb4f) || (cp >= 0x0600 && cp <= 0x06ff)) return true;
+    if (/\p{L}/u.test(ch)) return false;
+  }
+  return false;
+}
+
+/** String to hand to pdf-lib so that the glyphs end up in `visual` (left-to-right) order. */
+export function forPdfLib(visual: string): string {
+  return fontkitReverses(visual) ? Array.from(visual).reverse().join('') : visual;
+}
+
+/**
+ * Text ready for `drawText` (`visual` = what to pass to pdf-lib, already
+ * compensated for fontkit) + its advance width. Characters the font lacks are
+ * dropped (pdf-lib would draw .notdef boxes).
+ */
 export function shape(font: PDFFont, text: string, size: number, rtl?: boolean): { visual: string; width: number } {
   const clean = supportedText(font, text.replace(/[\r\n\t]+/g, ' '));
-  const visual = toVisual(clean, rtl);
+  const visual = forPdfLib(toVisual(clean, rtl));
   return { visual, width: font.widthOfTextAtSize(visual, size) };
 }
 

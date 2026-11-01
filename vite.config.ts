@@ -8,5 +8,6 @@ export default defineConfig({
   // pdf.js CMaps / standard fonts are imported with ?inline (see renderQueue.ts)
   assetsInclude: ['**/*.bcmap', '**/*.pfb'],
   build: { target: 'es2022' },
-  optimizeDeps: { exclude: ['pdfjs-dist'] },
+  // pdf-lib is only reached through the lazy export worker; pre-bundle it so the first export in dev doesn't trigger a reload.
+  optimizeDeps: { exclude: ['pdfjs-dist'], include: ['pdf-lib', '@pdf-lib/fontkit'] },
 });
