@@ -169,7 +169,10 @@ export default function ViewerCanvas() {
       return shift && d.length > 0 ? snapAngle(d[d.length - 1], p, 45) : p;
     };
 
-    const show = (el: Element | null, on: boolean) => el?.setAttribute('visibility', on ? 'visible' : 'hidden');
+    const show = (el: Element | null, on: boolean) => {
+      const v = on ? 'visible' : 'hidden';
+      if (el && el.getAttribute('visibility') !== v) el.setAttribute('visibility', v);
+    };
 
     const updateBand = () => {
       const s = st();
@@ -210,7 +213,8 @@ export default function ViewerCanvas() {
           closing.setAttribute('x2', String(d[0].x));
           closing.setAttribute('y2', String(d[0].y));
         }
-        if (seg) seg.setAttribute('stroke', bad ? OVERLAY_WARN_COLOR : s.tool === 'calibrate' ? '#7c3aed' : '#2563eb');
+        const stroke = bad ? OVERLAY_WARN_COLOR : s.tool === 'calibrate' ? '#7c3aed' : '#2563eb';
+        if (seg && seg.getAttribute('stroke') !== stroke) seg.setAttribute('stroke', stroke);
       }
       if (p && s.tool === 'area' && d.length >= 3) nearFirst = distance(p, d[0]) * vp.zoom <= CLOSE_PX;
 
