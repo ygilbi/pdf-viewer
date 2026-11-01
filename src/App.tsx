@@ -8,6 +8,7 @@ import { IconFilePdf } from './components/ui/icons';
 import { formatBytes } from './components/ui/util';
 import { RestoreToast, detachDoc, detachDocument, fingerprintFile, restoreDocument, usePersistence } from './state/persistence';
 import { useFileLaunch } from './pwa/fileHandling';
+import { DefaultAppPrompt } from './pwa/DefaultAppPrompt';
 import { useFileQueue } from './state/fileQueue';
 
 function isPdf(file: File) {
@@ -234,6 +235,7 @@ export default function App() {
       )}
 
       <RestoreToast />
+      <DefaultAppPrompt />
       {hasDoc && <AddProgress />}
 
       {dragging && (

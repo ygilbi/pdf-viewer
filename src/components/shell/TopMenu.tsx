@@ -22,7 +22,7 @@ import { CopyTableButton } from '../CopyTableButton';
 import { openExportDialog } from '../../export/exportUi';
 import { ActiveCategorySelect } from '../CategorySelect';
 import { fullscreenSupported, toggleFullscreen, useIsFullscreen } from '../toolActions';
-import { InstallButton } from '../../pwa';
+import { InstallButton, currentOs, openDefaultAppDialog } from '../../pwa';
 
 function Group({ children, label }: { children: React.ReactNode; label: string }) {
   return (
@@ -282,6 +282,21 @@ export function TopMenu({ onOpenFile }: { onOpenFile(file: File): void }) {
             <ToolButton label={isFs ? 'צא ממסך מלא' : 'מסך מלא'} shortcut="Shift+F" active={isFs} onClick={toggleFullscreen}>
               {isFs ? <IconFullscreenExit /> : <IconFullscreen />}
             </ToolButton>
+          )}
+          {currentOs() !== 'other' && (
+            <button
+              type="button"
+              data-testid="menu-default-app"
+              title="הגדרת PDF Viewer כתוכנה שפותחת קובצי PDF במחשב"
+              onClick={() => {
+                setMenuOpen(false);
+                openDefaultAppDialog();
+              }}
+              className="flex h-8 items-center gap-1.5 whitespace-nowrap rounded px-2 text-xs text-slate-300 hover:bg-slate-700 hover:text-white focus:outline-none focus-visible:ring-1 focus-visible:ring-sky-400"
+            >
+              <IconFilePdf size={14} className="text-red-400" />
+              הגדר כברירת מחדל ל‑PDF
+            </button>
           )}
           <InstallButton
             label="התקן"
