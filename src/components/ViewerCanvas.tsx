@@ -192,6 +192,7 @@ export default function ViewerCanvas() {
     let lastTargetKey = '';
     let lastFrameZoom = 0;
     let lastPanRender = 0;
+    let panSample: { t: number; x: number; y: number } | null = null;
     const settle = () => {
       settleTimer = 0;
       if (vp.isAnimating()) {
@@ -236,10 +237,19 @@ export default function ViewerCanvas() {
       } else {
         lastTargetKey = '';
         // Slow continuous pan at a fixed zoom: don't wait for the pan to stop.
+        // Only when slow (< 1/4 viewport per PAN_RENDER_MS): during a fast pan
+        // the result would be stale on arrival, and uploading big bitmaps
+        // mid-motion costs frames.
         const now = performance.now();
-        if (vp.zoom === lastFrameZoom && now - lastPanRender >= PAN_RENDER_MS && !layers.isSharp(vp.zoom, vp.visibleRect())) {
-          lastPanRender = now;
-          layers.settle(vp.zoom, vp.visibleRect());
+        if (vp.zoom !== lastFrameZoom) panSample = null;
+        else if (!panSample) panSample = { t: now, x: vp.panX, y: vp.panY };
+        else if (now - panSample.t >= PAN_RENDER_MS) {
+          const moved = Math.hypot(vp.panX - panSample.x, vp.panY - panSample.y);
+          panSample = { t: now, x: vp.panX, y: vp.panY };
+          if (moved < Math.min(vp.cw, vp.ch) / 4 && now - lastPanRender >= PAN_RENDER_MS && !layers.isSharp(vp.zoom, vp.visibleRect())) {
+            lastPanRender = now;
+            layers.settle(vp.zoom, vp.visibleRect());
+          }
         }
       }
       lastFrameZoom = vp.zoom;
