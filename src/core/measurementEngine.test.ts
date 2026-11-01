@@ -2,7 +2,16 @@ import { describe, expect, it } from 'vitest';
 import type { AreaMeasurement, Calibration, Point } from './types';
 import {
   MEASUREMENT_COLORS,
+  assignDeductions,
   centroid,
+  computeDocumentSummary,
+  computeNetAreas,
+  computePageSummary,
+  distanceToPolyline,
+  kindOf,
+  nextLabelNumber,
+  polylineLengthMeters,
+  polylineMidpoint,
   computePixelsPerMeter,
   distance,
   formatArea,
@@ -235,37 +244,182 @@ describe('parseLengthInput', () => {
 
 describe('measurementsToCSV', () => {
   const cal: Calibration = { pixelsPerMeter: 10, p1: P(0, 0), p2: P(100, 0), meters: 10 };
+  // legacy objects without `kind` → areas
   const ms: AreaMeasurement[] = [
     { id: 'a', page: 1, label: 'סלון', points: rect(10, 5, 10), color: '#000' },
     { id: 'b', page: 1, label: 'חדר "שינה", הורים', points: rect(2, 3, 10), color: '#000' },
     { id: 'c', page: 2, label: 'מרפסת', points: rect(1, 1, 10), color: '#000' },
   ];
   const csv = measurementsToCSV(ms, { 1: cal });
-  const lines = csv.replace(/^﻿/, '').trimEnd().split('\r\n');
+  const lines = csv.replace(/^\uFEFF/, '').trimEnd().split('\r\n');
 
   it('starts with UTF-8 BOM', () => {
     expect(csv.charCodeAt(0)).toBe(0xfeff);
   });
 
   it('header row', () => {
-    expect(lines[0]).toBe('מס׳,שם,עמוד,שטח (מ״ר),היקף (מ׳),מספר נקודות');
+    expect(lines[0]).toBe('מס׳,סוג,שם,עמוד,שטח (מ״ר),היקף (מ׳),אורך (מ׳),מספר נקודות,שייך ל');
   });
 
   it('data rows, escaping, uncalibrated page empty area', () => {
-    expect(lines[1]).toBe('1,סלון,1,50.00,30.00,4');
-    expect(lines[2]).toBe('2,"חדר ""שינה"", הורים",1,6.00,10.00,4');
-    expect(lines[3]).toBe('3,מרפסת,2,,,4');
+    expect(lines[1]).toBe('1,שטח,סלון,1,50.00,30.00,,4,');
+    expect(lines[2]).toBe('2,שטח,"חדר ""שינה"", הורים",1,6.00,10.00,,4,');
+    expect(lines[3]).toBe('3,שטח,מרפסת,2,,,,4,');
   });
 
-  it('total row sums calibrated areas only', () => {
-    expect(lines).toHaveLength(5);
-    expect(lines[4]).toBe(',סה״כ,,56.00,,');
+  it('totals rows sum calibrated measurements only', () => {
+    expect(lines).toHaveLength(8);
+    expect(lines[4]).toBe(',,ברוטו,,56.00,,,,');
+    expect(lines[5]).toBe(',,ניכויים,,0.00,,,,');
+    expect(lines[6]).toBe(',,נטו,,56.00,,,,');
+    expect(lines[7]).toBe(',,סה״כ אורך,,,,0.00,,');
   });
 
-  it('empty list still has header + total', () => {
+  it('empty list still has header + totals', () => {
     const out = measurementsToCSV([], {});
-    expect(out.startsWith('﻿')).toBe(true);
-    expect(out.trimEnd().split('\r\n')).toHaveLength(2);
+    expect(out.startsWith('\uFEFF')).toBe(true);
+    expect(out.trimEnd().split('\r\n')).toHaveLength(5);
+  });
+
+  it('kinds: deduct rows negative, length rows in length column', () => {
+    const mixed: AreaMeasurement[] = [
+      { id: 'a', page: 1, kind: 'area', label: 'חזית 1', points: rect(10, 5, 10), color: '#000' },
+      { id: 'd', page: 1, kind: 'deduct', label: 'פתח 1', points: rect(2, 1, 10, 20, 20), color: '#000' },
+      { id: 'l', page: 1, kind: 'length', label: 'קו 1', points: [P(0, 0), P(30, 40), P(30, 60)], color: '#000' },
+      { id: 'o', page: 1, kind: 'deduct', label: 'פתח 2', points: rect(1, 1, 10, 500, 500), color: '#000' },
+    ];
+    const out = measurementsToCSV(mixed, { 1: cal }).replace(/^\uFEFF/, '').trimEnd().split('\r\n');
+    expect(out[1]).toBe('1,שטח,חזית 1,1,50.00,30.00,,4,');
+    expect(out[2]).toBe('2,ניכוי,פתח 1,1,-2.00,6.00,,4,חזית 1');
+    expect(out[3]).toBe('3,אורך,קו 1,1,,,7.00,3,');
+    expect(out[4]).toBe('4,ניכוי,פתח 2,1,-1.00,4.00,,4,'); // orphan: listed, not counted
+    expect(out[5]).toBe(',,ברוטו,,50.00,,,,');
+    expect(out[6]).toBe(',,ניכויים,,-2.00,,,,');
+    expect(out[7]).toBe(',,נטו,,48.00,,,,');
+    expect(out[8]).toBe(',,סה״כ אורך,,,,7.00,,');
+  });
+});
+
+describe('measurement kinds', () => {
+  const cal: Calibration = { pixelsPerMeter: 10, p1: P(0, 0), p2: P(100, 0), meters: 10 };
+  const cals = { 1: cal, 2: cal };
+  const M = (id: string, page: number, kind: AreaMeasurement['kind'], points: Point[], label = id): AreaMeasurement => ({
+    id,
+    page,
+    kind,
+    label,
+    points,
+    color: '#000',
+  });
+
+  it('kindOf defaults to area', () => {
+    expect(kindOf({})).toBe('area');
+    expect(kindOf({ kind: 'area' })).toBe('area');
+    expect(kindOf({ kind: 'deduct' })).toBe('deduct');
+    expect(kindOf({ kind: 'length' })).toBe('length');
+    expect(kindOf({ kind: 'bogus' })).toBe('area');
+  });
+
+  it('polyline length, midpoint, distance', () => {
+    const line = [P(0, 0), P(30, 40), P(30, 60)]; // 50 + 20 = 70 units
+    expect(polylineLengthMeters(line, 10)).toBeCloseTo(7, 12);
+    expect(polylineLengthMeters([P(0, 0)], 10)).toBe(0);
+    expect(polylineMidpoint(line)).toEqual({ x: 21, y: 28 }); // 35 units along first segment
+    expect(polylineMidpoint([P(0, 0), P(10, 0)])).toEqual({ x: 5, y: 0 });
+    expect(distanceToPolyline(P(30, 50), line)).toBeCloseTo(0, 12);
+    expect(distanceToPolyline(P(40, 50), line)).toBeCloseTo(10, 12);
+    expect(distanceToPolyline(P(-3, -4), line)).toBeCloseTo(5, 12);
+    expect(distanceToPolyline(P(0, 0), [])).toBe(Infinity);
+  });
+
+  it('deduct belongs to the area containing its centroid on the same page', () => {
+    const ms = [
+      M('A', 1, 'area', rect(10, 5, 10)), // 0..100 x 0..50
+      M('B', 1, undefined, rect(10, 5, 10, 200, 0)), // legacy area, 200..300
+      M('inner', 1, 'area', rect(4, 4, 10, 205, 5)), // nested inside B
+      M('d1', 1, 'deduct', rect(2, 1, 10, 10, 10)), // in A
+      M('d2', 1, 'deduct', rect(1, 1, 10, 210, 10)), // in B and inner → smallest (inner)
+      M('d3', 1, 'deduct', rect(1, 1, 10, 260, 10)), // in B only
+      M('d4', 2, 'deduct', rect(1, 1, 10, 10, 10)), // other page: orphan
+      M('d5', 1, 'deduct', rect(1, 1, 10, 150, 10)), // between: orphan
+    ];
+    const a = assignDeductions(ms);
+    expect(a.get('d1')).toBe('A');
+    expect(a.get('d2')).toBe('inner');
+    expect(a.get('d3')).toBe('B');
+    expect(a.get('d4')).toBeNull();
+    expect(a.get('d5')).toBeNull();
+    expect(a.has('A')).toBe(false);
+
+    const net = computeNetAreas(ms, cals);
+    expect(net.get('A')).toMatchObject({ grossM2: 50, deductM2: 2, deductIds: ['d1'] });
+    expect(net.get('A')!.netM2).toBeCloseTo(48, 12);
+    expect(net.get('B')!.netM2).toBeCloseTo(49, 12);
+    expect(net.get('inner')!.netM2).toBeCloseTo(15, 12);
+    expect(net.has('d1')).toBe(false);
+  });
+
+  it('centroid rule works for a concave (L-shaped) area', () => {
+    const L = [P(0, 0), P(100, 0), P(100, 50), P(50, 50), P(50, 100), P(0, 100)];
+    const ms = [
+      M('L', 1, 'area', L),
+      M('in', 1, 'deduct', rect(1, 1, 10, 10, 60)),
+      M('notch', 1, 'deduct', rect(1, 1, 10, 70, 70)),
+    ];
+    const a = assignDeductions(ms);
+    expect(a.get('in')).toBe('L');
+    expect(a.get('notch')).toBeNull();
+  });
+
+  it('page and document summaries', () => {
+    const ms = [
+      M('A', 1, 'area', rect(10, 5, 10)),
+      M('d1', 1, 'deduct', rect(2, 1, 10, 10, 10)),
+      M('orph', 1, 'deduct', rect(1, 1, 10, 500, 500)),
+      M('l1', 1, 'length', [P(0, 0), P(30, 40)]),
+      M('B', 2, 'area', rect(3, 3, 10)),
+      M('l2', 2, 'length', [P(0, 0), P(0, 25), P(10, 25)]),
+      M('U', 3, 'area', rect(3, 3, 10)), // page 3 uncalibrated
+    ];
+    const p1 = computePageSummary(ms, cals, 1);
+    expect(p1.grossM2).toBeCloseTo(50, 12);
+    expect(p1.deductM2).toBeCloseTo(2, 12);
+    expect(p1.netM2).toBeCloseTo(48, 12);
+    expect(p1.lengthM).toBeCloseTo(5, 12);
+    expect(p1.orphanDeducts).toBe(1);
+    expect(p1.uncalibrated).toBe(0);
+
+    const p3 = computePageSummary(ms, cals, 3);
+    expect(p3).toMatchObject({ grossM2: 0, deductM2: 0, netM2: 0, lengthM: 0, uncalibrated: 1 });
+
+    const doc = computeDocumentSummary(ms, cals);
+    expect(doc.grossM2).toBeCloseTo(59, 12);
+    expect(doc.deductM2).toBeCloseTo(2, 12);
+    expect(doc.netM2).toBeCloseTo(57, 12);
+    expect(doc.lengthM).toBeCloseTo(8.5, 12);
+    expect(doc.uncalibrated).toBe(1);
+    expect(doc.orphanDeducts).toBe(1);
+
+    expect(computeDocumentSummary([], {})).toEqual({
+      grossM2: 0,
+      deductM2: 0,
+      netM2: 0,
+      lengthM: 0,
+      uncalibrated: 0,
+      orphanDeducts: 0,
+    });
+  });
+
+  it('nextLabelNumber is per kind', () => {
+    const ms = [
+      M('a', 1, 'area', [], 'חזית 4'),
+      M('b', 1, undefined, [], 'צפונית'),
+      M('d', 1, 'deduct', [], 'פתח 1'),
+    ];
+    expect(nextLabelNumber(ms, 'area')).toBe(5);
+    expect(nextLabelNumber(ms, 'deduct')).toBe(2);
+    expect(nextLabelNumber(ms, 'length')).toBe(1);
+    expect(nextLabelNumber([M('x', 1, 'area', [], 'a'), M('y', 1, 'area', [], 'b')], 'area')).toBe(3);
   });
 });
 

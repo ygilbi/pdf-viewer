@@ -89,7 +89,16 @@ export interface PdfClient {
 // Measurements
 // ---------------------------------------------------------------------------
 
-export type ToolId = 'pan' | 'calibrate' | 'area';
+export type ToolId = 'pan' | 'calibrate' | 'area' | 'deduct' | 'length';
+
+/**
+ * What a measurement represents:
+ *  - 'area'   facade polygon (gross area)
+ *  - 'deduct' opening (window/door) polygon subtracted from the area that
+ *             contains its centroid on the same page
+ *  - 'length' open polyline (≥2 points), measured by total length
+ */
+export type MeasurementKind = 'area' | 'deduct' | 'length';
 
 /** Per-page scale. pixelsPerMeter is in *page units per meter*. */
 export interface Calibration {
@@ -104,7 +113,12 @@ export interface AreaMeasurement {
   id: string;
   page: number;
   label: string;
-  /** Polygon vertices in page units (closed implicitly). */
+  /**
+   * Missing on measurements saved before kinds existed → treat as 'area'.
+   * Always read it through `kindOf(m)` (measurementEngine).
+   */
+  kind?: MeasurementKind;
+  /** Vertices in page units. Polygon (closed implicitly) for area/deduct, open polyline for length. */
   points: Point[];
   color: string;
 }

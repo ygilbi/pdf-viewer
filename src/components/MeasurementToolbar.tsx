@@ -2,16 +2,28 @@ import { useEffect, useRef, useState, type ReactElement } from 'react';
 import { useViewer } from '../state/store';
 import type { ToolId } from '../core/types';
 import { viewerCommands, subscribeZoom } from './viewer/commands';
-import { measurementsToCSV, polygonAreaM2, polygonPerimeterMeters } from '../core/measurementEngine';
+import {
+  assignDeductions,
+  computeDocumentSummary,
+  computeNetAreas,
+  computePageSummary,
+  kindOf,
+  measurementsToCSV,
+  polygonAreaM2,
+  polygonPerimeterMeters,
+  polylineLengthMeters,
+} from '../core/measurementEngine';
 import { ToolButton, ToolbarDivider } from './ui/ToolButton';
 import {
   IconChevronLeft,
   IconChevronRight,
+  IconDeduct,
   IconDownload,
   IconFilePdf,
   IconFit,
   IconFolderOpen,
   IconHand,
+  IconLength,
   IconPolygon,
   IconRuler,
   IconZoomIn,
@@ -27,6 +39,8 @@ const TOOLS: { id: ToolId; label: string; shortcut: string; icon: ReactElement }
   { id: 'pan', label: 'יד / הזזה', shortcut: 'V / H', icon: <IconHand /> },
   { id: 'calibrate', label: 'כיול קנה מידה', shortcut: 'C', icon: <IconRuler /> },
   { id: 'area', label: 'מדידת שטח חזית', shortcut: 'A', icon: <IconPolygon /> },
+  { id: 'deduct', label: 'פתח לניכוי', shortcut: 'D', icon: <IconDeduct /> },
+  { id: 'length', label: 'מדידת אורך', shortcut: 'L', icon: <IconLength /> },
 ];
 
 export default function MeasurementToolbar({ onOpenFile }: Props) {
@@ -87,6 +101,12 @@ export default function MeasurementToolbar({ onOpenFile }: Props) {
         case 'KeyA':
           s.setTool('area');
           break;
+        case 'KeyD':
+          s.setTool('deduct');
+          break;
+        case 'KeyL':
+          s.setTool('length');
+          break;
         case 'PageUp':
           s.setPage(s.currentPage - 1);
           break;
@@ -111,6 +131,8 @@ export default function MeasurementToolbar({ onOpenFile }: Props) {
 
   const exportJSON = () => {
     const s = useViewer.getState();
+    const assignment = assignDeductions(s.measurements);
+    const nets = computeNetAreas(s.measurements, s.calibrations, assignment);
     const data = {
       fileName: s.fileName,
       numPages: s.numPages,
@@ -119,12 +141,31 @@ export default function MeasurementToolbar({ onOpenFile }: Props) {
       calibrations: s.calibrations,
       measurements: s.measurements.map((m) => {
         const c = s.calibrations[m.page];
+        const kind = kindOf(m);
+        const ppm = c?.pixelsPerMeter;
+        if (kind === 'length') {
+          return { ...m, kind, lengthM: ppm ? polylineLengthMeters(m.points, ppm) : null };
+        }
+        const area = ppm ? polygonAreaM2(m.points, ppm) : null;
         return {
           ...m,
-          areaM2: c ? polygonAreaM2(m.points, c.pixelsPerMeter) : null,
-          perimeterM: c ? polygonPerimeterMeters(m.points, c.pixelsPerMeter) : null,
+          kind,
+          /** Signed: deductions are negative. */
+          areaM2: area === null ? null : kind === 'deduct' ? -area : area,
+          perimeterM: ppm ? polygonPerimeterMeters(m.points, ppm) : null,
+          ...(kind === 'area'
+            ? { netAreaM2: ppm ? (nets.get(m.id)?.netM2 ?? area) : null }
+            : { deductFromId: assignment.get(m.id) ?? null }),
         };
       }),
+      summary: {
+        document: computeDocumentSummary(s.measurements, s.calibrations),
+        pages: Object.fromEntries(
+          [...new Set(s.measurements.map((m) => m.page))]
+            .sort((a, b) => a - b)
+            .map((p) => [p, computePageSummary(s.measurements, s.calibrations, p)]),
+        ),
+      },
     };
     downloadBlob(
       new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' }),

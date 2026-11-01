@@ -1,6 +1,17 @@
-import { memo, type Ref } from 'react';
+import { memo, useMemo, type Ref } from 'react';
 import type { AreaMeasurement, Calibration, Point, ToolId } from '../../core/types';
-import { centroid, formatArea, formatLength, isSelfIntersecting, polygonAreaM2 } from '../../core/measurementEngine';
+import {
+  DEDUCT_COLOR,
+  centroid,
+  computeNetAreas,
+  formatArea,
+  formatLength,
+  isSelfIntersecting,
+  kindOf,
+  polygonAreaM2,
+  polylineLengthMeters,
+  polylineMidpoint,
+} from '../../core/measurementEngine';
 
 /**
  * Layer 3: SVG overlay in page units (viewBox = page), living inside the
@@ -23,6 +34,17 @@ export const px = (n: number) => `calc(${n}px * var(--inv-zoom, 1))`;
 const WARN = '#dc2626';
 const DRAFT = '#2563eb';
 const CALIB = '#7c3aed';
+const LENGTH_DRAFT = '#d97706';
+const HATCH_ID = 'deduct-hatch';
+
+const draftColor = (t: ToolId) => (t === 'calibrate' ? CALIB : t === 'deduct' ? DEDUCT_COLOR : t === 'length' ? LENGTH_DRAFT : DRAFT);
+
+/** Isolate a signed number so RTL text doesn't move its minus sign to the end. */
+const ltr = (s: string) => `\u2066${s}\u2069`;
+const negArea = (m2: number) => `${ltr(`-${formatArea(m2).replace(/\s*מ״ר$/, '')}`)} מ״ר`;
+
+/** Areas first, then openings, then lines → openings and lines paint on top. */
+const KIND_ORDER = { area: 0, deduct: 1, length: 2 } as const;
 
 export interface BandRefs {
   livePoly: Ref<SVGPolygonElement>;
@@ -60,6 +82,19 @@ function MeasureOverlayImpl({ width, height, measurements, selectedId, calibrati
   const H = Math.ceil(height);
   const ppm = calibration?.pixelsPerMeter;
 
+  // Live geometry (vertex drag) + paint order + net areas. Recomputed only when
+  // measurement data changes — never on pan/zoom.
+  const { ordered, nets } = useMemo(() => {
+    const live = override
+      ? measurements.map((m) => (m.id === override.id ? { ...m, points: override.points } : m))
+      : measurements;
+    const ordered = [...live].sort((a, b) => KIND_ORDER[kindOf(a)] - KIND_ORDER[kindOf(b)]);
+    const nets = calibration ? computeNetAreas(live, { [live[0]?.page ?? 0]: calibration }) : null;
+    return { ordered, nets };
+  }, [measurements, override, calibration]);
+  const dc = draftColor(tool);
+  const polyTool = tool === 'area' || tool === 'deduct';
+
   return (
     <svg
       width={W}
@@ -69,6 +104,14 @@ function MeasureOverlayImpl({ width, height, measurements, selectedId, calibrati
       style={{ pointerEvents: 'none', zIndex: 20 }}
       data-testid="measure-overlay"
     >
+      <defs>
+        <pattern id={HATCH_ID} patternUnits="userSpaceOnUse" width={6} height={6} patternTransform="rotate(45)">
+          <rect width={6} height={6} fill="#fff" fillOpacity={0.55} />
+          <rect width={6} height={6} fill={DEDUCT_COLOR} fillOpacity={0.12} />
+          <line x1={0} y1={0} x2={0} y2={6} stroke={DEDUCT_COLOR} strokeOpacity={0.75} strokeWidth={1.6} />
+        </pattern>
+      </defs>
+
       {/* existing calibration (faint) */}
       {calibration && (
         <g opacity={0.65}>
@@ -97,47 +140,75 @@ function MeasureOverlayImpl({ width, height, measurements, selectedId, calibrati
       )}
 
       {/* measurements */}
-      {measurements.map((m) => {
-        const points = override && override.id === m.id ? override.points : m.points;
+      {ordered.map((m) => {
+        const points = m.points;
         if (points.length < 2) return null;
+        const kind = kindOf(m);
         const selected = m.id === selectedId;
+        const handles =
+          selected &&
+          points.map((p, i) => (
+            <circle key={i} cx={p.x} cy={p.y} fill="#fff" stroke={m.color} style={{ r: px(5), strokeWidth: px(2) }} />
+          ));
+
+        if (kind === 'length') {
+          const mid = polylineMidpoint(points);
+          const len = ppm ? formatLength(polylineLengthMeters(points, ppm)) : null;
+          return (
+            <g key={m.id} data-measurement-id={m.id} data-kind="length">
+              <polyline
+                points={pts(points)}
+                fill="none"
+                stroke={m.color}
+                strokeLinejoin="round"
+                strokeLinecap="round"
+                style={{ strokeWidth: px(selected ? 3 : 2.25) }}
+              />
+              {!selected &&
+                [points[0], points[points.length - 1]].map((p, i) => (
+                  <circle key={i} cx={p.x} cy={p.y} fill={m.color} style={{ r: px(3) }} />
+                ))}
+              <text x={mid.x} y={mid.y} dy="-0.5em" textAnchor="middle" fill="#111827" style={labelStyle(12)}>
+                <tspan fontWeight={600}>{m.label}</tspan>
+                {len && <tspan> · {len}</tspan>}
+              </text>
+              {handles}
+            </g>
+          );
+        }
+
         const bad = isSelfIntersecting(points);
         const c = centroid(points);
-        const area = ppm ? formatArea(polygonAreaM2(points, ppm)) : null;
+        const a = ppm ? polygonAreaM2(points, ppm) : null;
+        const net = kind === 'area' ? nets?.get(m.id) : undefined;
+        const lines: string[] = [];
+        if (a !== null) lines.push(kind === 'deduct' ? negArea(a) : formatArea(a));
+        if (net && net.deductIds.length) lines.push(`נטו ${formatArea(net.netM2)}`);
+        const deduct = kind === 'deduct';
         return (
-          <g key={m.id} data-measurement-id={m.id}>
+          <g key={m.id} data-measurement-id={m.id} data-kind={kind}>
             <polygon
               points={pts(points)}
-              fill={m.color}
-              fillOpacity={selected ? 0.32 : 0.18}
+              fill={deduct ? `url(#${HATCH_ID})` : m.color}
+              fillOpacity={deduct ? 1 : selected ? 0.32 : 0.18}
               stroke={bad ? WARN : m.color}
               strokeLinejoin="round"
               style={{
-                strokeWidth: px(selected ? 2.5 : 1.75),
+                strokeWidth: px(selected ? 2.5 : deduct ? 1.5 : 1.75),
                 strokeDasharray: bad ? `${px(6)} ${px(4)}` : undefined,
               }}
             />
-            <text x={c.x} y={c.y} textAnchor="middle" fill="#111827" style={labelStyle(13)}>
-              <tspan x={c.x} dy={area ? '-0.15em' : '0.35em'} fontWeight={600}>
+            <text x={c.x} y={c.y} textAnchor="middle" fill={deduct ? '#9f1239' : '#111827'} style={labelStyle(deduct ? 11 : 13)}>
+              <tspan x={c.x} dy={lines.length ? `${-0.15 - 0.625 * (lines.length - 1)}em` : '0.35em'} fontWeight={600}>
                 {m.label}
               </tspan>
-              {area && (
-                <tspan x={c.x} dy="1.25em">
-                  {area}
+              {lines.map((t, i) => (
+                <tspan key={i} x={c.x} dy="1.25em" fontWeight={i === 1 ? 600 : undefined}>
+                  {t}
                 </tspan>
-              )}
-            </text>
-            {selected &&
-              points.map((p, i) => (
-                <circle
-                  key={i}
-                  cx={p.x}
-                  cy={p.y}
-                  fill="#fff"
-                  stroke={m.color}
-                  style={{ r: px(5), strokeWidth: px(2) }}
-                />
               ))}
+            </text>
+            {handles}
           </g>
         );
       })}
@@ -149,7 +220,7 @@ function MeasureOverlayImpl({ width, height, measurements, selectedId, calibrati
             <polyline
               points={pts(draft)}
               fill="none"
-              stroke={tool === 'calibrate' ? CALIB : DRAFT}
+              stroke={dc}
               strokeLinejoin="round"
               style={{ strokeWidth: px(2) }}
             />
@@ -159,9 +230,9 @@ function MeasureOverlayImpl({ width, height, measurements, selectedId, calibrati
               key={i}
               cx={p.x}
               cy={p.y}
-              fill={i === 0 && tool === 'area' && draft.length >= 3 ? '#fff' : tool === 'calibrate' ? CALIB : DRAFT}
-              stroke={tool === 'calibrate' ? CALIB : DRAFT}
-              style={{ r: px(i === 0 && tool === 'area' && draft.length >= 3 ? 6 : 3.5), strokeWidth: px(2) }}
+              fill={i === 0 && polyTool && draft.length >= 3 ? '#fff' : dc}
+              stroke={dc}
+              style={{ r: px(i === 0 && polyTool && draft.length >= 3 ? 6 : 3.5), strokeWidth: px(2) }}
             />
           ))}
         </g>
@@ -171,7 +242,7 @@ function MeasureOverlayImpl({ width, height, measurements, selectedId, calibrati
       <polygon
         ref={band.livePoly}
         points=""
-        fill={DRAFT}
+        fill={dc}
         fillOpacity={0.12}
         stroke="none"
         visibility="hidden"
@@ -179,14 +250,14 @@ function MeasureOverlayImpl({ width, height, measurements, selectedId, calibrati
       />
       <line
         ref={band.closing}
-        stroke={DRAFT}
+        stroke={dc}
         strokeOpacity={0.5}
         visibility="hidden"
         style={{ strokeWidth: px(1.25), strokeDasharray: `${px(4)} ${px(4)}` }}
       />
       <line
         ref={band.segment}
-        stroke={tool === 'calibrate' ? CALIB : DRAFT}
+        stroke={dc}
         visibility="hidden"
         style={{ strokeWidth: px(2), strokeDasharray: `${px(6)} ${px(3)}` }}
       />

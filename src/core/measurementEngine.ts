@@ -2,7 +2,7 @@
  * Pure measurement math. All geometry is in PDF page units (see types.ts).
  * `pixelsPerMeter` = page units per real-world meter.
  */
-import type { AreaMeasurement, Calibration, Point } from './types';
+import type { AreaMeasurement, Calibration, MeasurementKind, Point } from './types';
 
 const EPS = 1e-9;
 
@@ -235,35 +235,262 @@ export function parseLengthInput(s: string): number | null {
   return null;
 }
 
+// ---------------------------------------------------------------------------
+// Measurement kinds, deductions, summaries
+// ---------------------------------------------------------------------------
+
+/** Kind of a measurement; legacy measurements without `kind` are areas. */
+export function kindOf(m: { kind?: MeasurementKind | string | null }): MeasurementKind {
+  return m.kind === 'deduct' || m.kind === 'length' ? m.kind : 'area';
+}
+
+/** Fill / stroke color used for every deduction (opening). */
+export const DEDUCT_COLOR = '#e11d48';
+
+export const KIND_LABELS: Record<MeasurementKind, string> = {
+  area: 'שטח',
+  deduct: 'ניכוי',
+  length: 'אורך',
+};
+
+/** Label prefix for auto-numbered measurements of each kind ("חזית 3", "פתח 1", "קו 2"). */
+export const KIND_LABEL_PREFIX: Record<MeasurementKind, string> = {
+  area: 'חזית',
+  deduct: 'פתח',
+  length: 'קו',
+};
+
+/** Minimum number of points a finished measurement of this kind needs. */
+export function minPoints(kind: MeasurementKind): number {
+  return kind === 'length' ? 2 : 3;
+}
+
+/** Next free number for an auto label of the given kind. */
+export function nextLabelNumber(measurements: AreaMeasurement[], kind: MeasurementKind): number {
+  const re = new RegExp(`^\\s*${KIND_LABEL_PREFIX[kind]}\\s*(\\d+)`);
+  let max = 0;
+  let count = 0;
+  for (const m of measurements) {
+    if (kindOf(m) !== kind) continue;
+    count++;
+    const r = re.exec(m.label);
+    if (r) max = Math.max(max, parseInt(r[1], 10));
+  }
+  return Math.max(max, count) + 1;
+}
+
+/** Total length of an open polyline, in meters. */
+export function polylineLengthMeters(points: Point[], pixelsPerMeter: number): number {
+  return polygonPerimeterMeters(points, pixelsPerMeter, false);
+}
+
+/** Shortest distance (page units) from p to an open polyline. */
+export function distanceToPolyline(p: Point, points: Point[]): number {
+  if (points.length === 0) return Infinity;
+  if (points.length === 1) return distance(p, points[0]);
+  let best = Infinity;
+  for (let i = 0; i < points.length - 1; i++) {
+    const a = points[i];
+    const b = points[i + 1];
+    const dx = b.x - a.x;
+    const dy = b.y - a.y;
+    const l2 = dx * dx + dy * dy;
+    const t = l2 > 0 ? Math.max(0, Math.min(1, ((p.x - a.x) * dx + (p.y - a.y) * dy) / l2)) : 0;
+    const d = Math.hypot(p.x - (a.x + t * dx), p.y - (a.y + t * dy));
+    if (d < best) best = d;
+  }
+  return best;
+}
+
+/** Point halfway along an open polyline (by length) — used for label placement. */
+export function polylineMidpoint(points: Point[]): Point {
+  const n = points.length;
+  if (n === 0) return { x: 0, y: 0 };
+  if (n === 1) return { ...points[0] };
+  let total = 0;
+  for (let i = 0; i < n - 1; i++) total += distance(points[i], points[i + 1]);
+  let half = total / 2;
+  for (let i = 0; i < n - 1; i++) {
+    const seg = distance(points[i], points[i + 1]);
+    if (half <= seg && seg > 0) {
+      const t = half / seg;
+      return {
+        x: points[i].x + (points[i + 1].x - points[i].x) * t,
+        y: points[i].y + (points[i + 1].y - points[i].y) * t,
+      };
+    }
+    half -= seg;
+  }
+  return { ...points[n - 1] };
+}
+
+function ppmOf(calibrations: Record<number, Calibration>, page: number): number | null {
+  const ppm = calibrations[page]?.pixelsPerMeter;
+  return typeof ppm === 'number' && Number.isFinite(ppm) && ppm > 0 ? ppm : null;
+}
+
+/**
+ * Map every deduction id → id of the area it belongs to (or null when its
+ * centroid lies inside no area on the same page). When areas are nested, the
+ * smallest containing area wins.
+ */
+export function assignDeductions(measurements: AreaMeasurement[]): Map<string, string | null> {
+  const areasByPage = new Map<number, { id: string; points: Point[]; px: number }[]>();
+  for (const m of measurements) {
+    if (kindOf(m) !== 'area' || m.points.length < 3) continue;
+    let list = areasByPage.get(m.page);
+    if (!list) areasByPage.set(m.page, (list = []));
+    list.push({ id: m.id, points: m.points, px: polygonAreaPx(m.points) });
+  }
+  const out = new Map<string, string | null>();
+  for (const m of measurements) {
+    if (kindOf(m) !== 'deduct') continue;
+    const c = centroid(m.points);
+    let best: { id: string; px: number } | null = null;
+    for (const a of areasByPage.get(m.page) ?? []) {
+      if ((!best || a.px < best.px) && pointInPolygon(c, a.points)) best = a;
+    }
+    out.set(m.id, best ? best.id : null);
+  }
+  return out;
+}
+
+export interface AreaNet {
+  grossM2: number;
+  deductM2: number;
+  netM2: number;
+  deductIds: string[];
+}
+
+/** Gross / deducted / net area of every area measurement on a calibrated page. */
+export function computeNetAreas(
+  measurements: AreaMeasurement[],
+  calibrations: Record<number, Calibration>,
+  assignment: Map<string, string | null> = assignDeductions(measurements),
+): Map<string, AreaNet> {
+  const out = new Map<string, AreaNet>();
+  for (const m of measurements) {
+    if (kindOf(m) !== 'area') continue;
+    const ppm = ppmOf(calibrations, m.page);
+    if (ppm === null) continue;
+    const g = polygonAreaM2(m.points, ppm);
+    out.set(m.id, { grossM2: g, deductM2: 0, netM2: g, deductIds: [] });
+  }
+  for (const m of measurements) {
+    const parent = assignment.get(m.id);
+    if (!parent) continue;
+    const net = out.get(parent);
+    const ppm = ppmOf(calibrations, m.page);
+    if (!net || ppm === null) continue;
+    const d = polygonAreaM2(m.points, ppm);
+    net.deductM2 += d;
+    net.netM2 -= d;
+    net.deductIds.push(m.id);
+  }
+  return out;
+}
+
+export interface MeasurementSummary {
+  /** Sum of area polygons (calibrated pages only). */
+  grossM2: number;
+  /** Sum of deductions that belong to an area (positive number). */
+  deductM2: number;
+  /** grossM2 − deductM2 */
+  netM2: number;
+  /** Sum of length polylines (calibrated pages only). */
+  lengthM: number;
+  /** Measurements on uncalibrated pages (excluded from every sum). */
+  uncalibrated: number;
+  /** Deductions whose centroid lies in no area (excluded from deductM2). */
+  orphanDeducts: number;
+}
+
+function summarize(
+  measurements: AreaMeasurement[],
+  calibrations: Record<number, Calibration>,
+): MeasurementSummary {
+  const assignment = assignDeductions(measurements);
+  const s: MeasurementSummary = { grossM2: 0, deductM2: 0, netM2: 0, lengthM: 0, uncalibrated: 0, orphanDeducts: 0 };
+  for (const m of measurements) {
+    const ppm = ppmOf(calibrations, m.page);
+    if (ppm === null) {
+      s.uncalibrated++;
+      continue;
+    }
+    const kind = kindOf(m);
+    if (kind === 'area') s.grossM2 += polygonAreaM2(m.points, ppm);
+    else if (kind === 'length') s.lengthM += polylineLengthMeters(m.points, ppm);
+    else if (assignment.get(m.id)) s.deductM2 += polygonAreaM2(m.points, ppm);
+    else s.orphanDeducts++;
+  }
+  s.netM2 = s.grossM2 - s.deductM2;
+  return s;
+}
+
+/** Totals for one page. */
+export function computePageSummary(
+  measurements: AreaMeasurement[],
+  calibrations: Record<number, Calibration>,
+  page: number,
+): MeasurementSummary {
+  return summarize(
+    measurements.filter((m) => m.page === page),
+    calibrations,
+  );
+}
+
+/** Totals for the whole document. */
+export function computeDocumentSummary(
+  measurements: AreaMeasurement[],
+  calibrations: Record<number, Calibration>,
+): MeasurementSummary {
+  return summarize(measurements, calibrations);
+}
+
 function csvCell(v: string | number): string {
   const s = String(v);
   return /[",\r\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
 }
 
+/**
+ * CSV (UTF-8 BOM, CRLF). Deduction rows carry a negative area; length rows
+ * fill only the length column. Totals rows at the end: gross, deductions
+ * (negative), net, total length. Deductions outside every area are listed
+ * but not counted in the totals (their "belongs to" cell is empty).
+ */
 export function measurementsToCSV(
   measurements: AreaMeasurement[],
   calibrations: Record<number, Calibration>,
 ): string {
   const rows: (string | number)[][] = [
-    ['מס׳', 'שם', 'עמוד', 'שטח (מ״ר)', 'היקף (מ׳)', 'מספר נקודות'],
+    ['מס׳', 'סוג', 'שם', 'עמוד', 'שטח (מ״ר)', 'היקף (מ׳)', 'אורך (מ׳)', 'מספר נקודות', 'שייך ל'],
   ];
-  let total = 0;
+  const assignment = assignDeductions(measurements);
+  const byId = new Map(measurements.map((m) => [m.id, m]));
   measurements.forEach((m, i) => {
-    const cal = calibrations[m.page];
-    const ppm = cal?.pixelsPerMeter;
-    const calibrated = typeof ppm === 'number' && Number.isFinite(ppm) && ppm > 0;
+    const kind = kindOf(m);
+    const ppm = ppmOf(calibrations, m.page);
     let area = '';
     let perim = '';
-    if (calibrated) {
-      const a = polygonAreaM2(m.points, ppm);
-      total += a;
-      area = a.toFixed(2);
-      perim = polygonPerimeterMeters(m.points, ppm).toFixed(2);
+    let len = '';
+    if (ppm !== null) {
+      if (kind === 'length') len = polylineLengthMeters(m.points, ppm).toFixed(2);
+      else {
+        const a = polygonAreaM2(m.points, ppm);
+        area = (kind === 'deduct' ? -a : a).toFixed(2);
+        perim = polygonPerimeterMeters(m.points, ppm).toFixed(2);
+      }
     }
-    rows.push([i + 1, m.label, m.page, area, perim, m.points.length]);
+    const parentId = assignment.get(m.id);
+    const parent = parentId ? (byId.get(parentId)?.label ?? '') : '';
+    rows.push([i + 1, KIND_LABELS[kind], m.label, m.page, area, perim, len, m.points.length, parent]);
   });
-  rows.push(['', 'סה״כ', '', total.toFixed(2), '', '']);
-  return '﻿' + rows.map((r) => r.map(csvCell).join(',')).join('\r\n') + '\r\n';
+  const s = computeDocumentSummary(measurements, calibrations);
+  rows.push(['', '', 'ברוטו', '', s.grossM2.toFixed(2), '', '', '', '']);
+  rows.push(['', '', 'ניכויים', '', (s.deductM2 === 0 ? 0 : -s.deductM2).toFixed(2), '', '', '', '']);
+  rows.push(['', '', 'נטו', '', s.netM2.toFixed(2), '', '', '', '']);
+  rows.push(['', '', 'סה״כ אורך', '', '', '', s.lengthM.toFixed(2), '', '']);
+  return '\uFEFF' + rows.map((r) => r.map(csvCell).join(',')).join('\r\n') + '\r\n';
 }
 
 let idCounter = 0;

@@ -137,3 +137,24 @@ export const IconList = (p: IconProps) => (
     <path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01" />
   </Svg>
 );
+
+/** Opening to deduct: hatched rectangle with a minus badge. */
+export const IconDeduct = (p: IconProps) => (
+  <Svg {...p}>
+    <rect x="3" y="5" width="13" height="14" rx="1" />
+    <path d="M3 11l6-6M3 17 15 5M7 19l9-9M13 19l3-3" strokeWidth={1.2} />
+    <circle cx="18.5" cy="17.5" r="4" fill="currentColor" fillOpacity={0.15} />
+    <path d="M16.5 17.5h4" />
+  </Svg>
+);
+
+/** Length: open polyline with end ticks. */
+export const IconLength = (p: IconProps) => (
+  <Svg {...p}>
+    <path d="M3 18 9 9l6 6 6-9" />
+    <circle cx="3" cy="18" r="1.4" fill="currentColor" />
+    <circle cx="9" cy="9" r="1.2" fill="currentColor" />
+    <circle cx="15" cy="15" r="1.2" fill="currentColor" />
+    <circle cx="21" cy="6" r="1.4" fill="currentColor" />
+  </Svg>
+);

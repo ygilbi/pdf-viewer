@@ -1,20 +1,27 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useViewer } from '../state/store';
 import { getPdfClient } from '../core/pdfClient';
-import type { Point } from '../core/types';
+import type { AreaMeasurement, MeasurementKind, Point, ToolId } from '../core/types';
 import {
+  DEDUCT_COLOR,
+  KIND_LABEL_PREFIX,
   MEASUREMENT_COLORS,
   computePixelsPerMeter,
   distance,
+  distanceToPolyline,
   formatArea,
   formatLength,
   isSelfIntersecting,
   lengthMeters,
   nearestVertex,
+  kindOf,
+  minPoints,
   newId,
+  nextLabelNumber,
   parseLengthInput,
   pointInPolygon,
   polygonAreaM2,
+  polylineLengthMeters,
   snapAngle,
 } from '../core/measurementEngine';
 import { ViewportController } from './viewer/Viewport';
@@ -58,13 +65,31 @@ function isTypingTarget(t: EventTarget | null): boolean {
   return el.isContentEditable || el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.tagName === 'SELECT';
 }
 
-function nextLabelNumber(labels: string[]): number {
-  let max = 0;
-  for (const l of labels) {
-    const m = /חזית\s*(\d+)/.exec(l);
-    if (m) max = Math.max(max, parseInt(m[1], 10));
-  }
-  return Math.max(max, labels.length) + 1;
+const LINE_HIT_PX = 7; // pan-tool hit radius around a length polyline
+
+/** Drawing tool → kind of measurement it creates (null for pan / calibrate). */
+function toolKind(t: ToolId): MeasurementKind | null {
+  return t === 'area' || t === 'deduct' || t === 'length' ? t : null;
+}
+const isPolygonTool = (t: ToolId) => t === 'area' || t === 'deduct';
+
+/** Rubber-band colour per tool (keep in sync with MeasureOverlay's draft colours). */
+function toolColor(t: ToolId, bad = false): string {
+  if (bad) return OVERLAY_WARN_COLOR;
+  if (t === 'calibrate') return '#7c3aed';
+  if (t === 'deduct') return DEDUCT_COLOR;
+  if (t === 'length') return '#d97706';
+  return '#2563eb';
+}
+
+/** Topmost measurement under a page point: lines first, then openings, then areas. */
+function hitTest(p: Point, ms: AreaMeasurement[], page: number, lineSlop: number): AreaMeasurement | undefined {
+  const onPage = ms.filter((m) => m.page === page).reverse();
+  return (
+    onPage.find((m) => kindOf(m) === 'length' && distanceToPolyline(p, m.points) <= lineSlop) ??
+    onPage.find((m) => kindOf(m) === 'deduct' && pointInPolygon(p, m.points)) ??
+    onPage.find((m) => kindOf(m) === 'area' && pointInPolygon(p, m.points))
+  );
 }
 
 export default function ViewerCanvas() {
@@ -181,7 +206,8 @@ export default function ViewerCanvas() {
       const closing = closingRef.current;
       const readout = readoutRef.current;
       const p = cursorPage();
-      const drawing = s.numPages > 0 && (s.tool === 'area' || (s.tool === 'calibrate' && s.draft.length < 2));
+      const drawing = s.numPages > 0 && (toolKind(s.tool) !== null || (s.tool === 'calibrate' && s.draft.length < 2));
+      const polyTool = isPolygonTool(s.tool);
       const active = drawing && p !== null && gesture.kind !== 'pan' && gesture.kind !== 'pinch' && gesture.kind !== 'vertex';
       const d = s.draft;
       const ppm = s.calibrations[s.currentPage]?.pixelsPerMeter;
@@ -200,34 +226,44 @@ export default function ViewerCanvas() {
       let bad = false;
       let nearFirst = false;
       if (poly && closing) {
-        const on = active && s.tool === 'area' && d.length >= 2;
+        const on = active && polyTool && d.length >= 2;
         show(poly, on);
         show(closing, on);
         if (on && p) {
           const all = [...d, p];
           bad = isSelfIntersecting(all);
           poly.setAttribute('points', all.map((q) => `${q.x},${q.y}`).join(' '));
-          poly.setAttribute('fill', bad ? OVERLAY_WARN_COLOR : '#2563eb');
+          poly.setAttribute('fill', toolColor(s.tool, bad));
           closing.setAttribute('x1', String(p.x));
           closing.setAttribute('y1', String(p.y));
           closing.setAttribute('x2', String(d[0].x));
           closing.setAttribute('y2', String(d[0].y));
         }
-        const stroke = bad ? OVERLAY_WARN_COLOR : s.tool === 'calibrate' ? '#7c3aed' : '#2563eb';
+        const stroke = toolColor(s.tool, bad);
         if (seg && seg.getAttribute('stroke') !== stroke) seg.setAttribute('stroke', stroke);
       }
-      if (p && s.tool === 'area' && d.length >= 3) nearFirst = distance(p, d[0]) * vp.zoom <= CLOSE_PX;
+      if (p && polyTool && d.length >= 3) nearFirst = distance(p, d[0]) * vp.zoom <= CLOSE_PX;
 
       if (readout) {
         let text = '';
         let warn = false;
         if (active && p) {
-          if (s.tool === 'area') {
+          if (s.tool === 'length') {
+            if (!ppm) {
+              text = 'יש לכייל קנה מידה';
+              warn = true;
+            } else if (d.length === 0) text = 'לחץ על נקודת ההתחלה';
+            else {
+              text = formatLength(polylineLengthMeters([...d, p], ppm));
+              if (d.length >= 2) text += ' · לחיצה כפולה / Enter לסיום';
+            }
+          } else if (polyTool) {
             if (!ppm) {
               text = 'יש לכייל קנה מידה';
               warn = true;
             } else if (d.length >= 2) {
-              text = formatArea(polygonAreaM2([...d, p], ppm));
+              const a = polygonAreaM2([...d, p], ppm);
+              text = s.tool === 'deduct' ? `פתח: ${formatArea(a)}` : formatArea(a);
             } else if (d.length === 0) {
               text = 'לחץ להוספת נקודה';
             }
@@ -273,20 +309,23 @@ export default function ViewerCanvas() {
     hooks.current = { updateBand, updateCursor };
 
     // ---- actions ------------------------------------------------------------
-    const closeArea = () => {
+    const finishDraft = () => {
       const s = st();
+      const kind = toolKind(s.tool);
+      if (!kind) return;
       const pts: Point[] = [];
       for (const p of s.draft) {
         if (!pts.length || distance(pts[pts.length - 1], p) * vp.zoom > 0.5) pts.push(p);
       }
-      if (pts.length > 1 && distance(pts[0], pts[pts.length - 1]) * vp.zoom <= 0.5) pts.pop();
-      if (pts.length < 3) return;
+      if (kind !== 'length' && pts.length > 1 && distance(pts[0], pts[pts.length - 1]) * vp.zoom <= 0.5) pts.pop();
+      if (pts.length < minPoints(kind)) return;
       s.addMeasurement({
         id: newId(),
         page: s.currentPage,
-        label: `חזית ${nextLabelNumber(s.measurements.map((m) => m.label))}`,
+        kind,
+        label: `${KIND_LABEL_PREFIX[kind]} ${nextLabelNumber(s.measurements, kind)}`,
         points: pts,
-        color: MEASUREMENT_COLORS[s.measurements.length % MEASUREMENT_COLORS.length],
+        color: kind === 'deduct' ? DEDUCT_COLOR : MEASUREMENT_COLORS[s.measurements.length % MEASUREMENT_COLORS.length],
       });
       s.setDraft([]);
     };
@@ -296,7 +335,7 @@ export default function ViewerCanvas() {
       if (s.numPages === 0) return;
       const raw = vp.toPage(sx, sy);
       if (s.tool === 'pan') {
-        const hit = [...s.measurements].reverse().find((m) => m.page === s.currentPage && pointInPolygon(raw, m.points));
+        const hit = hitTest(raw, s.measurements, s.currentPage, LINE_HIT_PX / vp.zoom);
         s.select(hit ? hit.id : null);
         return;
       }
@@ -307,16 +346,17 @@ export default function ViewerCanvas() {
         s.setDraft([...d, p]);
         return;
       }
-      // area
+      // area / deduct / length
+      const kind = toolKind(s.tool)!;
       const now = performance.now();
       const dbl = lastClick && now - lastClick.t < DBL_MS && Math.hypot(sx - lastClick.x, sy - lastClick.y) < 6;
       lastClick = dbl ? null : { t: now, x: sx, y: sy };
       if (dbl) {
-        if (d.length >= 3) closeArea();
+        if (d.length >= minPoints(kind)) finishDraft();
         return;
       }
-      if (d.length >= 3 && distance(raw, d[0]) * vp.zoom <= CLOSE_PX) {
-        closeArea();
+      if (kind !== 'length' && d.length >= 3 && distance(raw, d[0]) * vp.zoom <= CLOSE_PX) {
+        finishDraft();
         return;
       }
       if (s.selectedId) s.select(null);
@@ -496,7 +536,8 @@ export default function ViewerCanvas() {
           if (g.kind === 'pending') click(q.x, q.y);
           else if (g.kind === 'pan' && g.clickOnUp && !g.moved) click(q.x, q.y);
           else if (g.kind === 'vertex') {
-            if (g.points.length >= 3) st().updateMeasurement(g.mid, { points: g.points });
+            const m = st().measurements.find((x) => x.id === g.mid);
+            if (m && g.points.length >= minPoints(kindOf(m))) st().updateMeasurement(g.mid, { points: g.points });
           }
         }
         if (g.kind === 'vertex') queueOverride(null);
@@ -591,7 +632,7 @@ export default function ViewerCanvas() {
           break;
         case 'Enter':
         case 'NumpadEnter':
-          if (s.tool === 'area' && s.draft.length >= 3) closeArea();
+          if (toolKind(s.tool) && s.draft.length >= minPoints(toolKind(s.tool)!)) finishDraft();
           else handled = false;
           break;
         default:
