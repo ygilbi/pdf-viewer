@@ -58,7 +58,11 @@ class MainThreadRenderer {
   private schedulerP: Promise<import('./renderQueue').RenderScheduler<MainJob>> | null = null;
   private libP = Promise.all([import('pdfjs-dist'), import('./renderQueue')]).then(([pdfjs, rq]) => {
     pdfjs.GlobalWorkerOptions.workerSrc = pdfjsWorkerUrl;
-    return { pdfjs, rq };
+    // Resume the most urgent render slice first (same as the worker).
+    const ch = new MessageChannel();
+    const slices = new rq.PriorityYield(() => ch.port2.postMessage(0));
+    ch.port1.onmessage = () => slices.runNext();
+    return { pdfjs, rq, slices };
   });
 
   async open(file: File): Promise<PdfDocumentInfo> {
@@ -118,6 +122,13 @@ class MainThreadRenderer {
     job.active.task?.cancel();
   }
 
+  setPriority(id: number, priority: number): void {
+    const job = this.jobs.get(id);
+    if (!job) return;
+    job.priority = priority;
+    void this.schedulerP?.then((s) => s.reprioritize());
+  }
+
   close(): void {
     this.gen++;
     for (const id of [...this.jobs.keys()]) this.cancel(id);
@@ -132,7 +143,7 @@ class MainThreadRenderer {
   }
 
   private async run(job: MainJob): Promise<void> {
-    const { rq } = await this.libP;
+    const { rq, slices } = await this.libP;
     try {
       if (!this.ready) throw new Error('No document is open');
       const { pages } = await this.ready;
@@ -150,7 +161,7 @@ class MainThreadRenderer {
       }
       const ctx = canvas.getContext('2d', { alpha: false }) as CanvasRenderingContext2D | null;
       if (!ctx) throw new Error('Canvas 2D context unavailable');
-      await rq.renderInto(page, ctx, plan, job.active);
+      await rq.renderInto(page, ctx, plan, job.active, slices.forJob(() => job.priority));
       if (job.active.cancelled) throw rq.makeCancelError();
       const bitmap = await createImageBitmap(canvas);
       canvas.width = canvas.height = 0;
@@ -189,6 +200,15 @@ class PdfClientImpl implements PdfClient {
 
   constructor() {
     this.mode = workerRenderingLikelySupported() ? 'worker' : 'main';
+  }
+
+  /**
+   * Boot the render worker (and inside it pdf.js + its parser worker) ahead
+   * of the first open(), so their start-up overlaps with the user choosing a
+   * file instead of delaying the first pixels.
+   */
+  prewarm(): void {
+    if (this.mode === 'worker') this.ensureWorker();
   }
 
   open(file: File): Promise<PdfDocumentInfo> {
@@ -231,6 +251,12 @@ class PdfClientImpl implements PdfClient {
         entry.reject(abortError('Render cancelled'));
         if (this.mode === 'worker') this.send({ type: 'cancel', id });
         else this.main?.cancel(id);
+      },
+      setPriority: (priority: number) => {
+        if (!this.renders.has(id)) return;
+        entry.opts = { ...entry.opts, priority };
+        if (this.mode === 'worker') this.send({ type: 'priority', id, priority });
+        else this.main?.setPriority(id, priority);
       },
     };
   }
@@ -405,4 +431,10 @@ export function getPdfClient(): PdfClient {
   return singleton;
 }
 
-if (typeof window !== 'undefined' && /[?&]bench\b/.test(window.location.search)) getPdfClient(); // expose the benchmark hook early
+// Pre-warm the worker shortly after app start (browser only; not in tests).
+if (typeof window !== 'undefined' && typeof document !== 'undefined' && !import.meta.env?.VITEST) {
+  const warm = () => (getPdfClient() as PdfClientImpl).prewarm();
+  const w = window as Window & { requestIdleCallback?: (cb: () => void, o?: { timeout: number }) => number };
+  if (w.requestIdleCallback) w.requestIdleCallback(warm, { timeout: 1000 });
+  else setTimeout(warm, 200);
+}

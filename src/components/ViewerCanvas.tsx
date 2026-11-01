@@ -43,7 +43,12 @@ import { emitZoom, registerViewer } from './viewer/commands';
  *    straight to DOM attributes.
  */
 
-const SETTLE_MS = 130;
+/** Debounce after the last view change before rendering the sharp layer. */
+const SETTLE_MS = 50;
+/** After a zoom animation's target changes (wheel notch / button), render the target view this soon. */
+const TARGET_MS = 40;
+/** While panning continuously at a fixed zoom, render the uncovered view at most this often. */
+const PAN_RENDER_MS = 150;
 const CLOSE_PX = 10; // close polygon when clicking this close to the first vertex
 const VERTEX_PX = 9; // vertex-handle hit radius
 const DRAG_PX_MOUSE = 4;
@@ -183,12 +188,17 @@ export default function ViewerCanvas() {
     const st = () => useViewer.getState();
 
     // ---- view change → zoom readout, stale-render cancel, debounce sharp ----
+    let targetTimer = 0;
+    let lastTargetKey = '';
+    let lastFrameZoom = 0;
+    let lastPanRender = 0;
     const settle = () => {
       settleTimer = 0;
       if (vp.isAnimating()) {
         settleTimer = window.setTimeout(settle, SETTLE_MS);
         return;
       }
+      lastPanRender = performance.now();
       layers.settle(vp.zoom, vp.visibleRect());
       if (interacting) {
         // Let the browser re-rasterise the vector overlay crisply at the final scale.
@@ -205,10 +215,34 @@ export default function ViewerCanvas() {
         world.style.willChange = 'transform';
         interacting = true;
       }
-      layers.viewChanged(vp.zoom, vp.visibleRect());
+      const target = vp.targetView();
+      layers.viewChanged(vp.zoom, vp.visibleRect(), target);
       updateBand();
       clearTimeout(settleTimer);
       settleTimer = window.setTimeout(settle, SETTLE_MS);
+      if (target && !/[?&]notarget\b/.test(location.search)) {
+        // Start the sharp render for where the animation will END while it plays.
+        // Rounded: the target pan is recomputed every frame (float noise must not reset the timer).
+        const tk = `${target.zoom.toPrecision(6)}|${target.visible.x.toFixed(1)}|${target.visible.y.toFixed(1)}`;
+        if (tk !== lastTargetKey) {
+          lastTargetKey = tk;
+          clearTimeout(targetTimer);
+          targetTimer = window.setTimeout(() => {
+            targetTimer = 0;
+            const t = vp.targetView();
+            if (t) layers.settle(t.zoom, t.visible);
+          }, TARGET_MS);
+        }
+      } else {
+        lastTargetKey = '';
+        // Slow continuous pan at a fixed zoom: don't wait for the pan to stop.
+        const now = performance.now();
+        if (vp.zoom === lastFrameZoom && now - lastPanRender >= PAN_RENDER_MS && !layers.isSharp(vp.zoom, vp.visibleRect())) {
+          lastPanRender = now;
+          layers.settle(vp.zoom, vp.visibleRect());
+        }
+      }
+      lastFrameZoom = vp.zoom;
     });
 
     registerViewer({
@@ -778,6 +812,7 @@ export default function ViewerCanvas() {
       window.removeEventListener('keyup', onKeyUp);
       window.removeEventListener('blur', onBlur);
       clearTimeout(settleTimer);
+      clearTimeout(targetTimer);
       cancelAnimationFrame(overrideFrame);
       unsubscribe();
       registerViewer(null);
@@ -804,7 +839,7 @@ export default function ViewerCanvas() {
     }
     vp.setPageSize(pw, ph);
     vp.fit(false);
-    layers.setPage(pageSizes, currentPage, { width: pw, height: ph });
+    layers.setPage(pageSizes, currentPage, { width: pw, height: ph }, pageSizes);
   }, [vp, pageSizes, currentPage, pw, ph]);
 
   // Rubber band / cursor depend on tool + draft + calibration.

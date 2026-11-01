@@ -4,38 +4,47 @@ import type { PageSize, PdfClient, Rect, RenderResult, RenderTask } from '../../
  * PDF raster layers of the viewer, managed imperatively (no React).
  *
  * Layer 1 — BASE: one full-page bitmap per page (longest side ≈ 2048 px,
- *   more on HiDPI screens, ≤ 3072), preceded by an instant ~512 px preview
- *   pass. Both are cached per page (LRU) so page switches are instant.
- *   Drawn into a 2D canvas that is CSS-scaled to exactly cover the page.
+ *   more on HiDPI screens, ≤ 3072), cached per page (LRU). There is no
+ *   low-res preview pass: for vector drawings the cost of a render is walking
+ *   the operator list, not pixels, so a 512 px preview costs almost as much
+ *   as the base and only delays it. Once the visible base is up, the
+ *   neighbouring pages' bases are prefetched (low priority) so next/previous
+ *   is instant, and an in-flight prefetch is adopted (re-prioritised) when the
+ *   user switches to that page. Drawn into a 2D canvas CSS-scaled to the page.
  *
- * Layer 2 — SHARP: when the view settles, the visible part of the page
- *   (+ margin) is rendered at zoom × devicePixelRatio as ONE region bitmap and
- *   placed exactly over that region. Why one region instead of a 512 px tile
- *   grid: pdf.js cost per render call is dominated by walking the page's whole
- *   operator list (every vector path of a 50 MB drawing is interpreted even if
- *   it is clipped away), so N tiles ≈ N × the work of one region render. A
- *   single region render gets the screen sharp in the shortest time. To still
- *   get some of the reuse benefit of tiles, the last few region bitmaps are
- *   kept (LRU, pixel budget) so panning back / zooming back between recently
- *   seen views is instant; higher-resolution regions stack on top.
+ * Layer 2 — SHARP: the visible part of the page (+ margin) rendered at
+ *   zoom × devicePixelRatio as ONE region bitmap placed exactly over that
+ *   region. Why one region instead of a 512 px tile grid: pdf.js cost per
+ *   render call is dominated by walking the page's whole operator list (every
+ *   vector path is interpreted even if clipped away), so N tiles ≈ N × the
+ *   work of one region render. The render for the *final* view of a zoom
+ *   animation starts while the animation still plays (see ViewerCanvas), and
+ *   after it lands a larger "halo" region at the same scale is rendered in
+ *   the background so short pans stay sharp. The last few region bitmaps are
+ *   kept (LRU, pixel budget) so panning / zooming back is instant; sharper
+ *   regions stack on top.
  *
- *   Each region canvas uses a `bitmaprenderer` context, so the ImageBitmap
- *   from the worker is handed to the compositor without a copy. Canvases are
- *   positioned with transforms (float precision) rather than left/top
- *   (layout units are 1/64 px, which would be visible at 64× zoom).
+ *   Region (and hi-res) canvases use a `bitmaprenderer` context, so the
+ *   ImageBitmap from the worker is handed to the compositor without a copy.
+ *   Canvases are positioned with transforms (float precision) rather than
+ *   left/top (layout units are 1/64 px, which would be visible at 64× zoom).
+ *
+ * Priorities (higher first; the worker resumes the most urgent render slice
+ * first, so background work pauses while a visible render runs).
  */
 
-const PREVIEW_LONG_SIDE = 512;
 const MAX_TILES = 4;
 const TILE_PIXEL_BUDGET = 36 * 1024 * 1024;
 const MAX_SIDE = 4096;
 const MAX_PIXELS = 16 * 1024 * 1024;
-const BASE_CACHE_PAGES = 4;
-const PREVIEW_CACHE_PAGES = 48;
+const HALO_PIXELS = 12 * 1024 * 1024;
+const BASE_CACHE_PAGES = 5;
 
-const PRIO_PREVIEW = 100;
 const PRIO_SHARP = 90;
 const PRIO_BASE = 80;
+const PRIO_HALO = 40;
+const PRIO_PREFETCH = 30;
+// (thumbnails use 0)
 
 interface CachedBitmap {
   bitmap: ImageBitmap;
@@ -63,6 +72,11 @@ interface Plan {
   /** Visible ∩ page — what must be covered. */
   need: Rect;
   desired: number;
+}
+
+interface View {
+  zoom: number;
+  visible: Rect;
 }
 
 const isAbort = (e: unknown) => (e as { name?: string } | null)?.name === 'AbortError';
@@ -106,6 +120,9 @@ class LRU<V extends CachedBitmap> {
       oldest.bitmap.close();
     }
   }
+  has(k: number): boolean {
+    return this.map.has(k);
+  }
   clear(): void {
     for (const v of this.map.values()) v.bitmap.close();
     this.map.clear();
@@ -117,18 +134,32 @@ export function baseLongSide(): number {
   return Math.round(Math.min(3072, 2048 * Math.max(1, Math.min(dpr, 1.5))));
 }
 
+function snapToGrid(region: Rect, scale: number, pw: number, ph: number): Rect {
+  const x0 = Math.floor(region.x * scale) / scale;
+  const y0 = Math.floor(region.y * scale) / scale;
+  const x1 = Math.min(Math.ceil((region.x + region.width) * scale) / scale, Math.max(pw, x0 + 1 / scale));
+  const y1 = Math.min(Math.ceil((region.y + region.height) * scale) / scale, Math.max(ph, y0 + 1 / scale));
+  return { x: x0, y: y0, width: x1 - x0, height: y1 - y0 };
+}
+
+const fitsCanvas = (r: Rect, s: number, maxPixels = MAX_PIXELS) =>
+  r.width * s <= MAX_SIDE && r.height * s <= MAX_SIDE && r.width * r.height * s * s <= maxPixels;
+
 export class PageLayers {
   private docKey: unknown = undefined;
+  private sizes: PageSize[] = [];
   private page = 0;
   private size: PageSize = { width: 0, height: 0 };
   private baseScale = 1;
-  /** 0 = nothing drawn, 1 = preview, 2 = full base. */
+  /** 0 = nothing drawn, 2 = full base (1 was the old preview level). */
   private baseLevel = 0;
-  private baseTasks: RenderTask[] = [];
+  /** Base renders in flight, by page (the current page and prefetches). */
+  private baseInflight = new Map<number, { task: RenderTask; scale: number }>();
   private baseCache = new LRU<CachedBitmap>(BASE_CACHE_PAGES);
-  private previewCache = new LRU<CachedBitmap>(PREVIEW_CACHE_PAGES);
   private tiles: Tile[] = [];
   private inflight: Inflight | null = null;
+  private halo: Inflight | null = null;
+  private lastView: View | null = null;
   private useCounter = 0;
   private destroyed = false;
   /** Called when a new sharp tile is shown (for tests / debugging). */
@@ -148,87 +179,118 @@ export class PageLayers {
   get tileCount(): number {
     return this.tiles.length;
   }
-  /** 0 = nothing drawn, 1 = preview, 2 = full base. */
+  /** 0 = nothing drawn, 2 = full base. */
   get baseQuality(): number {
     return this.baseLevel;
   }
 
   /**
    * True when what is on screen is as sharp as it is going to get for this
-   * view: the full base when it suffices, otherwise a shown sharp tile at the
-   * planned scale covering the visible part of the page. (Benchmarks / tests.)
+   * view: the full base when it suffices, otherwise a shown
+   * sharp tile at the planned scale covering the visible part of the page.
+   * (Benchmarks / tests.)
    */
   isSharp(zoom: number, visible: Rect): boolean {
-    if (!this.page || this.baseLevel < 1) return false;
+    if (!this.page || this.baseLevel < 2) return false;
     const plan = this.plan(zoom, visible);
-    if (!plan) return this.baseLevel === 2;
+    if (!plan) return true;
     return this.tiles.some((t) => t.shown && t.scale >= plan.scale * 0.98 && contains(t.region, plan.need));
   }
 
-  /** Show `page`. `docKey` identifies the open document (caches reset when it changes). */
-  setPage(docKey: unknown, page: number, size: PageSize): void {
+  /**
+   * Show `page`. `docKey` identifies the open document (caches reset when it
+   * changes); `sizes` (all page sizes) enables prefetching the neighbours.
+   */
+  setPage(docKey: unknown, page: number, size: PageSize, sizes?: PageSize[]): void {
     if (docKey !== this.docKey) {
       this.docKey = docKey;
       this.baseCache.clear();
-      this.previewCache.clear();
+      this.cancelAllBase();
     }
-    this.cancelBase();
+    this.sizes = sizes ?? [];
     this.cancelSharp();
+    this.cancelHalo();
     this.clearTiles();
+    this.lastView = null;
     this.page = page;
     this.size = size;
     this.baseLevel = 0;
     mark('viewer:setPage');
+    // Keep prefetches that are still useful (neighbours), drop the rest.
+    for (const [p, f] of [...this.baseInflight]) {
+      if (Math.abs(p - page) > 1) {
+        f.task.cancel();
+        this.baseInflight.delete(p);
+      }
+    }
     const longest = Math.max(size.width, size.height);
     if (!(longest > 0)) return;
     this.baseScale = baseLongSide() / longest;
 
     const full = this.baseCache.get(page);
     if (full) {
-      this.drawBase(full.bitmap, 2);
+      this.drawBase(full.bitmap);
+      this.startBackground();
       return;
     }
-    const prev = this.previewCache.get(page);
-    if (prev) this.drawBase(prev.bitmap, 1);
-    else {
-      this.baseCanvas.style.visibility = 'hidden';
-      this.requestBase(PREVIEW_LONG_SIDE / longest, PRIO_PREVIEW, (r) => {
-        this.previewCache.set(r.page, { bitmap: r.bitmap });
-        if (r.page === this.page && this.baseLevel < 1) this.drawBase(r.bitmap, 1);
-      });
+    this.baseCanvas.style.visibility = 'hidden';
+    const pending = this.baseInflight.get(page);
+    if (pending && Math.abs(pending.scale / this.baseScale - 1) < 0.01) {
+      pending.task.setPriority?.(PRIO_BASE); // adopt the prefetch
+    } else {
+      pending?.task.cancel();
+      this.requestBase(page, this.baseScale, PRIO_BASE);
     }
-    this.requestBase(this.baseScale, PRIO_BASE, (r) => {
-      this.baseCache.set(r.page, { bitmap: r.bitmap });
-      if (r.page === this.page) this.drawBase(r.bitmap, 2);
-    });
   }
 
   /** Remove everything (no document). */
   clear(): void {
-    this.cancelBase();
+    this.cancelAllBase();
     this.cancelSharp();
+    this.cancelHalo();
     this.clearTiles();
     this.page = 0;
     this.baseLevel = 0;
+    this.lastView = null;
     this.baseCanvas.style.visibility = 'hidden';
   }
 
   /**
-   * Cheap; called on every view frame. Cancels a now-stale in-flight sharp
-   * render and hides tiles that would be heavily minified (GPU scaling has
-   * no mipmaps → thin lines would shimmer/alias; the base layer is better).
+   * Cheap; called on every view frame. `target` is where a running zoom
+   * animation will end. Cancels a sharp render that serves neither the
+   * current nor the target view, and hides tiles that would be heavily
+   * minified (GPU scaling has no mipmaps → thin lines would shimmer/alias;
+   * the base layer is better).
    */
-  viewChanged(zoom: number, visible: Rect): void {
+  viewChanged(zoom: number, visible: Rect, target?: View | null): void {
     if (!this.page) return;
+    this.lastView = { zoom, visible };
     const desired = zoom * dpr();
     for (const t of this.tiles) this.setShown(t, t.scale <= desired * 3);
     if (this.inflight) {
       const plan = this.plan(zoom, visible);
-      if (!plan || !this.inflightServes(plan)) this.cancelSharp();
+      const tplan = target ? this.plan(target.zoom, target.visible) : null;
+      const f = this.inflight;
+      const keep =
+        (plan && this.inflightServes(f, plan)) ||
+        (tplan && this.inflightServes(f, tplan)) ||
+        // Panning at the same zoom: a render that still overlaps the view is worth finishing.
+        (!target && plan && Math.abs(f.scale / plan.scale - 1) < 0.02 && !!intersect(f.region, plan.need));
+      if (!keep) this.cancelSharp();
+    }
+    if (this.halo) {
+      // A halo stays useful while panning at the same zoom; drop it on zoom.
+      const plan = this.plan(target?.zoom ?? zoom, target?.visible ?? visible);
+      if (!plan || Math.abs(this.halo.scale / plan.scale - 1) > 0.02 || !intersect(this.halo.region, plan.need)) {
+        this.cancelHalo();
+      }
     }
   }
 
-  /** Called once the view has settled: make the visible area sharp. */
+  /**
+   * Make `visible` at `zoom` sharp: called when the view settles, and with
+   * the target view while a zoom animation is still running.
+   */
   settle(zoom: number, visible: Rect): void {
     if (!this.page || this.destroyed) return;
     const plan = this.plan(zoom, visible);
@@ -243,7 +305,11 @@ export class PageLayers {
       covering.used = ++this.useCounter;
       return;
     }
-    if (this.inflight && this.inflightServes(plan)) return;
+    if (this.inflight && this.inflightServes(this.inflight, plan)) return;
+    if (this.halo && this.inflightServes(this.halo, plan)) {
+      this.halo.task.setPriority?.(PRIO_SHARP); // the background halo is exactly what we need now
+      return;
+    }
     this.cancelSharp();
 
     const page = this.page;
@@ -259,6 +325,7 @@ export class PageLayers {
           return;
         }
         this.addTile(r);
+        this.startHalo(r.scale);
       },
       (e) => {
         if (this.inflight === entry) this.inflight = null;
@@ -271,7 +338,6 @@ export class PageLayers {
     this.destroyed = true;
     this.clear();
     this.baseCache.clear();
-    this.previewCache.clear();
   }
 
   // ---- internals ------------------------------------------------------------
@@ -290,50 +356,105 @@ export class PageLayers {
       intersect({ x: visible.x - mx, y: visible.y - my, width: visible.width + 2 * mx, height: visible.height + 2 * my }, pageRect) ??
       need;
     let scale = desired;
-    const fits = (r: Rect, s: number) => r.width * s <= MAX_SIDE && r.height * s <= MAX_SIDE && r.width * r.height * s * s <= MAX_PIXELS;
-    if (!fits(region, scale)) {
+    if (!fitsCanvas(region, scale)) {
       region = need; // drop the margin before dropping resolution
-      if (!fits(region, scale)) {
+      if (!fitsCanvas(region, scale)) {
         scale = Math.min(scale, MAX_SIDE / region.width, MAX_SIDE / region.height, Math.sqrt(MAX_PIXELS / (region.width * region.height)));
         scale *= 0.999;
       }
     }
     if (scale <= this.baseScale * 1.05) return null;
     // Snap the region to the output pixel grid so bitmap pixels map 1:1.
-    const x0 = Math.floor(region.x * scale) / scale;
-    const y0 = Math.floor(region.y * scale) / scale;
-    const x1 = Math.min(Math.ceil((region.x + region.width) * scale) / scale, Math.max(pw, x0 + 1 / scale));
-    const y1 = Math.min(Math.ceil((region.y + region.height) * scale) / scale, Math.max(ph, y0 + 1 / scale));
-    return { scale, region: { x: x0, y: y0, width: x1 - x0, height: y1 - y0 }, need, desired };
+    return { scale, region: snapToGrid(region, scale, pw, ph), need, desired };
   }
 
-  private inflightServes(plan: Plan): boolean {
-    const f = this.inflight;
-    if (!f) return false;
+  private inflightServes(f: Inflight, plan: Plan): boolean {
     return Math.abs(f.scale / plan.scale - 1) < 0.02 && contains(f.region, plan.need);
   }
 
-  private requestBase(scale: number, priority: number, onDone: (r: RenderResult) => void): void {
+  /** After a sharp tile: render a larger region at the same scale in the background. */
+  private startHalo(scale: number): void {
+    const v = this.lastView;
+    if (/[?&]nohalo\b/.test(location.search)) return; // TEMP
+    if (!v || this.halo || this.inflight) return;
+    const plan = this.plan(v.zoom, v.visible);
+    if (!plan || Math.abs(plan.scale / scale - 1) > 0.02) return;
+    const { width: pw, height: ph } = this.size;
+    const pageRect = { x: 0, y: 0, width: pw, height: ph };
+    const vis = v.visible;
+    // Up to half a viewport on each side, shrunk to the pixel budget.
+    let f = 0.5;
+    let region: Rect | null = null;
+    while (f >= 0.2) {
+      region = intersect(
+        { x: vis.x - vis.width * f, y: vis.y - vis.height * f, width: vis.width * (1 + 2 * f), height: vis.height * (1 + 2 * f) },
+        pageRect,
+      );
+      if (region && fitsCanvas(region, scale, HALO_PIXELS)) break;
+      region = null;
+      f -= 0.1;
+    }
+    if (!region) return;
+    const covered = this.tiles.find((t) => t.scale >= scale * 0.98 && contains(t.region, region!));
+    const best = this.tiles.filter((t) => Math.abs(t.scale / scale - 1) < 0.02).reduce((a, t) => Math.max(a, t.region.width * t.region.height), 0);
+    if (covered || region.width * region.height < best * 1.3) return;
+    region = snapToGrid(region, scale, pw, ph);
     const page = this.page;
-    const task = this.client.render({ page, scale, priority });
-    this.baseTasks.push(task);
+    const task = this.client.render({ page, scale, region, priority: PRIO_HALO });
+    const entry: Inflight = { task, page, scale, region };
+    this.halo = entry;
     task.promise.then(
       (r) => {
-        this.baseTasks = this.baseTasks.filter((t) => t !== task);
+        if (this.halo === entry) this.halo = null;
+        if (this.destroyed || r.page !== this.page) {
+          r.bitmap.close();
+          return;
+        }
+        this.addTile(r);
+      },
+      (e) => {
+        if (this.halo === entry) this.halo = null;
+        if (!isAbort(e)) console.warn('[viewer] halo render failed', e);
+      },
+    );
+  }
+
+  private requestBase(page: number, scale: number, priority: number): void {
+    const task = this.client.render({ page, scale, priority });
+    const entry = { task, scale };
+    this.baseInflight.set(page, entry);
+    task.promise.then(
+      (r) => {
+        if (this.baseInflight.get(page) === entry) this.baseInflight.delete(page);
         if (this.destroyed) {
           r.bitmap.close();
           return;
         }
-        onDone(r); // caches take ownership of the bitmap
+        this.baseCache.set(r.page, { bitmap: r.bitmap }); // cache takes ownership
+        if (r.page === this.page && this.baseLevel < 2) {
+          this.drawBase(r.bitmap);
+          this.startBackground();
+        }
       },
       (e) => {
-        this.baseTasks = this.baseTasks.filter((t) => t !== task);
+        if (this.baseInflight.get(page) === entry) this.baseInflight.delete(page);
         if (!isAbort(e)) console.warn('[viewer] base render failed', e);
       },
     );
   }
 
-  private drawBase(bitmap: ImageBitmap, level: number): void {
+  /** Low-priority work once the visible page's base is up: prefetch the neighbours' bases. */
+  private startBackground(): void {
+    const page = this.page;
+    for (const p of [page + 1, page - 1]) {
+      const sz = this.sizes[p - 1];
+      if (!sz || this.baseInflight.has(p) || this.baseCache.has(p)) continue;
+      const longest = Math.max(sz.width, sz.height);
+      if (longest > 0) this.requestBase(p, baseLongSide() / longest, PRIO_PREFETCH);
+    }
+  }
+
+  private drawBase(bitmap: ImageBitmap): void {
     const c = this.baseCanvas;
     if (c.width !== bitmap.width || c.height !== bitmap.height) {
       c.width = bitmap.width;
@@ -346,33 +467,44 @@ export class PageLayers {
     c.style.height = `${bitmap.height}px`;
     c.style.transform = `scale(${this.size.width / bitmap.width}, ${this.size.height / bitmap.height})`;
     c.style.visibility = 'visible';
-    this.baseLevel = level;
-    mark(level === 2 ? 'viewer:base' : 'viewer:preview');
+    this.baseLevel = 2;
+    mark('viewer:base');
   }
 
-  private addTile(r: RenderResult): void {
+  /** A canvas holding `bitmap` without a copy (bitmaprenderer), positioned at the origin. */
+  private makeBitmapCanvas(bitmap: ImageBitmap): HTMLCanvasElement {
     const canvas = document.createElement('canvas');
     const ctx = canvas.getContext('bitmaprenderer');
-    const w = r.bitmap.width;
-    const h = r.bitmap.height;
-    if (ctx) ctx.transferFromImageBitmap(r.bitmap);
+    const w = bitmap.width;
+    const h = bitmap.height;
+    if (ctx) ctx.transferFromImageBitmap(bitmap);
     else {
       canvas.width = w;
       canvas.height = h;
-      canvas.getContext('2d')?.drawImage(r.bitmap, 0, 0);
-      r.bitmap.close();
+      canvas.getContext('2d')?.drawImage(bitmap, 0, 0);
+      bitmap.close();
     }
-    const region = { x: r.region.x, y: r.region.y, width: w / r.scale, height: h / r.scale };
     const s = canvas.style;
     s.position = 'absolute';
     s.left = '0';
     s.top = '0';
+    s.transformOrigin = '0 0';
+    s.pointerEvents = 'none';
+    return canvas;
+  }
+
+  private addTile(r: RenderResult): void {
+    const w = r.bitmap.width;
+    const h = r.bitmap.height;
+    const canvas = this.makeBitmapCanvas(r.bitmap);
+    const region = { x: r.region.x, y: r.region.y, width: w / r.scale, height: h / r.scale };
+    const s = canvas.style;
     s.width = `${w}px`;
     s.height = `${h}px`;
-    s.transformOrigin = '0 0';
     s.transform = `translate(${region.x}px, ${region.y}px) scale(${1 / r.scale})`;
-    s.pointerEvents = 'none';
     const tile: Tile = { canvas, scale: r.scale, region, pixels: w * h, used: ++this.useCounter, shown: true };
+    if (this.lastView) tile.shown = tile.scale <= this.lastView.zoom * dpr() * 3;
+    if (!tile.shown) s.display = 'none';
 
     // Drop tiles that the new one makes redundant (fully covered, not sharper).
     for (const t of [...this.tiles]) {
@@ -401,24 +533,37 @@ export class PageLayers {
   }
 
   private removeTile(t: Tile): void {
-    t.canvas.remove();
+    releaseCanvas(t.canvas);
     this.tiles = this.tiles.filter((x) => x !== t);
   }
 
   private clearTiles(): void {
-    for (const t of this.tiles) t.canvas.remove();
+    for (const t of this.tiles) releaseCanvas(t.canvas);
     this.tiles = [];
   }
 
-  private cancelBase(): void {
-    for (const t of this.baseTasks) t.cancel();
-    this.baseTasks = [];
+  private cancelAllBase(): void {
+    for (const f of this.baseInflight.values()) f.task.cancel();
+    this.baseInflight.clear();
   }
 
   private cancelSharp(): void {
     this.inflight?.task.cancel();
     this.inflight = null;
   }
+
+  private cancelHalo(): void {
+    this.halo?.task.cancel();
+    this.halo = null;
+  }
+}
+
+/** Detach a raster canvas and free its pixels now rather than at GC. */
+function releaseCanvas(c: HTMLCanvasElement): void {
+  c.remove();
+  const br = c.getContext('bitmaprenderer');
+  if (br) br.transferFromImageBitmap(null);
+  else c.width = c.height = 0;
 }
 
 function dpr(): number {

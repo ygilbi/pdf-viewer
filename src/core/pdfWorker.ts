@@ -10,7 +10,7 @@
  * may carry a numeric `seq` which is echoed back on the matching `opened` /
  * `error` response so the client can drop responses for superseded opens.
  */
-import { GlobalWorkerOptions, getDocument } from 'pdfjs-dist';
+import { GlobalWorkerOptions, PDFWorker, getDocument } from 'pdfjs-dist';
 import type { PDFDocumentLoadingTask, PDFDocumentProxy } from 'pdfjs-dist';
 import pdfjsWorkerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
 import type { Rect, WorkerRequest, WorkerResponse } from './types';
@@ -95,12 +95,26 @@ const fakeOwnerDocument = { fonts: workerFonts };
 // ---------------------------------------------------------------------------
 
 GlobalWorkerOptions.workerSrc = pdfjsWorkerUrl;
-if (typeof Worker !== 'undefined') {
+// ONE long-lived PDFWorker shared by all documents, passed explicitly to
+// getDocument(). pdf.js only destroys workers it created itself, so closing a
+// document never tears down the parser that the next document uses. (Setting
+// GlobalWorkerOptions.workerPort instead makes loadingTask.destroy() destroy
+// the cached port worker → the next open fails with "PDFWorker.fromPort - the
+// worker is being destroyed".)
+let parserWorker: PDFWorker | null = null;
+function getParserWorker(): PDFWorker | undefined {
+  if (parserWorker && !parserWorker.destroyed) return parserWorker;
+  parserWorker = null;
+  if (typeof Worker === 'undefined') return undefined; // pdf.js creates a per-document fake worker
   try {
-    GlobalWorkerOptions.workerPort = new Worker(pdfjsWorkerUrl, { type: 'module', name: 'pdfjs-parser' });
+    parserWorker = new PDFWorker({
+      port: new Worker(pdfjsWorkerUrl, { type: 'module', name: 'pdfjs-parser' }),
+      verbosity: 0,
+    } as unknown as ConstructorParameters<typeof PDFWorker>[0]);
   } catch {
-    GlobalWorkerOptions.workerPort = null;
+    parserWorker = null;
   }
+  return parserWorker ?? undefined;
 }
 
 function canRenderHere(): string | null {
@@ -116,6 +130,8 @@ function canRenderHere(): string | null {
   return null;
 }
 const unsupportedReason = canRenderHere();
+// Start pdf.js' parser worker now (the client pre-warms this worker before the first open).
+if (!unsupportedReason) getParserWorker();
 
 // ---------------------------------------------------------------------------
 // Document state
@@ -163,6 +179,7 @@ function openDoc(file: File | ArrayBuffer, seq: number | undefined) {
     if (myGen !== gen) throw makeCancelError();
     const loadingTask = getDocument({
       data,
+      worker: getParserWorker(),
       isOffscreenCanvasSupported: true,
       isEvalSupported: true,
       disableFontFace: !fontFaceSupported,

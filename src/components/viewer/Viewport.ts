@@ -95,6 +95,31 @@ export class ViewportController {
     return this.anim !== null;
   }
 
+  /**
+   * Where the running zoom animation will end (zoom + visible page rect), or
+   * null when not animating. Lets the raster layer start the sharp render for
+   * the final view while the animation is still playing.
+   */
+  targetView(): { zoom: number; visible: Rect } | null {
+    const a = this.anim;
+    if (!a) return null;
+    let z: number;
+    let px: number;
+    let py: number;
+    if (a.kind === 'tween') {
+      z = a.z1;
+      px = a.px1;
+      py = a.py1;
+    } else {
+      z = a.target;
+      const k = z / this.zoom;
+      px = a.ax - (a.ax - this.panX) * k;
+      py = a.ay - (a.ay - this.panY) * k;
+    }
+    [px, py] = this.clampedPan(z, px, py);
+    return { zoom: z, visible: { x: -px / z, y: -py / z, width: this.cw / z, height: this.ch / z } };
+  }
+
   // ---- mutators -------------------------------------------------------------
 
   setContainerSize(w: number, h: number): void {
@@ -208,12 +233,15 @@ export class ViewportController {
 
   /** Keep at least `m` px of the page inside the viewport. */
   private clampPan(): void {
-    if (!(this.cw > 0 && this.pw > 0)) return;
+    [this.panX, this.panY] = this.clampedPan(this.zoom, this.panX, this.panY);
+  }
+
+  private clampedPan(zoom: number, px: number, py: number): [number, number] {
+    if (!(this.cw > 0 && this.pw > 0)) return [px, py];
     const m = Math.min(80, this.cw / 4, this.ch / 4);
-    const sw = this.pw * this.zoom;
-    const sh = this.ph * this.zoom;
-    this.panX = Math.min(this.cw - m, Math.max(m - sw, this.panX));
-    this.panY = Math.min(this.ch - m, Math.max(m - sh, this.panY));
+    const sw = this.pw * zoom;
+    const sh = this.ph * zoom;
+    return [Math.min(this.cw - m, Math.max(m - sw, px)), Math.min(this.ch - m, Math.max(m - sh, py))];
   }
 
   invalidate(): void {
@@ -226,12 +254,12 @@ export class ViewportController {
     if (!a) return;
     if (a.kind === 'smooth') {
       const ratio = a.target / this.zoom;
-      if (Math.abs(Math.log(ratio)) < 0.002) {
+      if (Math.abs(Math.log(ratio)) < 0.003) {
         this.applyZoomAbout(a.target, a.ax, a.ay);
         this.anim = null;
       } else {
-        // exponential approach in log space: ~95% in 8 frames
-        this.applyZoomAbout(this.zoom * Math.pow(ratio, 0.33), a.ax, a.ay);
+        // exponential approach in log space: ~95% in 6 frames, done in ~9
+        this.applyZoomAbout(this.zoom * Math.pow(ratio, 0.4), a.ax, a.ay);
       }
       return;
     }
