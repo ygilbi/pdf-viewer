@@ -2,7 +2,7 @@
  * Pure measurement math. All geometry is in PDF page units (see types.ts).
  * `pixelsPerMeter` = page units per real-world meter.
  */
-import type { AreaMeasurement, Calibration, Category, MeasurementKind, Point } from './types';
+import type { AreaMeasurement, Calibration, Category, MarkupKind, MeasurementKind, Point } from './types';
 
 const EPS = 1e-9;
 
@@ -239,32 +239,72 @@ export function parseLengthInput(s: string): number | null {
 // Measurement kinds, deductions, summaries
 // ---------------------------------------------------------------------------
 
-/** Kind of a measurement; legacy measurements without `kind` are areas. */
-export function kindOf(m: { kind?: MeasurementKind | string | null }): MeasurementKind {
-  return m.kind === 'deduct' || m.kind === 'length' || m.kind === 'count' ? m.kind : 'area';
+/** Every kind stored in the `measurements` array: takeoff kinds + markup / annotation kinds. */
+export type AnyKind = MeasurementKind | MarkupKind;
+
+export const MARKUP_KINDS: readonly MarkupKind[] = ['note', 'text', 'rect', 'cloud', 'arrow', 'pen', 'highlight'];
+
+/** True for annotation kinds (not takeoff quantities — excluded from every sum / CSV total). */
+export function isMarkupKind(kind: unknown): kind is MarkupKind {
+  return typeof kind === 'string' && (MARKUP_KINDS as readonly string[]).includes(kind);
+}
+
+/** True when the measurement is a markup / annotation (see {@link isMarkupKind}). */
+export function isMarkup(m: { kind?: unknown }): boolean {
+  return isMarkupKind(m.kind);
+}
+
+/**
+ * Kind of a measurement; legacy measurements without `kind` (or with an
+ * unknown kind) are areas. Returns markup kinds as-is.
+ */
+export function kindOf(m: { kind?: AnyKind | string | null }): AnyKind {
+  if (m.kind === 'deduct' || m.kind === 'length' || m.kind === 'count') return m.kind;
+  if (isMarkupKind(m.kind)) return m.kind;
+  return 'area';
+}
+
+/** Takeoff measurements only (markup removed). */
+export function takeoffOnly<T extends { kind?: unknown }>(measurements: T[]): T[] {
+  return measurements.some((m) => isMarkupKind(m.kind)) ? measurements.filter((m) => !isMarkupKind(m.kind)) : measurements;
 }
 
 /** Fill / stroke color used for every deduction (opening). */
 export const DEDUCT_COLOR = '#e11d48';
 
-export const KIND_LABELS: Record<MeasurementKind, string> = {
+export const KIND_LABELS: Record<AnyKind, string> = {
   area: 'שטח',
   deduct: 'ניכוי',
   length: 'אורך',
   count: 'ספירה',
+  note: 'הערה',
+  text: 'טקסט',
+  rect: 'מלבן',
+  cloud: 'ענן תיקון',
+  arrow: 'חץ',
+  pen: 'עט',
+  highlight: 'מרקר',
 };
 
 /** Label prefix for auto-numbered measurements of each kind ("חזית 3", "פתח 1", "קו 2"). */
-export const KIND_LABEL_PREFIX: Record<MeasurementKind, string> = {
+export const KIND_LABEL_PREFIX: Record<AnyKind, string> = {
   area: 'חזית',
   deduct: 'פתח',
   length: 'קו',
   count: 'פריט',
+  note: 'הערה',
+  text: 'טקסט',
+  rect: 'מלבן',
+  cloud: 'ענן',
+  arrow: 'חץ',
+  pen: 'עט',
+  highlight: 'מרקר',
 };
 
 /** Minimum number of points a finished measurement of this kind needs. */
-export function minPoints(kind: MeasurementKind): number {
-  return kind === 'count' ? 1 : kind === 'length' ? 2 : 3;
+export function minPoints(kind: AnyKind): number {
+  if (kind === 'count' || kind === 'note' || kind === 'text') return 1;
+  return kind === 'area' || kind === 'deduct' ? 3 : 2;
 }
 
 // ---------------------------------------------------------------------------
@@ -311,7 +351,7 @@ export function sanitizeCategories(v: unknown): Category[] | null {
 }
 
 /** Next free number for an auto label of the given kind. */
-export function nextLabelNumber(measurements: AreaMeasurement[], kind: MeasurementKind): number {
+export function nextLabelNumber(measurements: AreaMeasurement[], kind: AnyKind): number {
   const re = new RegExp(`^\\s*${KIND_LABEL_PREFIX[kind]}\\s*(\\d+)`);
   let max = 0;
   let count = 0;
@@ -481,6 +521,7 @@ function summarize(
   const s = emptySummary();
   for (const m of all) {
     const kind = kindOf(m);
+    if (isMarkupKind(kind)) continue;
     const mine = inGroup(m);
     if (kind === 'count') {
       if (mine) s.count += m.points.length;
@@ -526,7 +567,7 @@ export function computeCategorySummaries(
   calibrations: Record<number, Calibration>,
   categories: Category[] = [],
 ): CategorySummary[] {
-  const present = new Set(measurements.map(categoryKey));
+  const present = new Set(takeoffOnly(measurements).map(categoryKey));
   const keys = [
     ...categories.map((c) => c.id).filter((id) => present.has(id)),
     ...[...present].filter((k) => k && !categories.some((c) => c.id === k)),
@@ -579,10 +620,11 @@ function csvCell(v: string | number): string {
  * `categories` resolves category ids to names (defaults to DEFAULT_CATEGORIES).
  */
 export function buildMeasurementRows(
-  measurements: AreaMeasurement[],
+  all: AreaMeasurement[],
   calibrations: Record<number, Calibration>,
   categories: Category[] = DEFAULT_CATEGORIES,
 ): string[][] {
+  const measurements = takeoffOnly(all);
   const rows: (string | number)[][] = [
     ['מס׳', 'סוג', 'שם', 'קטגוריה', 'עמוד', 'שטח (מ״ר)', 'היקף (מ׳)', 'אורך (מ׳)', 'כמות', 'מספר נקודות', 'שייך ל'],
   ];
@@ -627,6 +669,17 @@ export function buildMeasurementRows(
   total('נטו', 5, s.netM2.toFixed(2));
   total('סה״כ אורך', 7, s.lengthM.toFixed(2));
   total('סה״כ כמות', 8, s.count);
+  // Notes / text labels (not quantities) in their own section after the totals.
+  const notes = all.filter((m) => (m.kind === 'note' || m.kind === 'text') && (m.text ?? '').trim());
+  if (notes.length) {
+    rows.push(['', '', '', '', '', '', '', '', '', '', '']);
+    rows.push(['', 'הערות', 'שם', 'קטגוריה', 'עמוד', 'טקסט', '', '', '', '', '']);
+    notes.forEach((m, i) => {
+      const key = categoryKey(m);
+      const text = (m.text ?? '').trim().replace(/\s*\r?\n\s*/g, ' / ');
+      rows.push([i + 1, KIND_LABELS[kindOf(m)], m.label, key ? categoryName(key, categories) : '', m.page, text, '', '', '', '', '']);
+    });
+  }
   return rows.map((r) => r.map(String));
 }
 

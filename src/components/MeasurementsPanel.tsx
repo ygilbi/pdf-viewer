@@ -11,6 +11,7 @@ import {
   computePageSummary,
   formatArea,
   formatLength,
+  isMarkupKind,
   kindOf,
   polygonAreaM2,
   polygonPerimeterMeters,
@@ -18,7 +19,24 @@ import {
   type CategorySummary,
   type MeasurementSummary,
 } from '../core/measurementEngine';
-import { IconCount, IconDeduct, IconLength, IconList, IconPolygon, IconTrash } from './ui/icons';
+import {
+  IconArrow,
+  IconCloud,
+  IconCount,
+  IconDeduct,
+  IconEdit,
+  IconHighlight,
+  IconLength,
+  IconList,
+  IconNote,
+  IconPen,
+  IconPolygon,
+  IconRect,
+  IconText,
+  IconTrash,
+} from './ui/icons';
+import type { MarkupKind } from '../core/types';
+import { useMarkup } from '../state/markupStore';
 import { MeasurementCategorySelect } from './CategorySelect';
 
 const KIND_BADGE: Record<MeasurementKind, string> = {
@@ -51,7 +69,7 @@ interface RowProps {
 }
 
 const Row = memo(function Row({ m, calibration, netM2, parentLabel, selected, showPage, onSelect, onRename, onDelete }: RowProps) {
-  const kind = kindOf(m);
+  const kind = kindOf(m) as MeasurementKind; // takeoff rows only (markup has its own list)
   const KindIcon = KIND_ICON[kind];
   const [label, setLabel] = useState(m.label);
   useEffect(() => setLabel(m.label), [m.label]);
@@ -199,13 +217,15 @@ export default function MeasurementsPanel({ onHide, headerActions }: PanelProps 
   const [grouped, setGrouped] = useState(false);
   const categories = useViewer((s) => s.categories);
 
-  const visible = useMemo(
-    () =>
-      allPages
-        ? [...measurements].sort((a, b) => a.page - b.page)
-        : measurements.filter((m) => m.page === currentPage),
-    [allPages, measurements, currentPage],
-  );
+  const { visible, visibleMarkup } = useMemo(() => {
+    const scope = allPages
+      ? [...measurements].sort((a, b) => a.page - b.page)
+      : measurements.filter((m) => m.page === currentPage);
+    return {
+      visible: scope.filter((m) => !isMarkupKind(m.kind)),
+      visibleMarkup: scope.filter((m) => isMarkupKind(m.kind)),
+    };
+  }, [allPages, measurements, currentPage]);
 
   const derived = useMemo(() => {
     const assignment = assignDeductions(measurements);
@@ -303,7 +323,7 @@ export default function MeasurementsPanel({ onHide, headerActions }: PanelProps 
       </div>
 
       <div className="min-h-0 flex-1 overflow-y-auto">
-        {visible.length === 0 ? (
+        {visible.length === 0 && visibleMarkup.length > 0 ? null : visible.length === 0 ? (
           <div className="p-4 text-xs leading-relaxed text-slate-400">
             <p className="mb-2 font-semibold text-slate-300">
               {allPages ? 'אין מדידות במסמך' : `אין מדידות בדף ${currentPage}`}
@@ -333,6 +353,12 @@ export default function MeasurementsPanel({ onHide, headerActions }: PanelProps 
               <li>
                 מדידת אורך <kbd className="rounded bg-slate-700 px-1 font-mono text-[10px]">L</kbd> — לחיצה כפולה או{' '}
                 <kbd className="rounded bg-slate-700 px-1 font-mono text-[10px]">Enter</kbd> לסיום
+              </li>
+              <li>
+                הערות וסימונים — הערה <kbd className="rounded bg-slate-700 px-1 font-mono text-[10px]">K</kbd>, טקסט{' '}
+                <kbd className="rounded bg-slate-700 px-1 font-mono text-[10px]">X</kbd>, ענן תיקון{' '}
+                <kbd className="rounded bg-slate-700 px-1 font-mono text-[10px]">U</kbd>, חץ{' '}
+                <kbd className="rounded bg-slate-700 px-1 font-mono text-[10px]">W</kbd> ועוד (אינם נכללים בכמויות)
               </li>
             </ol>
           </div>
@@ -364,6 +390,9 @@ export default function MeasurementsPanel({ onHide, headerActions }: PanelProps 
               </Fragment>
             ))}
           </ul>
+        )}
+        {visibleMarkup.length > 0 && (
+          <MarkupList items={visibleMarkup} selectedId={selectedId} showPage={allPages} onSelect={onSelect} onDelete={removeMeasurement} />
         )}
       </div>
 
@@ -452,5 +481,110 @@ function CategoryHeader({ g, color, count }: { g: CategorySummary; color: string
         {parts.length ? parts.join(' · ') : '—'}
       </div>
     </li>
+  );
+}
+
+const MARKUP_ICON: Record<MarkupKind, typeof IconPolygon> = {
+  note: IconNote,
+  text: IconText,
+  rect: IconRect,
+  cloud: IconCloud,
+  arrow: IconArrow,
+  pen: IconPen,
+  highlight: IconHighlight,
+};
+
+/** "הערות וסימונים": annotations (not quantities) with jump-to, edit and delete. */
+function MarkupList({
+  items,
+  selectedId,
+  showPage,
+  onSelect,
+  onDelete,
+}: {
+  items: AreaMeasurement[];
+  selectedId: string | null;
+  showPage: boolean;
+  onSelect(m: AreaMeasurement): void;
+  onDelete(id: string): void;
+}) {
+  const edit = (m: AreaMeasurement) => {
+    onSelect(m);
+    useMarkup.getState().startEditing(m.id);
+  };
+  return (
+    <section data-testid="markup-list" className="border-t border-slate-700">
+      <div className="sticky top-0 z-10 flex items-center gap-1.5 border-b border-slate-700 bg-slate-900/95 px-2 py-1 text-[11px]">
+        <IconNote size={12} className="text-amber-300" />
+        <span className="font-semibold text-slate-200">הערות וסימונים</span>
+        <span className="text-slate-500">({items.length})</span>
+        <span className="ms-auto text-[10px] text-slate-500">לא נכללים בכמויות</span>
+      </div>
+      <ul>
+        {items.map((m) => {
+          const kind = kindOf(m) as MarkupKind;
+          const Icon = MARKUP_ICON[kind] ?? IconNote;
+          const editable = kind === 'note' || kind === 'text';
+          const text = (m.text ?? '').trim();
+          const selected = m.id === selectedId;
+          return (
+            <li
+              key={m.id}
+              data-testid="markup-row"
+              data-kind={kind}
+              onClick={() => onSelect(m)}
+              onDoubleClick={() => editable && edit(m)}
+              className={
+                'group flex cursor-pointer items-start gap-1.5 border-b border-slate-700/60 px-2 py-1.5 text-xs ' +
+                (selected ? 'bg-sky-900/40 ring-1 ring-inset ring-sky-600' : 'hover:bg-slate-700/40')
+              }
+            >
+              <Icon size={14} className="mt-0.5 shrink-0" style={{ color: m.color }} />
+              <div className="min-w-0 flex-1">
+                <div className="flex items-center gap-1.5">
+                  <span className="font-medium text-slate-200">{m.label}</span>
+                  <span className="text-[10px] text-slate-500">{KIND_LABELS[kind]}</span>
+                  {showPage && <span className="ms-auto shrink-0 text-[10px] text-slate-500">דף {m.page}</span>}
+                </div>
+                {editable && (
+                  <div
+                    className={`mt-0.5 line-clamp-3 whitespace-pre-wrap break-words ${text ? 'text-slate-300' : 'italic text-slate-500'}`}
+                    data-testid="markup-row-text"
+                  >
+                    {text || 'ללא טקסט'}
+                  </div>
+                )}
+              </div>
+              {editable && (
+                <button
+                  type="button"
+                  title="ערוך טקסט"
+                  aria-label="ערוך טקסט"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    edit(m);
+                  }}
+                  className="shrink-0 rounded p-0.5 text-slate-500 opacity-60 hover:bg-slate-700 hover:text-slate-200 group-hover:opacity-100"
+                >
+                  <IconEdit size={14} />
+                </button>
+              )}
+              <button
+                type="button"
+                title="מחק"
+                aria-label="מחק סימון"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onDelete(m.id);
+                }}
+                className="shrink-0 rounded p-0.5 text-slate-500 opacity-60 hover:bg-red-900/50 hover:text-red-300 group-hover:opacity-100"
+              >
+                <IconTrash size={14} />
+              </button>
+            </li>
+          );
+        })}
+      </ul>
+    </section>
   );
 }

@@ -1,0 +1,235 @@
+import { describe, expect, it } from 'vitest';
+import { PDFDocument, degrees } from 'pdf-lib';
+import { paragraphIsRtl, toVisual } from './bidi';
+import { pageGeometry, pdfToViewport, viewportSize, viewportToPdf } from './pageTransform';
+import { formatPageRanges, parsePageRanges } from './pageSelection';
+import { hatchSegments } from './hatch';
+import { buildExportPdf, numberNotes } from './buildPdf';
+import { buildExportCsv } from './csvExport';
+import { DEFAULT_CATEGORIES } from '../core/measurementEngine';
+import { DEFAULT_CSV_OPTIONS, DEFAULT_PDF_OPTIONS, type PdfBuildInput } from './types';
+import type { AreaMeasurement, Calibration } from '../core/types';
+
+// Node builtins without @types/node (typed as any).
+const nodeFs = () => import('node:fs' as string) as Promise<{ readFileSync(p: string | URL): Uint8Array }>;
+const pdfjs = () => import('pdfjs-dist/legacy/build/pdf.mjs' as string);
+
+describe('bidi toVisual', () => {
+  it('reverses Hebrew, keeps numbers LTR', () => {
+    expect(toVisual('שטח 12.50 מ״ר')).toBe('ר״מ 12.50 חטש');
+    expect(toVisual('נטו -3.25')).toBe('-3.25 וטנ');
+    expect(toVisual('1,234.56 מ׳')).toBe('׳מ 1,234.56');
+  });
+  it('keeps Latin runs and number+Latin groups in order', () => {
+    expect(toVisual('חלון W1 ×12')).toBe('W1 ×12 ןולח');
+    expect(toVisual('קומה A-101')).toBe('A-101 המוק');
+  });
+  it('mirrors brackets inside RTL', () => {
+    expect(toVisual('שטח (נטו)')).toBe('(וטנ) חטש');
+  });
+  it('leaves pure LTR text and numbers alone', () => {
+    expect(toVisual('Hello 123')).toBe('Hello 123');
+    expect(toVisual('12.5')).toBe('12.5');
+    expect(toVisual('')).toBe('');
+  });
+  it('LTR paragraph with a Hebrew word', () => {
+    expect(toVisual('Page שלום 3', false)).toBe('Page 3 םולש'); // UBA: the number joins the RTL run
+  });
+  it('paragraph direction', () => {
+    expect(paragraphIsRtl('abc שלום')).toBe(false);
+    expect(paragraphIsRtl('12 שלום')).toBe(true);
+    expect(paragraphIsRtl('123')).toBe(true);
+  });
+});
+
+describe('page ranges', () => {
+  it('parses', () => {
+    expect(parsePageRanges('1-3,7', 10)).toEqual({ ok: true, pages: [1, 2, 3, 7] });
+    expect(parsePageRanges(' 3 , 1 – 2 ', 5)).toEqual({ ok: true, pages: [1, 2, 3] });
+    expect(parsePageRanges('8-', 10)).toEqual({ ok: true, pages: [8, 9, 10] });
+    expect(parsePageRanges('', 10)).toEqual({ ok: true, pages: [] });
+    expect(parsePageRanges('0-2', 10).ok).toBe(false);
+    expect(parsePageRanges('11', 10).ok).toBe(false);
+    expect(parsePageRanges('a', 10).ok).toBe(false);
+  });
+  it('formats', () => {
+    expect(formatPageRanges([7, 1, 2, 3])).toBe('1-3,7');
+    expect(formatPageRanges([])).toBe('');
+  });
+});
+
+describe('hatch', () => {
+  it('clips 45° lines to a square', () => {
+    const segs = hatchSegments(
+      [
+        { x: 0, y: 0 },
+        { x: 10, y: 0 },
+        { x: 10, y: 10 },
+        { x: 0, y: 10 },
+      ],
+      2,
+    );
+    expect(segs.length).toBeGreaterThan(5);
+    for (const [a, b] of segs) {
+      for (const p of [a, b]) {
+        expect(p.x).toBeGreaterThanOrEqual(-1e-9);
+        expect(p.x).toBeLessThanOrEqual(10 + 1e-9);
+        expect(p.y).toBeGreaterThanOrEqual(-1e-9);
+        expect(p.y).toBeLessThanOrEqual(10 + 1e-9);
+      }
+      expect(Math.abs(b.x - a.x - (b.y - a.y))).toBeLessThan(1e-9); // 45°
+    }
+  });
+});
+
+describe('viewport ↔ PDF transform (checked against pdf.js)', () => {
+  it.each([0, 90, 180, 270, -90, 450])('rotation %i with CropBox offset', async (rot) => {
+    const d = await PDFDocument.create();
+    const p = d.addPage([600, 800]);
+    p.setMediaBox(-5, 3, 600, 800);
+    p.setCropBox(20, 40, 500, 700);
+    p.setRotation(degrees(rot));
+    const doc = await (await pdfjs()).getDocument({ data: await d.save() }).promise;
+    const pg = await doc.getPage(1);
+    const vp = pg.getViewport({ scale: 1 });
+    const g = pageGeometry(p.getMediaBox(), p.getCropBox(), p.getRotation().angle);
+    const size = viewportSize(g);
+    expect(size.width).toBeCloseTo(vp.width, 6);
+    expect(size.height).toBeCloseTo(vp.height, 6);
+    for (const pt of [
+      { x: 20, y: 40 },
+      { x: 520, y: 40 },
+      { x: 133.3, y: 611.7 },
+    ]) {
+      const [vx, vy] = vp.convertToViewportPoint(pt.x, pt.y);
+      const mine = pdfToViewport(g, pt);
+      expect(mine.x).toBeCloseTo(vx, 6);
+      expect(mine.y).toBeCloseTo(vy, 6);
+      const back = viewportToPdf(g, mine);
+      expect(back.x).toBeCloseTo(pt.x, 6);
+      expect(back.y).toBeCloseTo(pt.y, 6);
+    }
+    await doc.destroy();
+  });
+
+  it('crop box larger than media box is clipped like pdf.js', () => {
+    const g = pageGeometry({ x: 0, y: 0, width: 100, height: 200 }, { x: -10, y: -10, width: 300, height: 300 }, 0);
+    expect(g).toEqual({ rotation: 0, x0: 0, y0: 0, x1: 100, y1: 200 });
+  });
+});
+
+// ---------------------------------------------------------------------------
+
+const cal: Calibration = { pixelsPerMeter: 28.346, p1: { x: 100, y: 700 }, p2: { x: 383.46, y: 700 }, meters: 10 };
+const ms: AreaMeasurement[] = [
+  { id: 'a', page: 1, label: 'חזית 1', kind: 'area', color: '#1f77b4', category: 'windows', points: [{ x: 100, y: 100 }, { x: 400, y: 100 }, { x: 400, y: 400 }, { x: 100, y: 400 }] },
+  { id: 'd', page: 1, label: 'פתח 1', kind: 'deduct', color: '#e11d48', points: [{ x: 150, y: 150 }, { x: 200, y: 150 }, { x: 200, y: 200 }, { x: 150, y: 200 }] },
+  { id: 'l', page: 2, label: 'קו 1', kind: 'length', color: '#2ca02c', points: [{ x: 50, y: 50 }, { x: 300, y: 50 }] },
+  { id: 'c', page: 2, label: 'W1', kind: 'count', color: '#ff7f0e', category: 'windows', points: [{ x: 60, y: 300 }, { x: 90, y: 300 }] },
+  { id: 'n', page: 2, label: 'הערה 1', kind: 'note', color: '#dc2626', text: 'לבדוק מידות 120 ס"מ', points: [{ x: 200, y: 200 }] },
+  { id: 'r', page: 1, label: 'ענן 1', kind: 'cloud', color: '#dc2626', points: [{ x: 420, y: 420 }, { x: 500, y: 480 }] },
+  { id: 'x', page: 3, label: 'חזית 2', kind: 'area', color: '#9467bd', points: [{ x: 10, y: 10 }, { x: 50, y: 10 }, { x: 50, y: 50 }] },
+];
+
+async function fonts() {
+  const fs = await nodeFs();
+  return {
+    regular: fs.readFileSync(new URL('./fonts/Alef-Regular.ttf', import.meta.url)),
+    bold: fs.readFileSync(new URL('./fonts/Alef-Bold.ttf', import.meta.url)),
+  };
+}
+
+describe('buildExportPdf', () => {
+  it('copies the selected pages (incl. a rotated one) and appends a summary', async () => {
+    const src = await PDFDocument.create();
+    for (let i = 0; i < 3; i++) {
+      const p = src.addPage([595, 842]);
+      p.drawText(`page ${i + 1}`, { x: 50, y: 800 });
+      if (i === 1) p.setRotation(degrees(90));
+    }
+    const bytes = await src.save();
+    const input: PdfBuildInput = {
+      docs: [{ id: 'doc1', name: 'test.pdf' }],
+      bytes: { doc1: bytes },
+      pages: [
+        { globalPage: 1, docId: 'doc1', localPage: 1 },
+        { globalPage: 2, docId: 'doc1', localPage: 2 },
+      ],
+      pageSizes: { 1: { width: 595, height: 842 }, 2: { width: 842, height: 595 }, 3: { width: 595, height: 842 } },
+      measurements: ms,
+      calibrations: { 1: cal, 2: cal },
+      categories: DEFAULT_CATEGORIES,
+      options: { ...DEFAULT_PDF_OPTIONS, legend: true },
+      fonts: await fonts(),
+      title: 'בדיקה',
+    };
+    const stages = new Set<string>();
+    const out = await buildExportPdf(input, (s) => stages.add(s));
+    expect([...stages]).toEqual(['load', 'pages', 'summary', 'save']);
+    const doc = await PDFDocument.load(out);
+    expect(doc.getPageCount()).toBe(3); // 2 drawing pages + 1 summary page
+    expect(doc.getPage(1).getRotation().angle).toBe(90);
+    // pdf.js can open it and sees the original text.
+    const pd = await (await pdfjs()).getDocument({ data: out }).promise;
+    const tc = await (await pd.getPage(1)).getTextContent();
+    expect(tc.items.map((i: { str: string }) => i.str).join(' ')).toContain('page 1');
+    await pd.destroy();
+  });
+
+  it('blank pages when drawings are off; cancel aborts', async () => {
+    const input: PdfBuildInput = {
+      docs: [{ id: 'doc1', name: 'x.pdf' }],
+      bytes: {},
+      pages: [{ globalPage: 1, docId: 'doc1', localPage: 1 }],
+      pageSizes: { 1: { width: 500, height: 300 } },
+      measurements: ms,
+      calibrations: { 1: cal },
+      categories: DEFAULT_CATEGORIES,
+      options: { ...DEFAULT_PDF_OPTIONS, drawings: false, summary: false },
+      fonts: await fonts(),
+      title: 'x',
+    };
+    const doc = await PDFDocument.load(await buildExportPdf(input));
+    expect(doc.getPageCount()).toBe(1);
+    expect(doc.getPage(0).getSize()).toEqual({ width: 500, height: 300 });
+    await expect(buildExportPdf(input, undefined, () => true)).rejects.toThrow('בוטל');
+  });
+
+  it('numbers notes in page order', () => {
+    const m = numberNotes({
+      pages: [
+        { globalPage: 2, docId: 'a', localPage: 2 },
+        { globalPage: 1, docId: 'a', localPage: 1 },
+      ],
+      measurements: [
+        { id: 'n1', page: 1, label: '', kind: 'note', color: '', points: [] },
+        { id: 'n2', page: 2, label: '', kind: 'note', color: '', points: [] },
+      ],
+    });
+    expect(m.get('n2')).toBe(1);
+    expect(m.get('n1')).toBe(2);
+  });
+});
+
+describe('buildExportCsv', () => {
+  it('only selected pages, BOM, filters', () => {
+    const csv = buildExportCsv(ms, { 1: cal, 2: cal }, DEFAULT_CATEGORIES, [1, 2], DEFAULT_CSV_OPTIONS);
+    expect(csv.startsWith('﻿')).toBe(true);
+    expect(csv).toContain('חזית 1');
+    expect(csv).not.toContain('חזית 2'); // page 3 not selected
+    expect(csv).toContain('לבדוק מידות');
+    const onlyCounts = buildExportCsv(ms, { 1: cal }, DEFAULT_CATEGORIES, [1, 2], {
+      ...DEFAULT_CSV_OPTIONS,
+      kinds: ['count'],
+      notes: false,
+      totals: false,
+      categoryTotals: false,
+    });
+    const lines = onlyCounts.trim().split('\r\n');
+    expect(lines.length).toBe(2); // header + W1
+    expect(lines[1]).toContain('W1');
+    const noRows = buildExportCsv(ms, { 1: cal }, DEFAULT_CATEGORIES, [1], { ...DEFAULT_CSV_OPTIONS, rows: false, notes: false });
+    expect(noRows).not.toContain('פתח 1');
+    expect(noRows).toContain('נטו');
+  });
+});

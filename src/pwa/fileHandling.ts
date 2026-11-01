@@ -22,21 +22,28 @@ declare global {
 
 export const isFileHandlingSupported = (): boolean => typeof window !== 'undefined' && 'launchQueue' in window;
 
-/** Opens the first launched PDF via `onFile`. `onFile` may change identity freely. */
-export function useFileLaunch(onFile: (file: File) => void | Promise<void>): void {
-  const ref = useRef(onFile);
-  ref.current = onFile;
+/** Delivers every launched file (in order) via `onFiles`. `onFiles` may change identity freely. */
+export function useFileLaunch(onFiles: (files: File[]) => void | Promise<void>): void {
+  const ref = useRef(onFiles);
+  ref.current = onFiles;
   useEffect(() => {
     const lq = typeof window !== 'undefined' ? window.launchQueue : undefined;
     if (!lq || typeof lq.setConsumer !== 'function') return;
     lq.setConsumer(async (params) => {
-      const handle = params?.files?.[0];
-      if (!handle || handle.kind !== 'file') return;
+      const handles = (params?.files ?? []).filter((h) => h.kind === 'file') as FileSystemFileHandle[];
+      if (!handles.length) return;
+      const files: File[] = [];
+      for (const h of handles) {
+        try {
+          files.push(await h.getFile());
+        } catch (err) {
+          console.error('[pwa] failed to read launched file', err);
+        }
+      }
       try {
-        const file = await (handle as FileSystemFileHandle).getFile();
-        await ref.current(file);
+        if (files.length) await ref.current(files);
       } catch (err) {
-        console.error('[pwa] failed to open launched file', err);
+        console.error('[pwa] failed to open launched files', err);
       }
     });
     // launchQueue has no unsubscribe; the ref keeps the latest callback.

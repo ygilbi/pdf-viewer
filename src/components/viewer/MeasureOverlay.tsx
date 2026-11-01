@@ -1,11 +1,23 @@
-import { memo, useMemo, type Ref } from 'react';
-import type { AreaMeasurement, Calibration, Point, ToolId } from '../../core/types';
+import { memo, useMemo, type ReactNode, type Ref } from 'react';
+import type { AreaMeasurement, Calibration, Point, Rect, ToolId } from '../../core/types';
+import {
+  DEFAULT_STROKE_WIDTH,
+  HIGHLIGHT_OPACITY,
+  NOTE_PIN,
+  arrowHeadSize,
+  cloudPath,
+  markupBounds,
+  notePinPath,
+  rectOfPoints,
+  textLineBaselines,
+} from '../../core/markupGeometry';
 import {
   DEDUCT_COLOR,
   centroid,
   computeNetAreas,
   formatArea,
   formatLength,
+  isMarkupKind,
   isSelfIntersecting,
   kindOf,
   polygonAreaM2,
@@ -47,12 +59,27 @@ const ltr = (s: string) => `\u2066${s}\u2069`;
 const negArea = (m2: number) => `${ltr(`-${formatArea(m2).replace(/\s*מ״ר$/, '')}`)} מ״ר`;
 
 /** Areas first, then openings, then lines → openings and lines paint on top. */
-const KIND_ORDER = { area: 0, deduct: 1, length: 2, count: 3 } as const;
+const KIND_ORDER = {
+  area: 0,
+  deduct: 1,
+  length: 2,
+  count: 3,
+  // markup paints above the takeoff: fills first, then lines, then text / pins
+  highlight: 4,
+  rect: 5,
+  cloud: 5,
+  pen: 6,
+  arrow: 6,
+  text: 7,
+  note: 8,
+} as const;
 
 export interface BandRefs {
   livePoly: Ref<SVGPolygonElement>;
   segment: Ref<SVGLineElement>;
   closing: Ref<SVGLineElement>;
+  /** Live preview path of a markup shape being dragged out. */
+  markup?: Ref<SVGPathElement>;
 }
 
 interface Props {
@@ -147,6 +174,7 @@ function MeasureOverlayImpl({ width, height, measurements, selectedId, calibrati
         const points = m.points;
         const kind = kindOf(m);
         const selected = m.id === selectedId;
+        if (isMarkupKind(kind)) return <MarkupShape key={m.id} m={m} selected={selected} />;
         if (kind === 'count') {
           if (points.length === 0) return null;
           const first = points[0];
@@ -296,6 +324,16 @@ function MeasureOverlayImpl({ width, height, measurements, selectedId, calibrati
         visibility="hidden"
         style={{ strokeWidth: px(1.25), strokeDasharray: `${px(4)} ${px(4)}` }}
       />
+      {band.markup && (
+        <path
+          ref={band.markup}
+          d=""
+          visibility="hidden"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          data-testid="live-markup"
+        />
+      )}
       <line
         ref={band.segment}
         stroke={dc}
@@ -307,4 +345,162 @@ function MeasureOverlayImpl({ width, height, measurements, selectedId, calibrati
 }
 
 export const MeasureOverlay = memo(MeasureOverlayImpl);
+
+const SELECT_COLOR = '#0ea5e9';
+const FONT = 'system-ui, "Segoe UI", Arial, sans-serif';
+
+function SelectBox({ r }: { r: Rect }) {
+  return (
+    <rect
+      x={r.x}
+      y={r.y}
+      width={Math.max(0, r.width)}
+      height={Math.max(0, r.height)}
+      fill="none"
+      stroke={SELECT_COLOR}
+      style={{ strokeWidth: px(1.25), strokeDasharray: `${px(5)} ${px(3)}`, outline: 'none' }}
+      data-testid="markup-selection"
+    />
+  );
+}
+
+/** One markup / annotation (note, text, rect, cloud, arrow, pen, highlight). */
+const MarkupShape = memo(function MarkupShape({ m, selected }: { m: AreaMeasurement; selected: boolean }) {
+  const kind = kindOf(m);
+  const pts = m.points;
+  if (!pts.length) return null;
+  const sw = m.strokeWidth ?? DEFAULT_STROKE_WIDTH;
+  const stroke = { strokeWidth: px(sw) };
+  const handles =
+    selected &&
+    (kind === 'rect' || kind === 'cloud' || kind === 'highlight' || kind === 'arrow') &&
+    pts.map((p, i) => (
+      <circle key={i} cx={p.x} cy={p.y} fill="#fff" stroke={SELECT_COLOR} style={{ r: px(5), strokeWidth: px(2) }} />
+    ));
+  const g = (children: ReactNode) => (
+    <g data-measurement-id={m.id} data-kind={kind} data-testid="markup" data-selected={selected ? 'true' : undefined}>
+      {children}
+      {handles}
+    </g>
+  );
+
+  switch (kind) {
+    case 'note': {
+      const p = pts[0];
+      return g(
+        <g style={{ transform: `translate(${p.x}px, ${p.y}px) scale(var(--inv-zoom, 1))` }}>
+          {selected && (
+            <circle cx={0} cy={-NOTE_PIN.headY} r={NOTE_PIN.radius + 4} fill={SELECT_COLOR} fillOpacity={0.18} stroke={SELECT_COLOR} strokeWidth={1.5} />
+          )}
+          <path d={notePinPath({ x: 0, y: 0 })} fill={m.color} stroke="#fff" strokeWidth={1.75} style={{ filter: 'drop-shadow(0 1px 1.5px rgba(0,0,0,.35))' }} />
+          <path
+            d={`M-5 ${-NOTE_PIN.headY - 3}h10M-5 ${-NOTE_PIN.headY + 1.5}h6`}
+            stroke="#fff"
+            strokeWidth={1.75}
+            strokeLinecap="round"
+            fill="none"
+          />
+        </g>,
+      );
+    }
+    case 'text': {
+      const fs = m.fontSize ?? 12;
+      const lines = textLineBaselines(pts[0], m.text, fs);
+      const empty = !(m.text ?? '').trim();
+      return g(
+        <>
+          {!empty && (
+            <text
+              fill={m.color}
+              fontSize={fs}
+              textAnchor="start"
+              style={{
+                direction: 'rtl',
+                fontFamily: FONT,
+                fontWeight: 600,
+                paintOrder: 'stroke',
+                stroke: 'rgba(255,255,255,0.9)',
+                strokeWidth: fs * 0.16,
+                strokeLinejoin: 'round',
+              }}
+            >
+              {lines.map((l, i) => (
+                <tspan key={i} x={l.x} y={l.y}>
+                  {l.text || '\u00a0'}
+                </tspan>
+              ))}
+            </text>
+          )}
+          {(selected || empty) && <SelectBox r={markupBounds(m)} />}
+        </>,
+      );
+    }
+    case 'rect': {
+      const r = rectOfPoints(pts);
+      return g(
+        <rect
+          x={r.x}
+          y={r.y}
+          width={r.width}
+          height={r.height}
+          fill={m.color}
+          fillOpacity={selected ? 0.08 : 0}
+          stroke={m.color}
+          strokeLinejoin="round"
+          style={stroke}
+        />,
+      );
+    }
+    case 'cloud': {
+      const r = rectOfPoints(pts);
+      return g(
+        <>
+          <path d={cloudPath(r)} fill={m.color} fillOpacity={selected ? 0.08 : 0} stroke={m.color} strokeLinejoin="round" style={stroke} />
+          {selected && <SelectBox r={r} />}
+        </>,
+      );
+    }
+    case 'highlight': {
+      const r = rectOfPoints(pts);
+      return g(
+        <>
+          <rect
+            x={r.x}
+            y={r.y}
+            width={r.width}
+            height={r.height}
+            fill={m.color}
+            fillOpacity={HIGHLIGHT_OPACITY}
+            style={{ mixBlendMode: 'multiply' }}
+          />
+          {selected && <SelectBox r={r} />}
+        </>,
+      );
+    }
+    case 'pen':
+      return g(
+        <>
+          <polyline points={pts.map((q) => `${q.x},${q.y}`).join(' ')} fill="none" stroke={m.color} strokeLinecap="round" strokeLinejoin="round" style={stroke} />
+          {selected && <SelectBox r={markupBounds(m)} />}
+        </>,
+      );
+    case 'arrow': {
+      const a = pts[0];
+      const b = pts[pts.length - 1];
+      const ang = Math.atan2(b.y - a.y, b.x - a.x);
+      const L = arrowHeadSize(sw);
+      const hw = L * Math.tan((25 * Math.PI) / 180);
+      return g(
+        <>
+          <line x1={a.x} y1={a.y} x2={b.x} y2={b.y} stroke={m.color} strokeLinecap="round" style={stroke} />
+          <g style={{ transform: `translate(${b.x}px, ${b.y}px) rotate(${ang}rad) scale(var(--inv-zoom, 1))` }}>
+            <path d={`M${sw * 0.9} 0L${-L} ${hw}L${-L} ${-hw}Z`} fill={m.color} stroke={m.color} strokeLinejoin="round" strokeWidth={sw * 0.5} />
+          </g>
+        </>,
+      );
+    }
+    default:
+      return null;
+  }
+});
 export const OVERLAY_WARN_COLOR = WARN;

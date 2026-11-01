@@ -32,13 +32,16 @@ export interface Rect {
 // ---------------------------------------------------------------------------
 
 export type WorkerRequest =
-  | { type: 'open'; file: File | ArrayBuffer }
+  /** `docId` keys the document inside the worker (several may be open). Omitted = 'default'. */
+  | { type: 'open'; file: File | ArrayBuffer; docId?: string }
   | {
       type: 'render';
       /** Unique id chosen by the client; echoed back in the response. */
       id: number;
-      /** 1-based page number. */
+      /** 1-based page number (local to `docId`'s document). */
       page: number;
+      /** Document to render from (see `open`). Omitted = 'default'. */
+      docId?: string;
       /** Output pixels per page unit. */
       scale: number;
       /**
@@ -52,13 +55,14 @@ export type WorkerRequest =
   | { type: 'cancel'; id: number }
   /** Change the priority of a queued or running render (e.g. a prefetch became the visible page). */
   | { type: 'priority'; id: number; priority: number }
-  | { type: 'close' };
+  /** Close one document (`docId`) or, when omitted, all of them. */
+  | { type: 'close'; docId?: string };
 
 export type WorkerResponse =
-  | { type: 'opened'; numPages: number; pageSizes: PageSize[] }
+  | { type: 'opened'; numPages: number; pageSizes: PageSize[]; docId?: string }
   | { type: 'rendered'; id: number; page: number; bitmap: ImageBitmap; scale: number; region: Rect }
   | { type: 'renderError'; id: number; message: string; cancelled?: boolean }
-  | { type: 'error'; message: string };
+  | { type: 'error'; message: string; docId?: string };
 
 // ---------------------------------------------------------------------------
 // Client API (src/core/pdfClient.ts) — the only thing UI code talks to.
@@ -93,7 +97,7 @@ export interface PdfClient {
 // Measurements
 // ---------------------------------------------------------------------------
 
-export type ToolId = 'pan' | 'calibrate' | 'area' | 'deduct' | 'length' | 'count';
+export type ToolId = 'pan' | 'calibrate' | 'area' | 'deduct' | 'length' | 'count' | MarkupKind;
 
 /**
  * What a measurement represents:
@@ -129,15 +133,26 @@ export interface AreaMeasurement {
    * Missing on measurements saved before kinds existed → treat as 'area'.
    * Always read it through `kindOf(m)` (measurementEngine).
    */
-  kind?: MeasurementKind;
+  kind?: MeasurementKind | MarkupKind;
   /**
    * Vertices in page units. Polygon (closed implicitly) for area/deduct, open
    * polyline for length, one marker per point for count.
+   * Markup: note/text = [anchor]; rect/cloud/highlight = [corner, opposite
+   * corner]; arrow = [tail, head]; pen = simplified freehand polyline.
    */
   points: Point[];
   color: string;
   /** Category id (see `Category`); missing/undefined = uncategorised (older saves too). */
   category?: string;
+  /** Markup only: comment text (note) / label text (text). */
+  text?: string;
+  /**
+   * Markup only: stroke width in screen px at 100% zoom (the viewer draws it
+   * at a constant screen size; export treats it as PDF points). Default 2.
+   */
+  strokeWidth?: number;
+  /** Markup 'text' only: font size in page units (scales with the drawing, like CAD text). */
+  fontSize?: number;
 }
 
 // ---------------------------------------------------------------------------

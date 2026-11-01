@@ -213,3 +213,86 @@ export const IconCollapse = (p: IconProps) => (
     <path d="m7 14 5-5 5 5" />
   </Svg>
 );
+
+// ---- area + markup tools ----------------------------------------------------
+
+/** Area tool: filled polygon with "m²". */
+export const IconAreaM2 = (p: IconProps) => (
+  <Svg {...p}>
+    <path d="M3 9 10 3l11 4-2 13H5Z" fill="currentColor" fillOpacity={0.28} />
+    <text
+      x="12"
+      y="15.5"
+      textAnchor="middle"
+      fontSize="8.5"
+      fontWeight={700}
+      fill="currentColor"
+      stroke="none"
+      fontFamily="system-ui, Arial, sans-serif"
+    >
+      m²
+    </text>
+  </Svg>
+);
+
+export const IconNote = (p: IconProps) => (
+  <Svg {...p}>
+    <path d="M4 5a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2h-7l-5 4v-4H6a2 2 0 0 1-2-2Z" />
+    <path d="M8 8h8M8 11.5h5" />
+  </Svg>
+);
+
+export const IconText = (p: IconProps) => (
+  <Svg {...p}>
+    <path d="M5 6V4h14v2M12 4v16M9 20h6" />
+  </Svg>
+);
+
+export const IconRect = (p: IconProps) => (
+  <Svg {...p}>
+    <rect x="4" y="6" width="16" height="12" rx="0.5" />
+  </Svg>
+);
+
+export const IconCloud = (p: IconProps) => (
+  <Svg {...p}>
+    <path d="M6 7c0-2 3-2 3 0 0-2 3-2 3 0 0-2 3-2 3 0 2 0 2 3 0 3 2 0 2 3 0 3 0 2-3 2-3 0 0 2-3 2-3 0 0 2-3 2-3 0-2 0-2-3 0-3-2 0-2-3 0-3Z" />
+  </Svg>
+);
+
+export const IconArrow = (p: IconProps) => (
+  <Svg {...p}>
+    <path d="M5 19 18 6" />
+    <path d="M10 5.5h8.5V14" />
+  </Svg>
+);
+
+export const IconPen = (p: IconProps) => (
+  <Svg {...p}>
+    <path d="M3 17c3-4 5 2 8-1s2-7 5-7 3 4 5 3" />
+  </Svg>
+);
+
+export const IconHighlight = (p: IconProps) => (
+  <Svg {...p}>
+    <path d="m14 4 6 6-8 8H8v-4Z" />
+    <path d="M8 18 5 21H3l3-5" />
+    <path d="M4 21h16" strokeOpacity={0.5} strokeWidth={3} />
+  </Svg>
+);
+
+/** Labels on/off (text lines next to a square). */
+export const IconLabels = (p: IconProps) => (
+  <Svg {...p}>
+    <rect x="15" y="4" width="5" height="5" rx="1" />
+    <rect x="15" y="15" width="5" height="5" rx="1" />
+    <path d="M4 6.5h8M4 17.5h8" />
+  </Svg>
+);
+
+export const IconEdit = (p: IconProps) => (
+  <Svg {...p}>
+    <path d="M4 20h4L19 9l-4-4L4 16Z" />
+    <path d="m13.5 6.5 4 4" />
+  </Svg>
+);

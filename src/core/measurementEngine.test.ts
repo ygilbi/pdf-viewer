@@ -15,6 +15,7 @@ import {
   computePageSummary,
   distanceToPolyline,
   kindOf,
+  isMarkupKind,
   nextLabelNumber,
   polylineLengthMeters,
   polylineMidpoint,
@@ -583,5 +584,88 @@ describe('measurementsToTSV', () => {
     const csvLines = measurementsToCSV(ms.slice(0, 1), { 1: cal }).replace(/^\uFEFF/, '').replace(/\r\n$/, '').split('\r\n');
     const tsvLines = measurementsToTSV(ms.slice(0, 1), { 1: cal }).replace(/\r\n$/, '').split('\r\n');
     expect(tsvLines.map((l) => l.split('\t'))).toEqual(csvLines.map((l) => l.split(',')));
+  });
+});
+
+describe('markup kinds are not takeoff quantities', () => {
+  const cal: Calibration = { pixelsPerMeter: 10, p1: P(0, 0), p2: P(100, 0), meters: 10 };
+  const M = (id: string, kind: AreaMeasurement['kind'], points: Point[], extra: Partial<AreaMeasurement> = {}): AreaMeasurement => ({
+    id,
+    page: 1,
+    kind,
+    label: id,
+    points,
+    color: '#000',
+    ...extra,
+  });
+  const takeoff = [
+    M('A', 'area', rect(10, 5, 10), { category: 'windows' }),
+    M('D', 'deduct', rect(2, 2, 10, 10, 10), { category: 'windows' }),
+    M('L', 'length', [P(0, 0), P(50, 0)]),
+    M('C', 'count', [P(1, 1), P(2, 2)]),
+  ];
+  const markup = [
+    M('n1', 'note', [P(20, 20)], { text: 'לבדוק מידה\nמול האדריכל', category: 'windows' }),
+    M('t1', 'text', [P(30, 30)], { text: 'W1', fontSize: 14 }),
+    M('r1', 'rect', [P(0, 0), P(100, 50)], { category: 'doors' }),
+    M('c1', 'cloud', [P(0, 0), P(80, 40)]),
+    M('a1', 'arrow', [P(0, 0), P(40, 40)]),
+    M('p1', 'pen', [P(0, 0), P(10, 5), P(20, 0), P(30, 30)]),
+    M('h1', 'highlight', [P(0, 0), P(60, 60)]),
+    M('n2', 'note', [P(1, 1)], { text: '   ' }),
+  ];
+
+  it('isMarkupKind / kindOf', () => {
+    for (const k of ['note', 'text', 'rect', 'cloud', 'arrow', 'pen', 'highlight']) {
+      expect(isMarkupKind(k)).toBe(true);
+      expect(kindOf({ kind: k })).toBe(k);
+    }
+    for (const k of ['area', 'deduct', 'length', 'count', undefined, 'bogus', 3]) expect(isMarkupKind(k)).toBe(false);
+    expect(minPoints('note')).toBe(1);
+    expect(minPoints('text')).toBe(1);
+    expect(minPoints('rect')).toBe(2);
+    expect(minPoints('pen')).toBe(2);
+  });
+
+  it('summaries, category subtotals and net areas ignore markup', () => {
+    const all = [...markup.slice(0, 3), ...takeoff, ...markup.slice(3)];
+    expect(computeDocumentSummary(all, { 1: cal })).toEqual(computeDocumentSummary(takeoff, { 1: cal }));
+    expect(computePageSummary(all, { 1: cal }, 1)).toEqual(computePageSummary(takeoff, { 1: cal }, 1));
+    // no uncalibrated noise from markup on an uncalibrated page
+    expect(computeDocumentSummary(markup, {}).uncalibrated).toBe(0);
+    // 'doors' only has a markup rect → no subtotal for it
+    const cats = computeCategorySummaries(all, { 1: cal }, DEFAULT_CATEGORIES);
+    expect(cats).toEqual(computeCategorySummaries(takeoff, { 1: cal }, DEFAULT_CATEGORIES));
+    expect(cats.some((c) => c.category === 'doors')).toBe(false);
+    expect(computeNetAreas(all, { 1: cal }).get('A')!.netM2).toBeCloseTo(46, 9);
+    expect(assignDeductions(all).size).toBe(1);
+  });
+
+  it('CSV/TSV: same rows and totals, plus a notes section', () => {
+    const all = [...markup, ...takeoff];
+    const base = buildMeasurementRows(takeoff, { 1: cal });
+    const rows = buildMeasurementRows(all, { 1: cal });
+    expect(rows.slice(0, base.length)).toEqual(base);
+    const extra = rows.slice(base.length);
+    expect(extra[0].every((c) => c === '')).toBe(true);
+    expect(extra[1][1]).toBe('הערות');
+    expect(extra.slice(2).map((r) => [r[1], r[2], r[4], r[5]])).toEqual([
+      ['הערה', 'n1', '1', 'לבדוק מידה / מול האדריכל'],
+      ['טקסט', 't1', '1', 'W1'],
+    ]);
+    expect(extra[2][3]).toBe('חלונות');
+    expect(rows.every((r) => r.length === base[0].length)).toBe(true);
+    const tsv = measurementsToTSV(all, { 1: cal });
+    const csv = measurementsToCSV(all, { 1: cal });
+    expect(tsv.split('\r\n').length).toBe(csv.split('\r\n').length);
+    expect(tsv).toContain('לבדוק מידה / מול האדריכל');
+    // no notes → no section
+    expect(buildMeasurementRows([...takeoff, markup[2]], { 1: cal })).toEqual(base);
+  });
+
+  it('nextLabelNumber per markup kind', () => {
+    expect(nextLabelNumber(markup, 'note')).toBe(3);
+    expect(nextLabelNumber(markup, 'cloud')).toBe(2);
+    expect(nextLabelNumber(takeoff, 'arrow')).toBe(1);
   });
 });

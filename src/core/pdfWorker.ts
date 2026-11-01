@@ -1,6 +1,6 @@
 /// <reference lib="webworker" />
 /**
- * Module Web Worker that owns the pdf.js document and renders pages/regions
+ * Module Web Worker that owns the pdf.js documents (several, keyed by docId) and renders pages/regions
  * into OffscreenCanvas, returning transferable ImageBitmaps.
  *
  * Loaded via:
@@ -134,40 +134,46 @@ const unsupportedReason = canRenderHere();
 if (!unsupportedReason) getParserWorker();
 
 // ---------------------------------------------------------------------------
-// Document state
+// Document state (several documents, keyed by docId)
 // ---------------------------------------------------------------------------
 
+const DEFAULT_DOC = 'default';
+
 interface DocState {
-  gen: number;
+  docId: string;
+  closed: boolean;
   loadingTask: PDFDocumentLoadingTask | null;
   ready: Promise<{ doc: PDFDocumentProxy; pages: PageCache; sizes: { width: number; height: number }[] }>;
 }
 
-let gen = 0;
-let current: DocState | null = null;
+const docs = new Map<string, DocState>();
 
 function post(msg: WorkerResponse & { seq?: number }, transfer: Transferable[] = []) {
   self.postMessage(msg, transfer);
 }
 
-function closeDoc() {
-  const d = current;
-  current = null;
-  cancelAll();
-  if (d) {
-    d.ready.catch(() => {});
-    d.loadingTask?.destroy().catch(() => {});
-  }
+function closeDoc(docId: string) {
+  const d = docs.get(docId);
+  if (!d) return;
+  docs.delete(docId);
+  d.closed = true;
+  cancelWhere((j) => j.doc === d);
+  d.ready.catch(() => {});
+  d.loadingTask?.destroy().catch(() => {});
 }
 
-function openDoc(file: File | ArrayBuffer, seq: number | undefined) {
-  closeDoc();
-  const myGen = ++gen;
+function closeAll() {
+  for (const id of [...docs.keys()]) closeDoc(id);
+  cancelWhere(() => true);
+}
+
+function openDoc(file: File | ArrayBuffer, docId: string, seq: number | undefined) {
+  closeDoc(docId); // re-open under the same id replaces it
   if (unsupportedReason) {
-    post({ type: 'error', message: UNSUPPORTED_PREFIX + unsupportedReason, seq });
+    post({ type: 'error', message: UNSUPPORTED_PREFIX + unsupportedReason, docId, seq });
     return;
   }
-  const state: DocState = { gen: myGen, loadingTask: null, ready: null! };
+  const state: DocState = { docId, closed: false, loadingTask: null, ready: null! };
   state.ready = (async () => {
     let data: Uint8Array;
     try {
@@ -176,7 +182,7 @@ function openDoc(file: File | ArrayBuffer, seq: number | undefined) {
     } catch (e) {
       throw new Error(`Could not read file: ${String(e)}`);
     }
-    if (myGen !== gen) throw makeCancelError();
+    if (state.closed) throw makeCancelError();
     const loadingTask = getDocument({
       data,
       worker: getParserWorker(),
@@ -201,21 +207,19 @@ function openDoc(file: File | ArrayBuffer, seq: number | undefined) {
     } catch (e) {
       throw new Error(describeLoadError(e));
     }
-    const sizes = await getAllPageSizes(doc, () => myGen !== gen);
+    const sizes = await getAllPageSizes(doc, () => state.closed);
     return { doc, pages: new PageCache(doc), sizes };
   })();
-  current = state;
+  docs.set(docId, state);
 
   state.ready.then(
     ({ doc, sizes }) => {
-      if (myGen === gen) post({ type: 'opened', numPages: doc.numPages, pageSizes: sizes, seq });
+      if (!state.closed) post({ type: 'opened', numPages: doc.numPages, pageSizes: sizes, docId, seq });
     },
     (e: unknown) => {
-      if (myGen !== gen) return;
-      post({ type: 'error', message: e instanceof Error ? e.message : String(e), seq });
-      if (current === state) current = null;
-      cancelAll();
-      state.loadingTask?.destroy().catch(() => {});
+      if (state.closed) return;
+      post({ type: 'error', message: e instanceof Error ? e.message : String(e), docId, seq });
+      closeDoc(docId);
     },
   );
 }
@@ -250,7 +254,7 @@ async function runJob(job: Job): Promise<void> {
   try {
     if (job.active.cancelled) throw makeCancelError();
     const { pages } = await job.doc.ready;
-    if (job.active.cancelled || current !== job.doc) throw makeCancelError();
+    if (job.active.cancelled || job.doc.closed) throw makeCancelError();
     const page = await pages.get(job.page);
     if (job.active.cancelled) throw makeCancelError();
     const vp = page.getViewport({ scale: 1 });
@@ -288,8 +292,8 @@ function cancelJob(id: number) {
   job.active.task?.cancel();
 }
 
-function cancelAll() {
-  for (const id of [...jobs.keys()]) cancelJob(id);
+function cancelWhere(pred: (job: Job) => boolean) {
+  for (const [id, job] of [...jobs]) if (pred(job)) cancelJob(id);
 }
 
 // ---------------------------------------------------------------------------
@@ -300,10 +304,11 @@ self.onmessage = (ev: MessageEvent<WorkerRequest & { seq?: number }>) => {
   const msg = ev.data;
   switch (msg.type) {
     case 'open':
-      openDoc(msg.file, msg.seq);
+      openDoc(msg.file, msg.docId ?? DEFAULT_DOC, msg.seq);
       break;
     case 'render': {
-      if (!current) {
+      const doc = docs.get(msg.docId ?? DEFAULT_DOC);
+      if (!doc) {
         post({ type: 'renderError', id: msg.id, message: 'No document is open' });
         return;
       }
@@ -313,7 +318,7 @@ self.onmessage = (ev: MessageEvent<WorkerRequest & { seq?: number }>) => {
         page: msg.page,
         scale: msg.scale,
         region: msg.region,
-        doc: current,
+        doc,
         active: { task: null, cancelled: false },
       };
       jobs.set(job.id, job);
@@ -332,8 +337,8 @@ self.onmessage = (ev: MessageEvent<WorkerRequest & { seq?: number }>) => {
       break;
     }
     case 'close':
-      gen++;
-      closeDoc();
+      if (msg.docId) closeDoc(msg.docId);
+      else closeAll();
       break;
   }
 };

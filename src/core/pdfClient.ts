@@ -11,22 +11,38 @@
  */
 import type { PDFDocumentProxy } from 'pdfjs-dist';
 import pdfjsWorkerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
-import type { PdfClient, PdfDocumentInfo, Rect, RenderResult, RenderTask, WorkerRequest, WorkerResponse } from './types';
+import { locatePage, withOffsets } from './workspaceMap';
+import type {
+  PageLocation,
+  PdfDocumentInfo,
+  Rect,
+  RenderResult,
+  RenderTask,
+  WorkerRequest,
+  WorkerResponse,
+  WorkspaceClient,
+  WorkspaceDoc,
+} from './types';
 
 /** Must match UNSUPPORTED_PREFIX in renderQueue.ts (kept as a literal so renderQueue is only loaded lazily here). */
 const UNSUPPORTED_PREFIX = 'PDF_WORKER_UNSUPPORTED:';
 
+/** `page` is the GLOBAL (workspace) page number. */
 type RenderOpts = { page: number; scale: number; region?: Rect; priority?: number };
 
 interface PendingRender {
   id: number;
   opts: RenderOpts;
+  docId: string;
+  /** Page number inside `docId`'s document. */
+  localPage: number;
   resolve(r: RenderResult): void;
   reject(e: Error): void;
 }
 
 interface PendingOpen {
   seq: number;
+  docId: string;
   file: File;
   resolve(info: PdfDocumentInfo): void;
   reject(e: Error): void;
@@ -38,22 +54,30 @@ function abortError(message = 'Aborted'): Error {
   return e;
 }
 
+export { globalPageOf, locatePage, withOffsets } from './workspaceMap';
+
 // ---------------------------------------------------------------------------
-// Main-thread fallback renderer
+// Main-thread fallback renderer (several documents, keyed by docId)
 // ---------------------------------------------------------------------------
 
 interface MainJob {
   id: number;
   priority: number;
+  docId: string;
+  localPage: number;
   opts: RenderOpts;
   active: import('./renderQueue').ActiveRender;
   done: PendingRender;
 }
 
+interface MainDoc {
+  closed: boolean;
+  ready: Promise<{ doc: PDFDocumentProxy; pages: import('./renderQueue').PageCache }>;
+  destroy: (() => void) | null;
+}
+
 class MainThreadRenderer {
-  private gen = 0;
-  private ready: Promise<{ doc: PDFDocumentProxy; pages: import('./renderQueue').PageCache }> | null = null;
-  private destroyDoc: (() => void) | null = null;
+  private docs = new Map<string, MainDoc>();
   private jobs = new Map<number, MainJob>();
   private schedulerP: Promise<import('./renderQueue').RenderScheduler<MainJob>> | null = null;
   private libP = Promise.all([import('pdfjs-dist'), import('./renderQueue')]).then(([pdfjs, rq]) => {
@@ -65,13 +89,13 @@ class MainThreadRenderer {
     return { pdfjs, rq, slices };
   });
 
-  async open(file: File): Promise<PdfDocumentInfo> {
-    this.close();
-    const myGen = ++this.gen;
-    const { pdfjs, rq } = await this.libP;
-    const readyP = (async () => {
+  async open(docId: string, file: File): Promise<PdfDocumentInfo> {
+    this.close(docId);
+    const state: MainDoc = { closed: false, ready: null!, destroy: null };
+    state.ready = (async () => {
+      const { pdfjs, rq } = await this.libP;
       const data = new Uint8Array(await file.arrayBuffer());
-      if (myGen !== this.gen) throw abortError();
+      if (state.closed) throw abortError();
       const task = pdfjs.getDocument({
         data,
         useWorkerFetch: false,
@@ -81,7 +105,7 @@ class MainThreadRenderer {
         enableXfa: false,
         verbosity: 0,
       } as Parameters<typeof pdfjs.getDocument>[0]);
-      this.destroyDoc = () => void task.destroy().catch(() => {});
+      state.destroy = () => void task.destroy().catch(() => {});
       let doc: PDFDocumentProxy;
       try {
         doc = await task.promise;
@@ -90,27 +114,41 @@ class MainThreadRenderer {
       }
       return { doc, pages: new rq.PageCache(doc) };
     })();
-    readyP.catch(() => {}); // observed below; avoid unhandled rejection if superseded
-    if (myGen !== this.gen) throw abortError();
-    this.ready = readyP;
-    const { doc } = await readyP;
-    const pageSizes = await rq.getAllPageSizes(doc, () => myGen !== this.gen);
-    if (myGen !== this.gen) throw abortError();
+    state.ready.catch(() => {}); // observed below / by renders
+    this.docs.set(docId, state);
+    const { rq } = await this.libP;
+    const { doc } = await state.ready;
+    const pageSizes = await rq.getAllPageSizes(doc, () => state.closed);
+    if (state.closed) throw abortError();
     return { numPages: doc.numPages, pageSizes };
   }
 
   render(done: PendingRender): void {
+    const d = this.docs.get(done.docId);
+    if (!d) {
+      done.reject(new Error('No document is open'));
+      return;
+    }
     const job: MainJob = {
       id: done.id,
       priority: done.opts.priority ?? 0,
+      docId: done.docId,
+      localPage: done.localPage,
       opts: done.opts,
       active: { task: null, cancelled: false },
       done,
     };
     this.jobs.set(job.id, job);
-    this.scheduler().then((s) => {
-      if (!job.active.cancelled) s.enqueue(job);
-    });
+    // Only queue once the document is parsed (a loading doc must not hold a render slot).
+    Promise.all([d.ready, this.scheduler()]).then(
+      ([, s]) => {
+        if (!job.active.cancelled && this.jobs.has(job.id)) s.enqueue(job);
+      },
+      (e: unknown) => {
+        this.jobs.delete(job.id);
+        job.done.reject(e instanceof Error ? e : new Error(String(e)));
+      },
+    );
   }
 
   cancel(id: number): void {
@@ -129,13 +167,18 @@ class MainThreadRenderer {
     void this.schedulerP?.then((s) => s.reprioritize());
   }
 
-  close(): void {
-    this.gen++;
+  close(docId: string): void {
+    const d = this.docs.get(docId);
+    if (!d) return;
+    this.docs.delete(docId);
+    d.closed = true;
+    for (const [id, j] of [...this.jobs]) if (j.docId === docId) this.cancel(id);
+    d.destroy?.();
+  }
+
+  closeAll(): void {
+    for (const id of [...this.docs.keys()]) this.close(id);
     for (const id of [...this.jobs.keys()]) this.cancel(id);
-    this.destroyDoc?.();
-    this.destroyDoc = null;
-    this.ready?.catch(() => {});
-    this.ready = null;
   }
 
   private scheduler() {
@@ -145,10 +188,11 @@ class MainThreadRenderer {
   private async run(job: MainJob): Promise<void> {
     const { rq, slices } = await this.libP;
     try {
-      if (!this.ready) throw new Error('No document is open');
-      const { pages } = await this.ready;
-      if (job.active.cancelled) throw rq.makeCancelError();
-      const page = await pages.get(job.opts.page);
+      const d = this.docs.get(job.docId);
+      if (!d) throw rq.makeCancelError();
+      const { pages } = await d.ready;
+      if (job.active.cancelled || d.closed) throw rq.makeCancelError();
+      const page = await pages.get(job.localPage);
       const vp = page.getViewport({ scale: 1 });
       const plan = rq.planRender(vp.width, vp.height, job.opts.scale, job.opts.region);
       let canvas: OffscreenCanvas | HTMLCanvasElement;
@@ -186,17 +230,25 @@ function workerRenderingLikelySupported(): boolean {
   return typeof Worker !== 'undefined' && typeof OffscreenCanvas !== 'undefined' && typeof createImageBitmap !== 'undefined';
 }
 
-class PdfClientImpl implements PdfClient {
+interface DocEntry {
+  doc: WorkspaceDoc;
+  /** Kept as-is (no copy) for getFileBytes() and a main-thread re-open. */
+  file: File;
+}
+
+class PdfClientImpl implements WorkspaceClient {
   private worker: Worker | null = null;
   private main: MainThreadRenderer | null = null;
   private mode: 'worker' | 'main';
   private nextId = 1;
   private openSeq = 0;
-  private pendingOpen: PendingOpen | null = null;
+  private docSeq = 0;
+  /** Bumped by closeAll() so an addFile() that resolves afterwards is dropped. */
+  private epoch = 0;
+  private pendingOpens = new Map<string, PendingOpen>();
   private renders = new Map<number, PendingRender>();
-  private currentFile: File | null = null;
-  /** Resolves once the document is open on the main-thread fallback (after a switch). */
-  private mainReady: Promise<unknown> | null = null;
+  /** Ready documents, in workspace order. */
+  private entries: DocEntry[] = [];
 
   constructor() {
     this.mode = workerRenderingLikelySupported() ? 'worker' : 'main';
@@ -211,27 +263,72 @@ class PdfClientImpl implements PdfClient {
     if (this.mode === 'worker') this.ensureWorker();
   }
 
-  open(file: File): Promise<PdfDocumentInfo> {
-    this.closeInternal(false);
-    this.currentFile = file;
-    const seq = ++this.openSeq;
-    return new Promise<PdfDocumentInfo>((resolve, reject) => {
-      this.pendingOpen = { seq, file, resolve, reject };
-      if (this.mode === 'worker' && this.ensureWorker()) {
-        this.send({ type: 'open', file, seq } as WorkerRequest);
-      } else {
-        this.openOnMain(this.pendingOpen);
-      }
-    });
+  // ---- workspace API ------------------------------------------------------
+
+  async open(file: File): Promise<PdfDocumentInfo> {
+    this.closeAll();
+    const doc = await this.addFile(file);
+    return { numPages: doc.numPages, pageSizes: doc.pageSizes };
+  }
+
+  async addFile(file: File): Promise<WorkspaceDoc> {
+    const docId = `doc${++this.docSeq}`;
+    const epoch = this.epoch;
+    const info = await this.openRaw(docId, file);
+    if (epoch !== this.epoch) {
+      if (this.worker) this.send({ type: 'close', docId });
+      this.main?.close(docId);
+      throw abortError('Superseded by another open()');
+    }
+    const pageOffset = this.entries.reduce((n, e) => n + e.doc.numPages, 0);
+    const doc: WorkspaceDoc = { id: docId, name: file.name, numPages: info.numPages, pageOffset, pageSizes: info.pageSizes };
+    this.entries.push({ doc, file });
+    return doc;
+  }
+
+  async removeDoc(docId: string): Promise<void> {
+    const pending = this.pendingOpens.get(docId);
+    if (pending) {
+      this.pendingOpens.delete(docId);
+      pending.reject(abortError('Document removed'));
+    }
+    const i = this.entries.findIndex((e) => e.doc.id === docId);
+    if (i >= 0) {
+      // Renders of this doc and of every later doc carry stale global page numbers.
+      const affected = new Set(this.entries.slice(i).map((e) => e.doc.id));
+      for (const r of [...this.renders.values()]) if (affected.has(r.docId)) this.cancelRender(r);
+      this.entries.splice(i, 1);
+      const docs = withOffsets(this.entries.map((e) => e.doc));
+      this.entries = this.entries.map((e, k) => ({ ...e, doc: docs[k] }));
+    }
+    if (this.worker) this.send({ type: 'close', docId });
+    this.main?.close(docId);
+  }
+
+  docs(): WorkspaceDoc[] {
+    return this.entries.map((e) => e.doc);
+  }
+
+  locate(globalPage: number): PageLocation | null {
+    return locatePage(this.docs(), globalPage);
+  }
+
+  getFileBytes(docId: string): Promise<ArrayBuffer> {
+    const e = this.entries.find((x) => x.doc.id === docId);
+    if (!e) return Promise.reject(new Error(`Unknown document: ${docId}`));
+    return e.file.arrayBuffer();
   }
 
   render(opts: RenderOpts): RenderTask {
     const id = this.nextId++;
+    const loc = this.locate(opts.page);
     let entry!: PendingRender;
     const promise = new Promise<RenderResult>((resolve, reject) => {
       entry = {
         id,
         opts,
+        docId: loc?.docId ?? '',
+        localPage: loc?.localPage ?? 0,
         resolve: (r) => {
           this.renders.delete(id);
           resolve(r);
@@ -242,16 +339,15 @@ class PdfClientImpl implements PdfClient {
         },
       };
     });
+    if (!loc) {
+      entry.reject(new Error(this.entries.length ? `Page ${opts.page} is out of range` : 'No document is open'));
+      return { promise, cancel: () => {}, setPriority: () => {} };
+    }
     this.renders.set(id, entry);
     this.dispatch(entry);
     return {
       promise,
-      cancel: () => {
-        if (!this.renders.has(id)) return;
-        entry.reject(abortError('Render cancelled'));
-        if (this.mode === 'worker') this.send({ type: 'cancel', id });
-        else this.main?.cancel(id);
-      },
+      cancel: () => this.cancelRender(entry),
       setPriority: (priority: number) => {
         if (!this.renders.has(id)) return;
         entry.opts = { ...entry.opts, priority };
@@ -262,43 +358,52 @@ class PdfClientImpl implements PdfClient {
   }
 
   close(): void {
-    this.closeInternal(true);
-    this.currentFile = null;
+    this.closeAll();
   }
 
   // -------------------------------------------------------------------------
 
-  private closeInternal(sendClose: boolean) {
-    if (this.pendingOpen) {
-      this.pendingOpen.reject(abortError('Superseded by another open()'));
-      this.pendingOpen = null;
-    }
+  private cancelRender(entry: PendingRender) {
+    if (!this.renders.has(entry.id)) return;
+    entry.reject(abortError('Render cancelled'));
+    if (this.mode === 'worker') this.send({ type: 'cancel', id: entry.id });
+    else this.main?.cancel(entry.id);
+  }
+
+  private closeAll() {
+    this.epoch++;
+    for (const p of [...this.pendingOpens.values()]) p.reject(abortError('Superseded by another open()'));
+    this.pendingOpens.clear();
     for (const r of [...this.renders.values()]) r.reject(abortError('Document closed'));
     this.renders.clear();
-    if (sendClose && this.worker) this.send({ type: 'close' });
-    this.main?.close();
-    this.mainReady = null;
+    this.entries = [];
+    if (this.worker) this.send({ type: 'close' });
+    this.main?.closeAll();
+  }
+
+  private openRaw(docId: string, file: File): Promise<PdfDocumentInfo> {
+    const seq = ++this.openSeq;
+    return new Promise<PdfDocumentInfo>((resolve, reject) => {
+      const pending: PendingOpen = { seq, docId, file, resolve, reject };
+      this.pendingOpens.set(docId, pending);
+      if (this.mode === 'worker' && this.ensureWorker()) {
+        this.send({ type: 'open', file, docId, seq } as WorkerRequest);
+      } else {
+        this.openOnMain(pending);
+      }
+    });
   }
 
   private dispatch(entry: PendingRender) {
-    const { page, scale, region, priority } = entry.opts;
+    const { scale, region, priority } = entry.opts;
     if (this.mode === 'worker') {
       if (!this.worker) {
         entry.reject(new Error('No document is open'));
         return;
       }
-      this.send({ type: 'render', id: entry.id, page, scale, region, priority: priority ?? 0 });
+      this.send({ type: 'render', id: entry.id, docId: entry.docId, page: entry.localPage, scale, region, priority: priority ?? 0 });
     } else {
-      const main = this.getMain();
-      const ready = this.mainReady;
-      if (ready) {
-        ready.then(
-          () => this.renders.has(entry.id) && main.render(entry),
-          () => {},
-        );
-      } else {
-        main.render(entry);
-      }
+      this.getMain().render(entry);
     }
   }
 
@@ -306,24 +411,22 @@ class PdfClientImpl implements PdfClient {
     return (this.main ??= new MainThreadRenderer());
   }
 
-  private openOnMain(pending: PendingOpen) {
-    const p = this.getMain().open(pending.file);
-    this.mainReady = p;
-    p.then(
-      (info) => {
-        if (this.pendingOpen?.seq !== pending.seq) return;
-        this.pendingOpen = null;
-        pending.resolve(info);
-      },
-      (e: unknown) => {
-        if (this.pendingOpen?.seq !== pending.seq) return;
-        this.pendingOpen = null;
-        pending.reject(e instanceof Error ? e : new Error(String(e)));
-      },
-    );
+  private settleOpen(pending: PendingOpen): boolean {
+    if (this.pendingOpens.get(pending.docId)?.seq !== pending.seq) return false;
+    this.pendingOpens.delete(pending.docId);
+    return true;
   }
 
-  /** Permanently switch to main-thread rendering; re-open the current file there and re-dispatch work. */
+  private openOnMain(pending: PendingOpen) {
+    this.getMain()
+      .open(pending.docId, pending.file)
+      .then(
+        (info) => this.settleOpen(pending) && pending.resolve(info),
+        (e: unknown) => this.settleOpen(pending) && pending.reject(e instanceof Error ? e : new Error(String(e))),
+      );
+  }
+
+  /** Permanently switch to main-thread rendering; re-open every file there and re-dispatch work. */
   private switchToMain(reason: string) {
     if (this.mode === 'main') return;
     console.warn(`[pdfClient] falling back to main-thread rendering: ${reason}`);
@@ -331,13 +434,8 @@ class PdfClientImpl implements PdfClient {
     this.worker?.terminate();
     this.worker = null;
     const pendingRenders = [...this.renders.values()];
-    if (this.pendingOpen) {
-      this.openOnMain(this.pendingOpen);
-    } else if (this.currentFile) {
-      const p = this.getMain().open(this.currentFile);
-      p.catch(() => {});
-      this.mainReady = p;
-    }
+    for (const e of this.entries) this.getMain().open(e.doc.id, e.file).catch(() => {});
+    for (const p of [...this.pendingOpens.values()]) this.openOnMain(p);
     for (const r of pendingRenders) this.dispatch(r);
   }
 
@@ -364,12 +462,18 @@ class PdfClientImpl implements PdfClient {
     this.worker?.postMessage(msg);
   }
 
+  private pendingFor(msg: { docId?: string; seq?: number }): PendingOpen | null {
+    const p = msg.docId ? this.pendingOpens.get(msg.docId) : undefined;
+    if (!p || (msg.seq !== undefined && msg.seq !== p.seq)) return null;
+    return p;
+  }
+
   private onWorkerMessage(msg: WorkerResponse & { seq?: number }) {
     switch (msg.type) {
       case 'opened': {
-        const p = this.pendingOpen;
-        if (!p || (msg.seq !== undefined && msg.seq !== p.seq)) return;
-        this.pendingOpen = null;
+        const p = this.pendingFor(msg);
+        if (!p) return;
+        this.pendingOpens.delete(p.docId);
         try {
           performance.mark('viewer:opened');
         } catch {
@@ -383,12 +487,12 @@ class PdfClientImpl implements PdfClient {
           this.switchToMain(msg.message.slice(UNSUPPORTED_PREFIX.length));
           return;
         }
-        const p = this.pendingOpen;
-        if (!p || (msg.seq !== undefined && msg.seq !== p.seq)) {
+        const p = this.pendingFor(msg);
+        if (!p) {
           console.error('[pdfClient] worker error:', msg.message);
           return;
         }
-        this.pendingOpen = null;
+        this.pendingOpens.delete(p.docId);
         p.reject(new Error(msg.message));
         break;
       }
@@ -398,7 +502,7 @@ class PdfClientImpl implements PdfClient {
           msg.bitmap.close(); // cancelled / superseded
           return;
         }
-        r.resolve({ bitmap: msg.bitmap, page: msg.page, scale: msg.scale, region: msg.region });
+        r.resolve({ bitmap: msg.bitmap, page: r.opts.page, scale: msg.scale, region: msg.region });
         break;
       }
       case 'renderError': {
@@ -415,21 +519,25 @@ class PdfClientImpl implements PdfClient {
   }
 }
 
-export function createPdfClient(): PdfClient {
+export function createPdfClient(): WorkspaceClient {
   return new PdfClientImpl();
 }
 
-let singleton: PdfClient | null = null;
+let singleton: WorkspaceClient | null = null;
 
-export function getPdfClient(): PdfClient {
+/** The app-wide client (implements both the single-file PdfClient and the multi-file WorkspaceClient API). */
+export function getPdfClient(): WorkspaceClient {
   if (!singleton) {
     singleton = createPdfClient();
     if (typeof window !== 'undefined' && /[?&]bench\b/.test(window.location.search)) {
-      (window as unknown as { __pdfClient?: PdfClient }).__pdfClient = singleton; // benchmark hook
+      (window as unknown as { __pdfClient?: WorkspaceClient }).__pdfClient = singleton; // benchmark hook
     }
   }
   return singleton;
 }
+
+/** Same object as getPdfClient(), typed for workspace (multi-file) use. */
+export const getWorkspaceClient = getPdfClient;
 
 // Pre-warm the worker shortly after app start (browser only; not in tests).
 if (typeof window !== 'undefined' && typeof document !== 'undefined' && !import.meta.env?.VITEST) {

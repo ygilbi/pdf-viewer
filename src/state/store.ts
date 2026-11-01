@@ -1,5 +1,6 @@
 import { create } from 'zustand';
-import type { AreaMeasurement, Calibration, Category, PageSize, Point, ToolId } from '../core/types';
+import type { AreaMeasurement, Calibration, Category, PageSize, Point, ToolId, WorkspaceDoc } from '../core/types';
+import { concatPages, layoutDocs, removeDocFromWorkspace } from './workspace';
 import { DEFAULT_CATEGORIES, MEASUREMENT_COLORS, kindOf } from '../core/measurementEngine';
 
 /**
@@ -8,8 +9,14 @@ import { DEFAULT_CATEGORIES, MEASUREMENT_COLORS, kindOf } from '../core/measurem
  * never triggers React re-renders.
  */
 export interface ViewerState {
-  // document
+  // document(s)
+  /** Name of the first open file (null = nothing open). */
   fileName: string | null;
+  /**
+   * Open files in workspace order. Their pages form one continuous list of
+   * GLOBAL page numbers; numPages / pageSizes below are the concatenation.
+   */
+  docs: WorkspaceDoc[];
   numPages: number;
   pageSizes: PageSize[];
   currentPage: number; // 1-based
@@ -32,7 +39,17 @@ export interface ViewerState {
   activeCategoryId: string | null;
 
   // actions
-  setDocument(info: { fileName: string; numPages: number; pageSizes: PageSize[] }): void;
+  /** Single-file open: resets the workspace to this one document (and clears measurements). */
+  setDocument(info: { fileName: string; numPages: number; pageSizes: PageSize[]; docId?: string; fingerprint?: string }): void;
+  /** Appends a file to the workspace (pageOffset is recomputed from order). */
+  addDocument(doc: WorkspaceDoc): void;
+  /** Patches a doc (e.g. its fingerprint once hashing finished). */
+  updateDocument(docId: string, patch: Partial<Pick<WorkspaceDoc, 'fingerprint' | 'name'>>): void;
+  /**
+   * Removes a file with its measurements/calibrations; later files' pages are
+   * renumbered and currentPage adjusted. Removing the last file empties the workspace.
+   */
+  removeDocument(docId: string): void;
   setLoading(loading: boolean): void;
   setError(error: string | null): void;
   setPage(page: number): void;
@@ -52,6 +69,7 @@ export interface ViewerState {
 
 export const useViewer = create<ViewerState>((set, get) => ({
   fileName: null,
+  docs: [],
   numPages: 0,
   pageSizes: [],
   currentPage: 1,
@@ -65,9 +83,10 @@ export const useViewer = create<ViewerState>((set, get) => ({
   categories: DEFAULT_CATEGORIES,
   activeCategoryId: null,
 
-  setDocument: ({ fileName, numPages, pageSizes }) =>
+  setDocument: ({ fileName, numPages, pageSizes, docId, fingerprint }) =>
     set({
       fileName,
+      docs: [{ id: docId ?? 'doc', name: fileName, fingerprint, numPages, pageOffset: 0, pageSizes }],
       numPages,
       pageSizes,
       currentPage: 1,
@@ -78,6 +97,29 @@ export const useViewer = create<ViewerState>((set, get) => ({
       selectedId: null,
       categories: DEFAULT_CATEGORIES,
       activeCategoryId: null,
+    }),
+  addDocument: (doc) =>
+    set((s) => {
+      const docs = layoutDocs([...s.docs.filter((d) => d.id !== doc.id), { ...doc }]);
+      return { docs, ...concatPages(docs), fileName: docs[0].name, error: null };
+    }),
+  updateDocument: (docId, patch) =>
+    set((s) => ({
+      docs: s.docs.map((d) => (d.id === docId ? { ...d, ...patch } : d)),
+      fileName: s.docs[0]?.id === docId && patch.name ? patch.name : s.fileName,
+    })),
+  removeDocument: (docId) =>
+    set((s) => {
+      const r = removeDocFromWorkspace(s, docId);
+      if (!r) return {};
+      const selectedGone = s.selectedId != null && !r.measurements.some((m) => m.id === s.selectedId);
+      return {
+        ...r,
+        fileName: r.docs[0]?.name ?? null,
+        draft: [],
+        selectedId: selectedGone ? null : s.selectedId,
+        ...(r.docs.length === 0 ? { categories: DEFAULT_CATEGORIES, activeCategoryId: null } : {}),
+      };
     }),
   setLoading: (loading) => set({ loading }),
   setError: (error) => set({ error }),

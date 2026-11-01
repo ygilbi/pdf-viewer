@@ -7,25 +7,82 @@ import {
   computeDocumentSummary,
   computeNetAreas,
   computePageSummary,
+  isMarkupKind,
   kindOf,
   measurementsToCSV,
   polygonAreaM2,
   polygonPerimeterMeters,
   polylineLengthMeters,
 } from '../core/measurementEngine';
-import { IconCount, IconDeduct, IconHand, IconLength, IconPolygon, IconRuler } from './ui/icons';
+import {
+  IconAreaM2,
+  IconArrow,
+  IconCloud,
+  IconCount,
+  IconDeduct,
+  IconHand,
+  IconHighlight,
+  IconLength,
+  IconNote,
+  IconPen,
+  IconRect,
+  IconRuler,
+  IconText,
+} from './ui/icons';
 import { baseName, downloadBlob, isTypingTarget } from './ui/util';
 
 export const DOWNLOAD_HINT = "אם ההורדה חסומה, השתמש ב'העתק טבלה'";
 
-export const TOOLS: { id: ToolId; label: string; shortcut: string; icon: ReactElement }[] = [
-  { id: 'pan', label: 'יד / הזזה', shortcut: 'V / H', icon: <IconHand /> },
-  { id: 'calibrate', label: 'כיול קנה מידה', shortcut: 'C', icon: <IconRuler /> },
-  { id: 'area', label: 'מדידת שטח חזית', shortcut: 'A', icon: <IconPolygon /> },
-  { id: 'deduct', label: 'פתח לניכוי', shortcut: 'D', icon: <IconDeduct /> },
-  { id: 'length', label: 'מדידת אורך', shortcut: 'L', icon: <IconLength /> },
-  { id: 'count', label: 'ספירת פריטים', shortcut: 'N', icon: <IconCount /> },
+export type ToolGroup = 'measure' | 'markup';
+
+export interface ToolDef {
+  id: ToolId;
+  /** Full name (tooltip, aria-label). */
+  label: string;
+  /** Short name shown next to the icon in the palette. */
+  short: string;
+  shortcut: string;
+  icon: ReactElement;
+  group: ToolGroup;
+  /** Extra tooltip line. */
+  hint?: string;
+}
+
+export const TOOL_GROUP_LABELS: Record<ToolGroup, string> = { measure: 'מדידה', markup: 'סימון והערות' };
+
+export const TOOLS: ToolDef[] = [
+  { id: 'pan', label: 'יד / הזזה', short: 'יד / הזזה', shortcut: 'V / H', icon: <IconHand />, group: 'measure', hint: 'גרירת סימון מזיזה אותו' },
+  { id: 'calibrate', label: 'כיול קנה מידה', short: 'כיול', shortcut: 'C', icon: <IconRuler />, group: 'measure' },
+  { id: 'area', label: 'מדידת שטח חזית', short: 'שטח חזית', shortcut: 'A', icon: <IconAreaM2 />, group: 'measure' },
+  { id: 'deduct', label: 'פתח לניכוי', short: 'פתח לניכוי', shortcut: 'D', icon: <IconDeduct />, group: 'measure' },
+  { id: 'length', label: 'מדידת אורך', short: 'אורך', shortcut: 'L', icon: <IconLength />, group: 'measure' },
+  { id: 'count', label: 'ספירת פריטים', short: 'ספירה', shortcut: 'N', icon: <IconCount />, group: 'measure' },
+  { id: 'note', label: 'הערה', short: 'הערה', shortcut: 'K', icon: <IconNote />, group: 'markup', hint: 'לחץ למיקום סיכה והקלד הערה' },
+  { id: 'text', label: 'טקסט על השרטוט', short: 'טקסט', shortcut: 'X', icon: <IconText />, group: 'markup' },
+  { id: 'rect', label: 'מלבן', short: 'מלבן', shortcut: 'R', icon: <IconRect />, group: 'markup', hint: 'גרור לציור' },
+  { id: 'cloud', label: 'ענן תיקון', short: 'ענן תיקון', shortcut: 'U', icon: <IconCloud />, group: 'markup', hint: 'גרור מלבן' },
+  { id: 'arrow', label: 'חץ', short: 'חץ', shortcut: 'W', icon: <IconArrow />, group: 'markup', hint: 'גרור מהזנב לראש' },
+  { id: 'pen', label: 'עט חופשי', short: 'עט חופשי', shortcut: 'P', icon: <IconPen />, group: 'markup' },
+  { id: 'highlight', label: 'מרקר (הדגשה)', short: 'מרקר', shortcut: 'G', icon: <IconHighlight />, group: 'markup', hint: 'גרור מלבן שקוף' },
 ];
+
+/** e.code → tool (e.code so shortcuts work on a Hebrew keyboard layout too). */
+const TOOL_KEYS: Record<string, ToolId> = {
+  KeyV: 'pan',
+  KeyH: 'pan',
+  KeyC: 'calibrate',
+  KeyA: 'area',
+  KeyD: 'deduct',
+  KeyL: 'length',
+  KeyN: 'count',
+  KeyK: 'note',
+  KeyX: 'text',
+  KeyR: 'rect',
+  KeyU: 'cloud',
+  KeyW: 'arrow',
+  KeyP: 'pen',
+  KeyG: 'highlight',
+};
 
 /** Global tool / page shortcuts (always active while a document is open). */
 export function useToolShortcuts() {
@@ -35,27 +92,13 @@ export function useToolShortcuts() {
       if (isTypingTarget(e.target)) return;
       const s = useViewer.getState();
       if (s.numPages === 0) return;
-      // e.code so shortcuts work on a Hebrew keyboard layout too.
+      const t = TOOL_KEYS[e.code];
+      if (t) {
+        s.setTool(t);
+        e.preventDefault();
+        return;
+      }
       switch (e.code) {
-        case 'KeyV':
-        case 'KeyH':
-          s.setTool('pan');
-          break;
-        case 'KeyC':
-          s.setTool('calibrate');
-          break;
-        case 'KeyA':
-          s.setTool('area');
-          break;
-        case 'KeyD':
-          s.setTool('deduct');
-          break;
-        case 'KeyL':
-          s.setTool('length');
-          break;
-        case 'KeyN':
-          s.setTool('count');
-          break;
         case 'PageUp':
           s.setPage(s.currentPage - 1);
           break;
@@ -94,6 +137,7 @@ export function exportJSON() {
     measurements: s.measurements.map((m) => {
       const c = s.calibrations[m.page];
       const kind = kindOf(m);
+      if (isMarkupKind(kind)) return { ...m, kind, markup: true };
       const ppm = c?.pixelsPerMeter;
       if (kind === 'length') {
         return { ...m, kind, lengthM: ppm ? polylineLengthMeters(m.points, ppm) : null };

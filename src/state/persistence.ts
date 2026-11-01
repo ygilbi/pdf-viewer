@@ -4,9 +4,12 @@
  * Flow (driven by App's open flow):
  *   const fp = fingerprintFile(file);   // start hashing in parallel with open()
  *   ...open succeeds...
- *   detachDocument();                   // flush + stop saving for the old file
+ *   detachDocument();                   // flush + stop saving for the old file(s)
  *   setDocument(...);                   // store resets to empty state
  *   await restoreDocument(await fp, file.name); // hydrate, then resume saving
+ * Adding a file to the workspace: addDocument(doc) then
+ *   restoreDocument(fp, name, doc.id). Removing: detachDoc(id) then removeDocument(id).
+ * Records are per file with LOCAL page numbers (see workspace.ts).
  *
  * Saving never happens for a document until its hydration has completed, so
  * the empty state produced by setDocument can't clobber a stored record.
@@ -17,6 +20,7 @@ import { create } from 'zustand';
 import { useViewer } from './store';
 import type { ViewerState } from './store';
 import { sanitizeCategories } from '../core/measurementEngine';
+import { extractDocData, toGlobalData } from './workspace';
 
 const DB_NAME = 'aluminum-app';
 const DB_VERSION = 1;
@@ -144,11 +148,25 @@ export async function fingerprintFile(file: File): Promise<string> {
 }
 
 // ---------------------------------------------------------------------------
-// Session state (module-level; one document at a time)
+// Session state (module-level; one entry per open file of the workspace)
 // ---------------------------------------------------------------------------
+//
+// Each file is saved under its own fingerprint with LOCAL page numbers
+// (1..numPages of that file), so a file restores correctly whether it is
+// opened alone or at any position in a multi-file workspace. Records written
+// before multi-file support were single-file, where local = global.
 
-let current: { fingerprint: string; fileName: string; hadRecord: boolean } | null = null;
-/** Bumped on every detach so stale in-flight restores abandon themselves. */
+interface Tracked {
+  fingerprint: string;
+  fileName: string;
+  hadRecord: boolean;
+  /** Serialized content of the last write (skip identical re-writes). */
+  lastSig: string;
+}
+
+/** docId → tracking info. Only docs whose hydration finished are saved. */
+const tracked = new Map<string, Tracked>();
+/** Bumped by detachDocument() so stale in-flight restores abandon themselves. */
 let token = 0;
 let saveTimer: ReturnType<typeof setTimeout> | null = null;
 let available = true;
@@ -158,27 +176,45 @@ export function isPersistenceAvailable() {
   return available;
 }
 
-function snapshot(): PersistedDocument | null {
-  if (!current) return null;
+function snapshot(docId: string, t: Tracked): PersistedDocument | null {
   const s = useViewer.getState();
+  const doc = s.docs.find((d) => d.id === docId);
+  if (!doc) return null;
+  const { measurements, calibrations } = extractDocData(doc, s.measurements, s.calibrations);
   return {
-    fingerprint: current.fingerprint,
-    fileName: current.fileName,
+    fingerprint: t.fingerprint,
+    fileName: t.fileName,
     updatedAt: Date.now(),
-    calibrations: s.calibrations,
-    measurements: s.measurements,
+    calibrations,
+    measurements,
     categories: s.categories,
   };
 }
 
 // IndexedDB transactions started during pagehide are usually aborted when the
 // page unloads, so the unload flush also writes a synchronous localStorage
-// journal (one record). restoreDocument() applies it if it is newer.
+// journal (all files of the workspace). restoreDocument() applies an entry if
+// it is newer. Older journals hold a single record object.
 const JOURNAL_KEY = 'aluminum-app:pending-save';
 
-function writeJournal(rec: PersistedDocument) {
+function readJournal(): PersistedDocument[] {
+  const raw = localStorage.getItem(JOURNAL_KEY);
+  if (!raw) return [];
+  const v = JSON.parse(raw) as PersistedDocument | PersistedDocument[];
+  return (Array.isArray(v) ? v : [v]).filter((r) => r && typeof r.fingerprint === 'string');
+}
+
+function writeJournal(recs: PersistedDocument[]) {
   try {
-    localStorage.setItem(JOURNAL_KEY, JSON.stringify(rec));
+    if (recs.length === 0) return;
+    const fps = new Set(recs.map((r) => r.fingerprint));
+    let keep: PersistedDocument[] = [];
+    try {
+      keep = readJournal().filter((r) => !fps.has(r.fingerprint));
+    } catch {
+      /* corrupt journal → overwrite */
+    }
+    localStorage.setItem(JOURNAL_KEY, JSON.stringify([...keep, ...recs]));
   } catch (err) {
     console.warn('[persistence] journal write failed', err);
   }
@@ -186,11 +222,12 @@ function writeJournal(rec: PersistedDocument) {
 
 function takeJournal(fingerprint: string): PersistedDocument | null {
   try {
-    const raw = localStorage.getItem(JOURNAL_KEY);
-    if (!raw) return null;
-    const rec = JSON.parse(raw) as PersistedDocument;
-    if (rec?.fingerprint !== fingerprint) return null;
-    localStorage.removeItem(JOURNAL_KEY);
+    const all = readJournal();
+    const rec = all.find((r) => r.fingerprint === fingerprint) ?? null;
+    if (!rec) return null;
+    const rest = all.filter((r) => r !== rec);
+    if (rest.length) localStorage.setItem(JOURNAL_KEY, JSON.stringify(rest));
+    else localStorage.removeItem(JOURNAL_KEY);
     return rec;
   } catch (err) {
     console.warn('[persistence] journal read failed', err);
@@ -198,42 +235,64 @@ function takeJournal(fingerprint: string): PersistedDocument | null {
   }
 }
 
+function signature(rec: PersistedDocument): string {
+  return JSON.stringify([rec.measurements, rec.calibrations, rec.categories]);
+}
+
 function writeNow(unloading = false) {
   if (saveTimer) {
     clearTimeout(saveTimer);
     saveTimer = null;
   }
-  const rec = snapshot();
-  if (!rec || !current) return;
-  // Don't create records for files that were never measured.
-  if (!current.hadRecord && rec.measurements.length === 0 && Object.keys(rec.calibrations).length === 0) return;
-  current.hadRecord = true;
-  if (unloading) writeJournal(rec);
-  putRecord(rec).catch((err) => {
-    available = false;
-    console.warn('[persistence] save failed', err);
-  });
+  const journal: PersistedDocument[] = [];
+  for (const [docId, t] of tracked) {
+    const rec = snapshot(docId, t);
+    if (!rec) continue;
+    // Don't create records for files that were never measured.
+    if (!t.hadRecord && rec.measurements.length === 0 && Object.keys(rec.calibrations).length === 0) continue;
+    const sig = signature(rec);
+    if (sig === t.lastSig) continue; // unchanged (e.g. another file of the workspace changed)
+    t.hadRecord = true;
+    t.lastSig = sig;
+    journal.push(rec);
+    putRecord(rec).catch((err) => {
+      available = false;
+      t.lastSig = '';
+      console.warn('[persistence] save failed', err);
+    });
+  }
+  if (unloading) writeJournal(journal);
 }
 
 function scheduleSave() {
-  if (!current) return;
+  if (tracked.size === 0) return;
   if (saveTimer) clearTimeout(saveTimer);
   saveTimer = setTimeout(writeNow, SAVE_DEBOUNCE_MS);
 }
 
-/** Flush any pending save for the current document and stop tracking it. Call BEFORE setDocument. */
+/** Flush any pending save for ALL files and stop tracking them. Call BEFORE setDocument (replace). */
 export function detachDocument() {
   if (saveTimer) writeNow();
-  current = null;
+  tracked.clear();
   token++;
 }
 
+/** Flush pending saves and stop tracking one file. Call BEFORE store.removeDocument(docId). */
+export function detachDoc(docId: string) {
+  if (saveTimer) writeNow();
+  tracked.delete(docId);
+}
+
 /**
- * Look up the stored record for `fingerprint`, hydrate the store with it and
- * start auto-saving. Returns the number of restored measurements (0 if none).
+ * Look up the stored record for `fingerprint`, hydrate the store with it
+ * (mapped from the file's local pages to its global pages in the workspace)
+ * and start auto-saving it. `docId` defaults to the first open file (the
+ * single-file flow). Returns the number of restored measurements (0 if none).
  */
-export async function restoreDocument(fingerprint: string, fileName: string): Promise<number> {
-  const my = ++token;
+export async function restoreDocument(fingerprint: string, fileName: string, docId?: string): Promise<number> {
+  const my = token;
+  const id = docId ?? useViewer.getState().docs[0]?.id;
+  if (id === undefined) return 0;
   let rec: PersistedDocument | undefined;
   try {
     rec = await getRecord(fingerprint);
@@ -241,27 +300,40 @@ export async function restoreDocument(fingerprint: string, fileName: string): Pr
     available = false;
     console.warn('[persistence] lookup failed', err);
   }
-  if (my !== token) return 0; // another document was opened meanwhile
+  const s = useViewer.getState();
+  const doc = s.docs.find((d) => d.id === id);
+  if (my !== token || !doc) return 0; // workspace replaced / file removed meanwhile
   const journal = takeJournal(fingerprint);
   if (journal && (!rec || journal.updatedAt > rec.updatedAt)) {
     rec = journal;
     putRecord({ ...journal, fileName }).catch((err) => console.warn('[persistence] journal replay failed', err));
   }
-  current = { fingerprint, fileName, hadRecord: !!rec };
+  tracked.set(id, { fingerprint, fileName, hadRecord: !!rec, lastSig: '' });
   if (!rec) return 0;
-  const s = useViewer.getState();
-  const measurements = Array.isArray(rec.measurements) ? rec.measurements : [];
-  const calibrations = rec.calibrations && typeof rec.calibrations === 'object' ? rec.calibrations : {};
+  const saved = toGlobalData(
+    doc,
+    Array.isArray(rec.measurements) ? rec.measurements : [],
+    rec.calibrations && typeof rec.calibrations === 'object' ? rec.calibrations : {},
+  );
   // Merge with anything drawn in the brief window before hydration.
   const ids = new Set(s.measurements.map((m) => m.id));
-  const categories = sanitizeCategories(rec.categories);
+  const savedCats = sanitizeCategories(rec.categories);
+  let categories: ViewerState['categories'] | undefined;
+  if (savedCats) {
+    if (s.docs.length <= 1) categories = savedCats; // single file: saved list wins (as before)
+    else {
+      const have = new Set(s.categories.map((c) => c.id));
+      const extra = savedCats.filter((c) => !have.has(c.id));
+      if (extra.length) categories = [...s.categories, ...extra];
+    }
+  }
   useViewer.setState({
-    measurements: [...measurements.filter((m) => !ids.has(m.id)), ...s.measurements],
-    calibrations: { ...calibrations, ...s.calibrations },
+    measurements: [...s.measurements, ...saved.measurements.filter((m) => !ids.has(m.id))],
+    calibrations: { ...saved.calibrations, ...s.calibrations },
     ...(categories ? { categories } : {}),
   });
-  const n = measurements.length;
-  if (n > 0) useRestoreToast.setState({ count: n, key: Date.now() });
+  const n = saved.measurements.length;
+  if (n > 0) useRestoreToast.setState((t) => ({ count: (Date.now() - t.key < 3000 ? t.count : 0) + n, key: Date.now() }));
   return n;
 }
 

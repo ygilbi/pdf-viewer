@@ -126,7 +126,7 @@ export function TopMenu({ onOpenFile }: { onOpenFile(file: File): void }) {
       <div className="flex flex-wrap items-center gap-x-1 gap-y-1.5 px-2 py-1.5">
         {/* file */}
         <Group label="קובץ">
-          <ToolButton label="פתח קובץ PDF" onClick={() => fileInput.current?.click()} showLabel>
+          <ToolButton label="פתח קובץ (החלף)" onClick={() => fileInput.current?.click()} showLabel>
             <IconFolderOpen />
           </ToolButton>
           {fileName && (

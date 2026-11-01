@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useViewer } from '../state/store';
 import { getPdfClient } from '../core/pdfClient';
-import type { AreaMeasurement, MeasurementKind, Point, ToolId } from '../core/types';
+import type { AreaMeasurement, MarkupKind, MeasurementKind, Point, ToolId } from '../core/types';
 import {
   DEDUCT_COLOR,
   KIND_LABEL_PREFIX,
@@ -11,6 +11,7 @@ import {
   distanceToPolyline,
   formatArea,
   formatLength,
+  isMarkupKind,
   isSelfIntersecting,
   lengthMeters,
   nearestVertex,
@@ -28,6 +29,23 @@ import { ViewportController } from './viewer/Viewport';
 import { PageLayers } from './viewer/TileLayer';
 import { MeasureOverlay, OVERLAY_WARN_COLOR } from './viewer/MeasureOverlay';
 import { emitZoom, registerViewer } from './viewer/commands';
+import { MarkupEditor, NoteBubbles } from './viewer/MarkupHtml';
+import { useMarkup } from '../state/markupStore';
+import {
+  DEFAULT_STROKE_WIDTH,
+  HIGHLIGHT_COLOR,
+  MARKUP_COLOR,
+  arrowHeadPath,
+  arrowHeadSize,
+  arrowShaftEnd,
+  cloudPath,
+  hitMarkup,
+  normRect,
+  polylinePath,
+  rectPath,
+  simplifyRDP,
+  translatePoints,
+} from '../core/markupGeometry';
 
 /**
  * Main drawing viewport.
@@ -62,6 +80,10 @@ type Gesture =
   | { kind: 'pending'; id: number; sx: number; sy: number; threshold: number }
   | { kind: 'pan'; id: number; lx: number; ly: number; sx: number; sy: number; moved: boolean; clickOnUp: boolean }
   | { kind: 'vertex'; id: number; mid: string; index: number; points: Point[] }
+  /** Drag-to-draw markup (rect / cloud / arrow / pen / highlight). */
+  | { kind: 'draw'; id: number; tool: MarkupKind; pts: Point[]; sx: number; sy: number; lx: number; ly: number }
+  /** Dragging a whole markup annotation (pan tool). */
+  | { kind: 'move'; id: number; mid: string; sx: number; sy: number; orig: Point[]; points: Point[]; moved: boolean }
   | { kind: 'pinch'; a: number; b: number; dist: number; mx: number; my: number };
 
 function isTypingTarget(t: EventTarget | null): boolean {
@@ -77,12 +99,29 @@ function toolKind(t: ToolId): MeasurementKind | null {
   return t === 'area' || t === 'deduct' || t === 'length' ? t : null;
 }
 const isPolygonTool = (t: ToolId) => t === 'area' || t === 'deduct';
+/** Markup tools drawn by dragging. */
+const isDragTool = (t: ToolId): t is MarkupKind =>
+  t === 'rect' || t === 'cloud' || t === 'arrow' || t === 'pen' || t === 'highlight';
+/** Markup kinds without vertex handles (moved as a whole only). */
+const noHandles = (m: AreaMeasurement) => {
+  const k = kindOf(m);
+  return k === 'pen' || k === 'note' || k === 'text';
+};
+/** Minimum drag (screen px) for a drawn markup shape to count. */
+const MIN_DRAW_PX = 4;
+/** Default 'text' size on screen at the zoom it is placed at (then scales with the drawing). */
+const TEXT_SCREEN_PX = 16;
 
 type StoreState = ReturnType<typeof useViewer.getState>;
 
 /** Color + category for a new measurement: follows the active category (openings stay red-hatched). */
-function newMeasurementStyle(s: StoreState, kind: MeasurementKind): Pick<AreaMeasurement, 'color' | 'category'> {
+function newMeasurementStyle(s: StoreState, kind: MeasurementKind | MarkupKind): Pick<AreaMeasurement, 'color' | 'category'> {
   const cat = s.activeCategoryId ? s.categories.find((c) => c.id === s.activeCategoryId) : undefined;
+  if (isMarkupKind(kind)) {
+    const picked = useMarkup.getState().color;
+    const color = picked ?? (kind === 'highlight' ? HIGHLIGHT_COLOR : (cat?.color ?? MARKUP_COLOR));
+    return cat ? { color, category: cat.id } : { color };
+  }
   const color =
     kind === 'deduct'
       ? DEDUCT_COLOR
@@ -112,16 +151,31 @@ function toolColor(t: ToolId, bad = false): string {
   return '#2563eb';
 }
 
-/** Topmost measurement under a page point: count markers first, then lines, openings, areas. */
+/** Topmost markup under a page point (notes, then text, then shapes). */
+function hitMarkupAt(p: Point, ms: AreaMeasurement[], page: number, zoom: number, kinds?: MarkupKind[]): AreaMeasurement | undefined {
+  const onPage = ms.filter((m) => m.page === page && isMarkupKind(m.kind) && (!kinds || kinds.includes(m.kind as MarkupKind))).reverse();
+  const slop = LINE_HIT_PX / zoom;
+  const hit = (m: AreaMeasurement) => hitMarkup(p, m, slop, 1 / zoom);
+  return (
+    onPage.find((m) => m.kind === 'note' && hit(m)) ??
+    onPage.find((m) => m.kind === 'text' && hit(m)) ??
+    onPage.find((m) => m.kind !== 'highlight' && hit(m)) ??
+    onPage.find((m) => hit(m))
+  );
+}
+
+/** Topmost measurement under a page point: markup, count markers, then lines, openings, areas. */
 function hitTest(
   p: Point,
   ms: AreaMeasurement[],
   page: number,
   lineSlop: number,
   markerSlop: number,
+  zoom: number,
 ): AreaMeasurement | undefined {
   const onPage = ms.filter((m) => m.page === page).reverse();
   return (
+    hitMarkupAt(p, ms, page, zoom) ??
     onPage.find((m) => kindOf(m) === 'count' && nearestVertex(p, m.points, markerSlop) >= 0) ??
     onPage.find((m) => kindOf(m) === 'length' && distanceToPolyline(p, m.points) <= lineSlop) ??
     onPage.find((m) => kindOf(m) === 'deduct' && pointInPolygon(p, m.points)) ??
@@ -138,10 +192,13 @@ export default function ViewerCanvas() {
   const calibrations = useViewer((s) => s.calibrations);
   const measurements = useViewer((s) => s.measurements);
   const selectedId = useViewer((s) => s.selectedId);
+  const editingId = useMarkup((s) => s.editingId);
 
   const size = numPages > 0 ? pageSizes[currentPage - 1] : undefined;
   const calibration = calibrations[currentPage];
   const pageMeasurements = useMemo(() => measurements.filter((m) => m.page === currentPage), [measurements, currentPage]);
+  const pageNotes = useMemo(() => pageMeasurements.filter((m) => m.kind === 'note'), [pageMeasurements]);
+  const editing = editingId ? pageMeasurements.find((m) => m.id === editingId) : undefined;
 
   const [override, setOverride] = useState<{ id: string; points: Point[] } | null>(null);
 
@@ -154,11 +211,12 @@ export default function ViewerCanvas() {
   const livePolyRef = useRef<SVGPolygonElement>(null);
   const segmentRef = useRef<SVGLineElement>(null);
   const closingRef = useRef<SVGLineElement>(null);
+  const markupRef = useRef<SVGPathElement>(null);
   const layersRef = useRef<PageLayers | null>(null);
   /** Imperative hooks the main effect installs, so React effects can poke them. */
   const hooks = useRef({ updateBand: () => {}, updateCursor: () => {} });
 
-  const band = useMemo(() => ({ livePoly: livePolyRef, segment: segmentRef, closing: closingRef }), []);
+  const band = useMemo(() => ({ livePoly: livePolyRef, segment: segmentRef, closing: closingRef, markup: markupRef }), []);
 
   // ---------------------------------------------------------------------------
   // Mount: viewport, raster layers, commands, input handling.
@@ -183,6 +241,9 @@ export default function ViewerCanvas() {
     let overrideFrame = 0;
     let pendingOverride: { id: string; points: Point[] } | null = null;
     let interacting = false;
+    /** Markup under the mouse (pan tool cursor + note hover bubble). */
+    let hoverId: string | null = null;
+    let lastMarkupClick: { t: number; id: string } | null = null;
 
     const local = (e: { clientX: number; clientY: number }) => ({ x: e.clientX - rect.left, y: e.clientY - rect.top });
     const st = () => useViewer.getState();
@@ -284,9 +345,20 @@ export default function ViewerCanvas() {
       const p = cursorPage();
       const drawing =
         s.numPages > 0 &&
-        (toolKind(s.tool) !== null || s.tool === 'count' || (s.tool === 'calibrate' && s.draft.length < 2));
+        (toolKind(s.tool) !== null ||
+          s.tool === 'count' ||
+          isMarkupKind(s.tool) ||
+          (s.tool === 'calibrate' && s.draft.length < 2));
       const polyTool = isPolygonTool(s.tool);
-      const active = drawing && p !== null && gesture.kind !== 'pan' && gesture.kind !== 'pinch' && gesture.kind !== 'vertex';
+      const active =
+        drawing &&
+        p !== null &&
+        gesture.kind !== 'pan' &&
+        gesture.kind !== 'pinch' &&
+        gesture.kind !== 'vertex' &&
+        gesture.kind !== 'draw' &&
+        gesture.kind !== 'move' &&
+        !useMarkup.getState().editingId;
       const d = s.draft;
       const ppm = s.calibrations[s.currentPage]?.pixelsPerMeter;
 
@@ -326,7 +398,12 @@ export default function ViewerCanvas() {
         let text = '';
         let warn = false;
         if (active && p) {
-          if (s.tool === 'count') {
+          if (s.tool === 'note') text = 'לחץ להוספת הערה';
+          else if (s.tool === 'text') text = 'לחץ להוספת טקסט';
+          else if (s.tool === 'arrow') text = 'גרור מהזנב לראש החץ';
+          else if (s.tool === 'pen') text = 'גרור לציור חופשי';
+          else if (isDragTool(s.tool)) text = 'גרור לציור';
+          else if (s.tool === 'count') {
             const g = activeCount(s);
             text = g
               ? `${g.label} ×${g.points.length} · לחץ להוספה · Enter לסיום`
@@ -377,15 +454,50 @@ export default function ViewerCanvas() {
       const s = st();
       if (s.draft.length || !s.selectedId) return false;
       const m = s.measurements.find((x) => x.id === s.selectedId && x.page === s.currentPage);
-      return !!m && nearestVertex(vp.toPage(cursor.x, cursor.y), m.points, VERTEX_PX / vp.zoom) >= 0;
+      return !!m && !noHandles(m) && nearestVertex(vp.toPage(cursor.x, cursor.y), m.points, VERTEX_PX / vp.zoom) >= 0;
+    };
+    /** Track the markup under the mouse: pan-tool cursor + note comment bubble on hover. */
+    const updateHover = () => {
+      const s = st();
+      const m = cursor && s.numPages > 0 ? hitMarkupAt(vp.toPage(cursor.x, cursor.y), s.measurements, s.currentPage, vp.zoom) : undefined;
+      const id = m ? m.id : null;
+      if (id === hoverId) return;
+      if (hoverId) world.querySelector(`[data-note-bubble="${CSS.escape(hoverId)}"]`)?.removeAttribute('data-hover');
+      hoverId = id;
+      if (id && m?.kind === 'note') world.querySelector(`[data-note-bubble="${CSS.escape(id)}"]`)?.setAttribute('data-hover', '');
+    };
+    /** Live preview of a markup being dragged out (direct DOM writes, no React). */
+    const updateLive = (g: Extract<Gesture, { kind: 'draw' }> | null) => {
+      const el = markupRef.current;
+      if (!el) return;
+      if (!g) {
+        el.setAttribute('visibility', 'hidden');
+        el.setAttribute('d', '');
+        return;
+      }
+      const a = g.pts[0];
+      const b = g.pts[g.pts.length - 1];
+      let d = '';
+      if (g.tool === 'pen') d = polylinePath(g.pts);
+      else if (g.tool === 'arrow') {
+        const size = arrowHeadSize(useMarkup.getState().strokeWidth) / vp.zoom;
+        const end = arrowShaftEnd(a, b, size);
+        d = `M${a.x} ${a.y}L${end.x} ${end.y}` + arrowHeadPath(a, b, size);
+      } else if (g.tool === 'cloud') d = cloudPath(normRect(a, b));
+      else d = rectPath(normRect(a, b));
+      el.setAttribute('d', d);
+      el.setAttribute('visibility', 'visible');
     };
     const updateCursor = () => {
       let c: string;
       const tl = st().tool;
       if (gesture.kind === 'pan' && (gesture.moved || tl === 'pan')) c = 'grabbing';
-      else if (gesture.kind === 'vertex') c = 'move';
+      else if (gesture.kind === 'vertex' || gesture.kind === 'move') c = 'move';
+      else if (gesture.kind === 'draw') c = 'crosshair';
       else if (space) c = 'grab';
       else if (hoverVertex()) c = 'move';
+      else if (tl === 'pan' && hoverId) c = 'move';
+      else if ((tl === 'note' || tl === 'text') && hoverId) c = 'pointer';
       else c = tl === 'pan' ? 'grab' : 'crosshair';
       if (container.style.cursor !== c) container.style.cursor = c;
     };
@@ -418,8 +530,35 @@ export default function ViewerCanvas() {
       if (s.numPages === 0) return;
       const raw = vp.toPage(sx, sy);
       if (s.tool === 'pan') {
-        const hit = hitTest(raw, s.measurements, s.currentPage, LINE_HIT_PX / vp.zoom, VERTEX_PX / vp.zoom);
+        const hit = hitTest(raw, s.measurements, s.currentPage, LINE_HIT_PX / vp.zoom, VERTEX_PX / vp.zoom, vp.zoom);
         s.select(hit ? hit.id : null);
+        return;
+      }
+      if (s.tool === 'note' || s.tool === 'text') {
+        // Clicking an existing note / text edits it; elsewhere places a new one.
+        const hit = hitMarkupAt(raw, s.measurements, s.currentPage, vp.zoom, ['note', 'text']);
+        if (hit) {
+          s.select(hit.id);
+          useMarkup.getState().startEditing(hit.id);
+          return;
+        }
+        const kind = s.tool;
+        const id = newId();
+        const ms = useMarkup.getState();
+        s.addMeasurement({
+          id,
+          page: s.currentPage,
+          kind,
+          label: `${KIND_LABEL_PREFIX[kind]} ${nextLabelNumber(s.measurements, kind)}`,
+          points: [raw],
+          text: '',
+          ...(kind === 'text'
+            ? { fontSize: Math.round(Math.min(400, Math.max(1, TEXT_SCREEN_PX / vp.zoom)) * 10) / 10 }
+            : {}),
+          ...(ms.strokeWidth !== DEFAULT_STROKE_WIDTH ? { strokeWidth: ms.strokeWidth } : {}),
+          ...newMeasurementStyle(s, kind),
+        });
+        ms.startEditing(id, true);
         return;
       }
       if (s.tool === 'count') {
@@ -460,6 +599,40 @@ export default function ViewerCanvas() {
       }
       if (s.selectedId) s.select(null);
       s.setDraft([...d, p]);
+    };
+
+    /** Finish a drag-to-draw gesture: create the markup if it is big enough. */
+    const finishDraw = (g: Extract<Gesture, { kind: 'draw' }>) => {
+      updateLive(null);
+      const s = st();
+      const a = g.pts[0];
+      const b = g.pts[g.pts.length - 1];
+      let points: Point[];
+      if (g.tool === 'pen') {
+        points = simplifyRDP(g.pts, 0.75 / vp.zoom);
+        let len = 0;
+        for (let i = 1; i < g.pts.length; i++) len += distance(g.pts[i - 1], g.pts[i]);
+        if (len * vp.zoom < MIN_DRAW_PX) return;
+        if (points.length < 2) points = [a, b];
+      } else {
+        const r = normRect(a, b);
+        const big =
+          g.tool === 'arrow'
+            ? distance(a, b) * vp.zoom >= MIN_DRAW_PX * 2
+            : r.width * vp.zoom >= MIN_DRAW_PX && r.height * vp.zoom >= MIN_DRAW_PX;
+        if (!big) return;
+        points = g.tool === 'arrow' ? [a, b] : [{ x: r.x, y: r.y }, { x: r.x + r.width, y: r.y + r.height }];
+      }
+      const sw = useMarkup.getState().strokeWidth;
+      s.addMeasurement({
+        id: newId(),
+        page: s.currentPage,
+        kind: g.tool,
+        label: `${KIND_LABEL_PREFIX[g.tool]} ${nextLabelNumber(s.measurements, g.tool)}`,
+        points,
+        ...(sw !== DEFAULT_STROKE_WIDTH ? { strokeWidth: sw } : {}),
+        ...newMeasurementStyle(s, g.tool),
+      });
     };
 
     const flushOverride = () => {
@@ -522,7 +695,8 @@ export default function ViewerCanvas() {
       }
 
       if (pointers.size === 2) {
-        if (gesture.kind === 'vertex') queueOverride(null);
+        if (gesture.kind === 'vertex' || gesture.kind === 'move') queueOverride(null);
+        if (gesture.kind === 'draw') updateLive(null);
         startPinch();
         updateBand();
         return;
@@ -544,7 +718,7 @@ export default function ViewerCanvas() {
       // vertex handle of the selected measurement?
       if (!space && s.draft.length === 0 && s.selectedId) {
         const m = s.measurements.find((x) => x.id === s.selectedId && x.page === s.currentPage);
-        if (m) {
+        if (m && !noHandles(m)) {
           const slop = (e.pointerType === 'touch' ? VERTEX_PX * 1.8 : VERTEX_PX) / vp.zoom;
           const idx = nearestVertex(vp.toPage(q.x, q.y), m.points, slop);
           if (idx >= 0) {
@@ -556,6 +730,35 @@ export default function ViewerCanvas() {
         }
       }
 
+      if (!space && s.tool === 'pan') {
+        // Grab a markup annotation to move it (a plain click still selects it).
+        const hit = hitMarkupAt(vp.toPage(q.x, q.y), s.measurements, s.currentPage, vp.zoom);
+        if (hit) {
+          if (s.selectedId !== hit.id) s.select(hit.id);
+          gesture = { kind: 'move', id: e.pointerId, mid: hit.id, sx: q.x, sy: q.y, orig: hit.points, points: hit.points, moved: false };
+          updateCursor();
+          updateBand();
+          return;
+        }
+      }
+      if (!space && isDragTool(s.tool)) {
+        const p0 = vp.toPage(q.x, q.y);
+        gesture = { kind: 'draw', id: e.pointerId, tool: s.tool, pts: [p0, p0], sx: q.x, sy: q.y, lx: q.x, ly: q.y };
+        const el = markupRef.current;
+        if (el) {
+          const ms = useMarkup.getState();
+          const color = newMeasurementStyle(s, s.tool).color;
+          const hl = s.tool === 'highlight';
+          el.setAttribute('stroke', hl ? 'none' : color);
+          el.setAttribute('fill', hl ? color : s.tool === 'arrow' ? color : 'none');
+          el.setAttribute('fill-opacity', hl ? '0.35' : '1');
+          el.style.strokeWidth = `calc(${ms.strokeWidth}px * var(--inv-zoom, 1))`;
+        }
+        if (s.selectedId) s.select(null);
+        updateCursor();
+        updateBand();
+        return;
+      }
       if (space || s.tool === 'pan') {
         gesture = { kind: 'pan', id: e.pointerId, lx: q.x, ly: q.y, sx: q.x, sy: q.y, moved: false, clickOnUp: !space };
       } else {
@@ -623,9 +826,33 @@ export default function ViewerCanvas() {
           queueOverride({ id: g.mid, points: pts });
           return;
         }
+        case 'draw': {
+          if (e.pointerId !== g.id) return;
+          const p = vp.toPage(q.x, q.y);
+          if (g.tool === 'pen') {
+            if (Math.hypot(q.x - g.lx, q.y - g.ly) < 1) return;
+            g.pts.push(p);
+          } else {
+            const a = g.pts[0];
+            g.pts = [a, shift && g.tool === 'arrow' ? snapAngle(a, p, 45) : p];
+          }
+          g.lx = q.x;
+          g.ly = q.y;
+          updateLive(g);
+          return;
+        }
+        case 'move': {
+          if (e.pointerId !== g.id) return;
+          if (!g.moved && Math.hypot(q.x - g.sx, q.y - g.sy) <= (e.pointerType === 'touch' ? DRAG_PX_TOUCH : DRAG_PX_MOUSE)) return;
+          g.moved = true;
+          g.points = translatePoints(g.orig, (q.x - g.sx) / vp.zoom, (q.y - g.sy) / vp.zoom);
+          queueOverride({ id: g.mid, points: g.points });
+          return;
+        }
         case 'none':
           if (e.pointerType !== 'touch') {
             cursor = q;
+            updateHover();
             updateBand();
             updateCursor();
           }
@@ -643,6 +870,23 @@ export default function ViewerCanvas() {
         gesture = rest
           ? { kind: 'pan', id: rest[0], lx: rest[1].x, ly: rest[1].y, sx: rest[1].x, sy: rest[1].y, moved: true, clickOnUp: false }
           : { kind: 'none' };
+      } else if (g.kind === 'draw' && g.id === e.pointerId) {
+        gesture = { kind: 'none' };
+        if (!cancelled) finishDraw(g);
+        else updateLive(null);
+      } else if (g.kind === 'move' && g.id === e.pointerId) {
+        gesture = { kind: 'none' };
+        if (!cancelled && g.moved) st().updateMeasurement(g.mid, { points: g.points });
+        else if (!cancelled) {
+          // Plain click on a markup: double click edits note / text.
+          const now = performance.now();
+          const m = st().measurements.find((x) => x.id === g.mid);
+          if (lastMarkupClick && lastMarkupClick.id === g.mid && now - lastMarkupClick.t < DBL_MS && (m?.kind === 'note' || m?.kind === 'text')) {
+            lastMarkupClick = null;
+            useMarkup.getState().startEditing(g.mid);
+          } else lastMarkupClick = { t: now, id: g.mid };
+        }
+        if (g.moved) queueOverride(null);
       } else if ((g.kind === 'pan' || g.kind === 'pending' || g.kind === 'vertex') && g.id === e.pointerId) {
         gesture = { kind: 'none' };
         if (!cancelled) {
@@ -730,7 +974,10 @@ export default function ViewerCanvas() {
           vp.zoomBy(1 / ZOOM_STEP);
           break;
         case 'Escape':
-          if (s.draft.length) s.setDraft([]);
+          if (gesture.kind === 'draw') {
+            gesture = { kind: 'none' };
+            updateLive(null);
+          } else if (s.draft.length) s.setDraft([]);
           else if (s.selectedId) s.select(null);
           else handled = false;
           break;
@@ -751,7 +998,11 @@ export default function ViewerCanvas() {
         case 'NumpadEnter':
           if (toolKind(s.tool) && s.draft.length >= minPoints(toolKind(s.tool)!)) finishDraft();
           else if (s.tool === 'count' && activeCount(s)) s.select(null); // finish the count group
-          else handled = false;
+          else if (s.selectedId && !s.draft.length) {
+            const m = s.measurements.find((x) => x.id === s.selectedId);
+            if (m && (m.kind === 'note' || m.kind === 'text')) useMarkup.getState().startEditing(m.id);
+            else handled = false;
+          } else handled = false;
           break;
         default:
           if (e.key === '+') vp.zoomBy(ZOOM_STEP);
@@ -856,7 +1107,7 @@ export default function ViewerCanvas() {
   useEffect(() => {
     hooks.current.updateBand();
     hooks.current.updateCursor();
-  }, [tool, draft, calibration, selectedId, measurements]);
+  }, [tool, draft, calibration, selectedId, measurements, editingId]);
 
   const showPrompt = tool === 'calibrate' && draft.length === 2;
 
@@ -900,6 +1151,8 @@ export default function ViewerCanvas() {
             band={band}
           />
         )}
+        {size && <NoteBubbles notes={pageNotes} selectedId={selectedId} editingId={editingId} />}
+        {editing && <MarkupEditor key={editing.id} m={editing} />}
         {showPrompt && <CalibrationPrompt key={`${draft[0].x},${draft[0].y},${draft[1].x},${draft[1].y}`} p1={draft[0]} p2={draft[1]} />}
       </div>
       <div

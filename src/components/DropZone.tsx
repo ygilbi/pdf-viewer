@@ -2,11 +2,12 @@ import { useRef, useState } from 'react';
 import { IconFilePdf } from './ui/icons';
 
 interface Props {
-  onFile(file: File): void;
+  /** Several files: the first is opened, the rest are added to the workspace. */
+  onFiles(files: File[]): void;
 }
 
-/** Full-area empty state: drag & drop or click to choose a PDF. */
-export default function DropZone({ onFile }: Props) {
+/** Full-area empty state: drag & drop or click to choose one or more PDFs. */
+export default function DropZone({ onFiles }: Props) {
   const input = useRef<HTMLInputElement>(null);
   const [over, setOver] = useState(false);
   const [demoLoading, setDemoLoading] = useState(false);
@@ -19,7 +20,7 @@ export default function DropZone({ onFile }: Props) {
       const res = await fetch(`${import.meta.env.BASE_URL}demo-facade.pdf`);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const blob = await res.blob();
-      onFile(new File([blob], 'demo-facade.pdf', { type: 'application/pdf', lastModified: 0 /* stable key so saved measurements restore */ }));
+      onFiles([new File([blob], 'demo-facade.pdf', { type: 'application/pdf', lastModified: 0 /* stable key so saved measurements restore */ })]);
     } catch {
       setDemoError('טעינת קובץ הדוגמה נכשלה');
     } finally {
@@ -41,8 +42,8 @@ export default function DropZone({ onFile }: Props) {
           // preventDefault marks it handled; App's window-level drop handler skips it.
           e.preventDefault();
           setOver(false);
-          const f = e.dataTransfer.files?.[0];
-          if (f) onFile(f);
+          const files = Array.from(e.dataTransfer.files ?? []);
+          if (files.length) onFiles(files);
         }}
         className={
           'flex h-full max-h-[28rem] w-full max-w-2xl flex-col items-center justify-center gap-4 rounded-xl border-2 border-dashed transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-sky-500 ' +
@@ -52,7 +53,7 @@ export default function DropZone({ onFile }: Props) {
         }
       >
         <IconFilePdf size={56} className={over ? 'text-sky-400' : 'text-slate-500'} />
-        <div className="text-xl font-semibold">גרור קובץ PDF לכאן או לחץ לבחירה</div>
+        <div className="text-xl font-semibold">גרור קובצי PDF לכאן או לחץ לבחירה</div>
         <div className="max-w-md text-center text-sm text-slate-400">
           תוכניות אדריכליות, חזיתות וחתכים — גם קבצים כבדים. לאחר הפתיחה: כייל קנה מידה ומדוד שטחי חזית.
         </div>
@@ -73,11 +74,13 @@ export default function DropZone({ onFile }: Props) {
         ref={input}
         type="file"
         accept="application/pdf,.pdf"
+        multiple
         className="hidden"
+        data-testid="dropzone-input"
         onChange={(e) => {
-          const f = e.target.files?.[0];
-          if (f) onFile(f);
+          const files = Array.from(e.target.files ?? []);
           e.target.value = '';
+          if (files.length) onFiles(files);
         }}
       />
     </div>

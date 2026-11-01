@@ -89,6 +89,10 @@ export function FloatingChrome() {
 
   const numPages = useViewer((s) => s.numPages);
   const currentPage = useViewer((s) => s.currentPage);
+  // Multi-file workspace: "file · local/total" (null with a single file).
+  const fileDoc = useViewer((s) =>
+    s.docs.length > 1 ? s.docs.find((d) => s.currentPage > d.pageOffset && s.currentPage <= d.pageOffset + d.numPages) : undefined,
+  );
   const tool = useViewer((s) => s.tool);
   const setTool = useViewer((s) => s.setTool);
   const calibrated = useViewer((s) => !!s.calibrations[s.currentPage]);
@@ -138,12 +142,26 @@ export function FloatingChrome() {
           data-drawer-toggle="thumbs"
           onClick={() => toggleDrawer('thumbs')}
           title="דפים (T)"
-          aria-label={`דף ${currentPage} מתוך ${numPages}`}
+          aria-label={
+            fileDoc
+              ? `${fileDoc.name}, דף ${currentPage - fileDoc.pageOffset} מתוך ${fileDoc.numPages} (דף ${currentPage} מתוך ${numPages} בסך הכול)`
+              : `דף ${currentPage} מתוך ${numPages}`
+          }
           className={chipBtn + ' font-mono tabular-nums'}
           data-testid="pill-page"
         >
+          {fileDoc && (
+            <>
+              <span className="max-w-[9rem] truncate font-sans text-slate-400" dir="auto" title={fileDoc.name} data-testid="pill-file">
+                {fileDoc.name.replace(/\.pdf$/i, '')}
+              </span>
+              <span className="text-slate-500" aria-hidden="true">
+                ·
+              </span>
+            </>
+          )}
           <span dir="ltr">
-            {currentPage} / {numPages}
+            {fileDoc ? currentPage - fileDoc.pageOffset : currentPage} / {fileDoc ? fileDoc.numPages : numPages}
           </span>
         </button>
         <button
