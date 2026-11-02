@@ -56,19 +56,23 @@ export function signState(nonce: string, next: string, secret: string, now: numb
   return `${body}.${stateSig(body, secret).toString('base64url')}`;
 }
 
-export function verifyState(token: string | null, secret: string, now: number): GoogleState | null {
-  if (!token || token.length > 2048) return null;
+export type StateCheck = { ok: true; state: GoogleState } | { ok: false; reason: 'state_invalid' | 'state_expired' };
+
+export function verifyState(token: string | null, secret: string, now: number): StateCheck {
+  const invalid = { ok: false, reason: 'state_invalid' } as const;
+  if (!token || token.length > 2048) return invalid;
   const parts = token.split('.');
-  if (parts.length !== 2 || !/^[\w-]+$/.test(parts[0]) || !/^[\w-]+$/.test(parts[1])) return null;
+  if (parts.length !== 2 || !/^[\w-]+$/.test(parts[0]) || !/^[\w-]+$/.test(parts[1])) return invalid;
   const expected = stateSig(parts[0], secret);
   const given = Buffer.from(parts[1], 'base64url');
-  if (given.length !== expected.length || !timingSafeEqual(given, expected)) return null;
+  if (given.length !== expected.length || !timingSafeEqual(given, expected)) return invalid;
   try {
     const p = JSON.parse(Buffer.from(parts[0], 'base64url').toString('utf8')) as Partial<GoogleState>;
-    if (p.t !== 'gstate' || typeof p.nonce !== 'string' || typeof p.exp !== 'number' || p.exp <= now) return null;
-    return { t: 'gstate', nonce: p.nonce, next: safeNext(p.next) ?? '/', iat: Number(p.iat) || 0, exp: p.exp };
+    if (p.t !== 'gstate' || typeof p.nonce !== 'string' || typeof p.exp !== 'number') return invalid;
+    if (p.exp <= now) return { ok: false, reason: 'state_expired' };
+    return { ok: true, state: { t: 'gstate', nonce: p.nonce, next: safeNext(p.next) ?? '/', iat: Number(p.iat) || 0, exp: p.exp } };
   } catch {
-    return null;
+    return invalid;
   }
 }
 
@@ -95,13 +99,13 @@ export function authorizationUrl(google: GoogleConfig, base: string, state: stri
 // ---------------------------------------------------------------- token exchange
 
 export class GoogleAuthError extends Error {
-  constructor(readonly code: 'exchange' | 'token' | 'unverified') {
+  constructor(readonly code: 'exchange_failed' | 'token_invalid' | 'email_unverified' | 'no_email') {
     super(code);
     this.name = 'GoogleAuthError';
   }
 }
 
-/** Exchange the authorization code for tokens; returns the raw id_token. Throws GoogleAuthError('exchange'). */
+/** Exchange the authorization code for tokens; returns the raw id_token. Throws GoogleAuthError('exchange_failed'). */
 export async function exchangeCode(google: GoogleConfig, base: string, code: string): Promise<string> {
   let res: Response;
   try {
@@ -119,7 +123,7 @@ export async function exchangeCode(google: GoogleConfig, base: string, code: str
     });
   } catch (err) {
     console.error('[access] google token exchange network error:', (err as Error)?.message);
-    throw new GoogleAuthError('exchange');
+    throw new GoogleAuthError('exchange_failed');
   }
   let body: { id_token?: unknown; error?: unknown };
   try {
@@ -130,7 +134,7 @@ export async function exchangeCode(google: GoogleConfig, base: string, code: str
   if (!res.ok || typeof body.id_token !== 'string') {
     // Google's error code only (e.g. invalid_grant, invalid_client); never the response body otherwise.
     console.error(`[access] google token exchange failed: HTTP ${res.status} ${typeof body.error === 'string' ? body.error : ''}`);
-    throw new GoogleAuthError('exchange');
+    throw new GoogleAuthError('exchange_failed');
   }
   return body.id_token;
 }
@@ -189,12 +193,12 @@ function b64json(part: string): Record<string, unknown> {
 
 /**
  * Verify a Google ID token: RS256 signature (JWKS), iss, aud (= client id; azp when aud is a list), exp/iat,
- * nonce, email + email_verified. Throws GoogleAuthError('token' | 'unverified').
+ * nonce, email + email_verified. Throws GoogleAuthError('token_invalid' | 'no_email' | 'email_unverified').
  */
 export async function verifyIdToken(idToken: string, clientId: string, nonce: string, now = Math.floor(Date.now() / 1000)): Promise<GoogleIdentity> {
   const fail = (why: string): never => {
     console.warn(`[access] google id_token rejected: ${why}`);
-    throw new GoogleAuthError('token');
+    throw new GoogleAuthError('token_invalid');
   };
   const parts = idToken.split('.');
   if (parts.length !== 3 || !parts.every((p) => /^[\w-]+$/.test(p))) fail('malformed');
@@ -230,9 +234,13 @@ export async function verifyIdToken(idToken: string, clientId: string, nonce: st
 
   const email = typeof claims.email === 'string' ? claims.email.trim().toLowerCase() : '';
   const verified = claims.email_verified === true || claims.email_verified === 'true';
-  if (!email || !verified) {
-    console.warn('[access] google sign-in with missing/unverified email');
-    throw new GoogleAuthError('unverified');
+  if (!email) {
+    console.warn('[access] google sign-in without an email claim');
+    throw new GoogleAuthError('no_email');
+  }
+  if (!verified) {
+    console.warn('[access] google sign-in with an unverified email');
+    throw new GoogleAuthError('email_unverified');
   }
   return { sub: claims.sub as string, email, name: displayName(claims, email) };
 }
@@ -254,17 +262,19 @@ function displayName(claims: Record<string, unknown>, email: string): string {
 
 /** Error codes in /login?google=error&reason=<code>. */
 export type GoogleErrorReason =
-  | 'disabled' // GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET not configured
+  | 'google_disabled' // GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET not configured
   | 'rate_limited'
-  | 'cancelled' // the user closed / declined Google's consent screen
-  | 'google' // Google returned another error to the callback
-  | 'state' // missing/forged/expired state, or the pv_gstate cookie does not match (other browser, >10 min)
-  | 'exchange' // code → token exchange failed
-  | 'token' // ID token failed verification (signature, iss, aud, exp, nonce)
-  | 'unverified' // Google account without a verified email
-  | 'store' // Redis error
-  | 'mail' // could not email the owner the access request
-  | 'config'; // server env incomplete (see /api/health)
+  | 'access_denied' // the user closed / declined Google's consent screen (Google's error=access_denied)
+  | 'google_error' // Google returned another error to the callback
+  | 'state_invalid' // missing/forged state or code, or the pv_gstate cookie does not match (other browser)
+  | 'state_expired' // more than 10 minutes between start and callback
+  | 'exchange_failed' // code → token exchange failed
+  | 'token_invalid' // ID token failed verification (signature, iss, aud, exp, nonce)
+  | 'no_email' // the ID token carries no email
+  | 'email_unverified' // Google account email not verified
+  | 'store_failed' // Redis error
+  | 'mail_failed' // could not email the owner the access request
+  | 'server_config'; // server env incomplete (see /api/health)
 
 /** 302 (relative Location) that never leaks the callback URL (it carries the code) via Referer. */
 export function redirect(location: string, cookies: string[] = []): Response {

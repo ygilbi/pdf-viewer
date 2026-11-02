@@ -199,7 +199,7 @@ describe('GET /api/auth/google/start', () => {
     setEnv();
     const res = await googleStart(get('/api/auth/google/start'));
     expect(res.status).toBe(302);
-    expect(loc(res)).toBe('/login?google=error&reason=disabled');
+    expect(loc(res)).toBe('/login?google=error&reason=google_disabled');
   });
 });
 
@@ -324,7 +324,7 @@ describe('GET /api/auth/google/callback', () => {
   it('mail failure → reason=mail; a retry then emails the owner', async () => {
     setMailerForTests({ send: async () => Promise.reject(new Error('smtp down')) });
     const { res } = await signIn();
-    expect(loc(res)).toBe('/login?google=error&reason=mail');
+    expect(loc(res)).toBe('/login?google=error&reason=mail_failed');
     setMailerForTests(mailer);
     await signIn();
     expect(mailer.sent.filter((m) => m.to === OWNER)).toHaveLength(1);
@@ -342,40 +342,40 @@ describe('GET /api/auth/google/callback', () => {
       expect(jar.cookies.has('pv_gstate')).toBe(false);
     };
 
-    it('a missing pv_gstate cookie (other browser)', () => expectError(signIn(undefined, (_q, jar) => jar.cookies.clear()), 'state'));
-    it('a cookie nonce that does not match the state', () => expectError(signIn(undefined, (_q, jar) => jar.cookies.set('pv_gstate', 'x'.repeat(32))), 'state'));
+    it('a missing pv_gstate cookie (other browser)', () => expectError(signIn(undefined, (_q, jar) => jar.cookies.clear()), 'state_invalid'));
+    it('a cookie nonce that does not match the state', () => expectError(signIn(undefined, (_q, jar) => jar.cookies.set('pv_gstate', 'x'.repeat(32))), 'state_invalid'));
     it('a forged state', () =>
       expectError(
         signIn(undefined, (q, jar) => {
           const forged = signState(jar.cookies.get('pv_gstate')!, '/', 'another-secret-0123456789abcdef0123', nowS());
           q.set('state', forged);
         }),
-        'state',
+        'state_invalid',
       ));
     it('an expired state (> 10 min)', async () => {
       const p = signIn(undefined, () => vi.setSystemTime(Date.now() + 11 * 60 * 1000));
-      await expectError(p, 'state');
+      await expectError(p, 'state_expired');
     });
-    it('a missing code', () => expectError(signIn(undefined, (q) => q.delete('code')), 'state'));
+    it('a missing code', () => expectError(signIn(undefined, (q) => q.delete('code')), 'state_invalid'));
     it('the user cancelling at Google', async () => {
       const res = await googleCallback(get('/api/auth/google/callback?error=access_denied&state=x'));
-      expect(loc(res)).toBe('/login?google=error&reason=cancelled');
+      expect(loc(res)).toBe('/login?google=error&reason=access_denied');
     });
     it('a failed token exchange', () => {
       tokenStatus = 400;
-      return expectError(signIn(), 'exchange');
+      return expectError(signIn(), 'exchange_failed');
     });
     it('a wrong audience', () => {
       claims = { aud: 'someone-else.apps.googleusercontent.com' };
-      return expectError(signIn(), 'token');
+      return expectError(signIn(), 'token_invalid');
     });
     it('an audience list without our azp', () => {
       claims = { aud: [CLIENT_ID, 'other'], azp: 'other' };
-      return expectError(signIn(), 'token');
+      return expectError(signIn(), 'token_invalid');
     });
     it('a wrong issuer', () => {
       claims = { iss: 'https://evil.example' };
-      return expectError(signIn(), 'token');
+      return expectError(signIn(), 'token_invalid');
     });
     it('accepts the bare accounts.google.com issuer', async () => {
       claims = { iss: 'accounts.google.com' };
@@ -383,28 +383,28 @@ describe('GET /api/auth/google/callback', () => {
     });
     it('an expired id_token', () => {
       claims = { iat: nowS() - 7200, exp: nowS() - 3600 };
-      return expectError(signIn(), 'token');
+      return expectError(signIn(), 'token_invalid');
     });
     it('a nonce mismatch in the id_token', () => {
       claims = { nonce: 'not-the-nonce' };
-      return expectError(signIn(), 'token');
+      return expectError(signIn(), 'token_invalid');
     });
     it('a signature by another key', () => {
       signingKey = other.privateKey;
-      return expectError(signIn(), 'token');
+      return expectError(signIn(), 'token_invalid');
     });
     it('email_verified false', () => {
       claims = { email_verified: false };
-      return expectError(signIn(), 'unverified');
+      return expectError(signIn(), 'email_unverified');
     });
     it('a missing email', () => {
       claims = { email: undefined };
-      return expectError(signIn(), 'unverified');
+      return expectError(signIn(), 'no_email');
     });
     it('everything when Google is disabled', async () => {
       setEnv();
       const res = await googleCallback(get('/api/auth/google/callback?code=x&state=y'));
-      expect(loc(res)).toBe('/login?google=error&reason=disabled');
+      expect(loc(res)).toBe('/login?google=error&reason=google_disabled');
     });
   });
 });

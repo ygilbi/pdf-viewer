@@ -1,7 +1,7 @@
 // GET /api/auth/google/start?next=/path → 302 to Google's consent screen (OAuth 2.0 authorization code flow).
 // state = signed, 10-minute token { nonce, next }; the same nonce goes to Google (echoed in the ID token) and
 // into the HttpOnly cookie pv_gstate (SameSite=Lax, Path=/api/auth/google), binding the flow to this browser.
-// Google disabled (no GOOGLE_CLIENT_ID/SECRET) → 302 /login?google=error&reason=disabled.
+// Google disabled (no GOOGLE_CLIENT_ID/SECRET) → 302 /login?google=error&reason=google_disabled.
 import { randomId } from '../../../_lib/auth.js';
 import { googleFromEnv } from '../../../_lib/config.js';
 import {
@@ -21,7 +21,7 @@ export const googleStartLimiter = createRateLimiter(30, 10 * 60 * 1000);
 
 export function GET(req: Request): Response {
   if (!googleStartLimiter.hit(clientIp(req))) return googleErrorRedirect(req, 'rate_limited');
-  if (!googleFromEnv()) return googleErrorRedirect(req, 'disabled');
+  if (!googleFromEnv()) return googleErrorRedirect(req, 'google_disabled');
   const { config, error } = configOrError([], 'html');
   if (error) return error;
   const google = config.google!;

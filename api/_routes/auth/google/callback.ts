@@ -38,7 +38,7 @@ export const REQUEST_DEDUPE_SECONDS = 24 * 60 * 60;
 
 export async function GET(req: Request): Promise<Response> {
   if (!googleCallbackLimiter.hit(clientIp(req))) return googleErrorRedirect(req, 'rate_limited');
-  if (!googleFromEnv()) return googleErrorRedirect(req, 'disabled');
+  if (!googleFromEnv()) return googleErrorRedirect(req, 'google_disabled');
   const { config, error } = configOrError(['kv'], 'html');
   if (error) return error;
   const google = config.google!;
@@ -46,13 +46,15 @@ export async function GET(req: Request): Promise<Response> {
   const now = nowSeconds();
 
   const googleError = params.get('error');
-  if (googleError) return googleErrorRedirect(req, googleError === 'access_denied' ? 'cancelled' : 'google');
+  if (googleError) return googleErrorRedirect(req, googleError === 'access_denied' ? 'access_denied' : 'google_error');
 
-  const state = verifyState(params.get('state'), config.signingSecret, now);
+  const checked = verifyState(params.get('state'), config.signingSecret, now);
+  if (!checked.ok) return googleErrorRedirect(req, checked.reason);
+  const state = checked.state;
   const cookieNonce = readCookie(req.headers.get('cookie'), GSTATE_COOKIE);
-  if (!state || !cookieNonce || !sameString(cookieNonce, state.nonce)) return googleErrorRedirect(req, 'state');
+  if (!cookieNonce || !sameString(cookieNonce, state.nonce)) return googleErrorRedirect(req, 'state_invalid');
   const code = params.get('code');
-  if (!code || code.length > 2048) return googleErrorRedirect(req, 'state');
+  if (!code || code.length > 2048) return googleErrorRedirect(req, 'state_invalid');
 
   const base = appBaseUrl(req, config);
   let id: GoogleIdentity;
@@ -69,7 +71,7 @@ export async function GET(req: Request): Promise<Response> {
     user = await store.getUser(id.email);
   } catch (err) {
     console.error('[access] google callback store error:', err);
-    return googleErrorRedirect(req, 'store');
+    return googleErrorRedirect(req, 'store_failed');
   }
 
   if (user?.status === 'active') {
@@ -91,7 +93,7 @@ export async function GET(req: Request): Promise<Response> {
       await store.putUser(user);
     } catch (err) {
       console.error('[access] google registration store error:', err);
-      return googleErrorRedirect(req, 'store');
+      return googleErrorRedirect(req, 'store_failed');
     }
     console.log(`[access] registered ${id.email} (google)`);
     await notifyOwnerRegistered(req, user, 'google');
@@ -110,7 +112,7 @@ export async function GET(req: Request): Promise<Response> {
   } catch (err) {
     if (!(err instanceof ConfigError)) throw err;
     console.error(`[access] configuration error: ${err.message}`);
-    return googleErrorRedirect(req, 'config');
+    return googleErrorRedirect(req, 'server_config');
   }
   try {
     const status = await submitAccessRequest(
@@ -128,7 +130,7 @@ export async function GET(req: Request): Promise<Response> {
     }
   } catch (err) {
     if (!(err instanceof AccessRequestError)) throw err;
-    return googleErrorRedirect(req, err.code === 'mail_failed' ? 'mail' : 'store');
+    return googleErrorRedirect(req, err.code);
   }
   return redirect(`/login?google=pending&email=${encodeURIComponent(id.email)}`, [clearStateCookie(req)]);
 }
