@@ -88,17 +88,24 @@ Enter סגירת פוליגון · Backspace מחיקת נקודה אחרונה 
 **מה המתקין עושה אוטומטית**
 - מתקין את `PDFViewer.exe` ויוצר קיצור דרך בתפריט התחל.
 - רושם את סוג הקובץ `PDFViewer.Document` (פקודת פתיחה + סמל קובץ PDF מ-`resources\file-pdf.ico`), מוסיף אותו ל-"פתח באמצעות" של `.pdf`, ורושם את התוכנה ב-`RegisteredApplications` כך שתופיע ברשימת אפליקציות ברירת המחדל של Windows.
-- בסיום פותח את עמוד **הגדרות ← אפליקציות ← אפליקציות ברירת מחדל** של PDF Viewer.
+- **אינו** פותח את הגדרות Windows בסוף ההתקנה — השאלה נשאלת פעם אחת, בתוך התוכנה (ראו למטה).
 
-**האישור החד-פעמי ש-Windows דורשת**
-Windows 10/11 אינה מאפשרת לתוכנה להגדיר את עצמה כברירת מחדל. בעמוד ההגדרות שנפתח בוחרים את **PDF Viewer** עבור `.pdf` (ב-Windows 11: לוחצים על השורה `.pdf` ← PDF Viewer ← **הגדר ברירת מחדל**). לחלופין: לחיצה ימנית על PDF ← **פתח באמצעות** ← **בחר אפליקציה אחרת** ← PDF Viewer ← **תמיד**. זה נעשה פעם אחת בלבד.
+**שאלה אחת בלבד: ברירת מחדל ל-PDF**
+Windows 10/11 אינה מאפשרת לתוכנה להגדיר את עצמה כברירת מחדל — נדרש אישור של המשתמש. לכן בהפעלה הראשונה אחרי ההתקנה התוכנה שואלת **פעם אחת**: "להפוך את PDF Viewer לתוכנת ברירת המחדל לקובצי PDF?"
+- **כן, הגדר** — נפתח עמוד ההגדרות של PDF Viewer (`ms-settings:defaultapps?registeredAppUser=PDF%20Viewer`) עם הנחיה קצרה: בוחרים **PDF Viewer** עבור `.pdf` ← **הגדר ברירת מחדל**. החלון נסגר מעצמו כש-Windows מדווחת שההגדרה נקלטה (בדיקת `UserChoice` ברישום, רק בזמן שההנחיה פתוחה), או בלחיצה על **סיימתי**.
+- **לא, תודה** (וגם Esc / ×) — לא נשאל שוב.
+- אם PDF Viewer כבר ברירת המחדל בהפעלה הראשונה — לא שואלים כלל.
+- התשובה נשמרת בקובץ `%APPDATA%\PDF Viewer\prefs.json` (`{"defaultPdfPrompt": {"answered": true, "answer": "yes|no|already-default", "at": …}}`) ולא ב-`localStorage`. הקובץ נכתב רק אחרי תשובה — סגירת התוכנה בלי לענות תציג את השאלה שוב בהפעלה הבאה.
+- הסרה והתקנה מחדש **לא** מוחקות את הקובץ (`deleteAppDataOnUninstall: false`), כך שהשאלה נשאלת פעם אחת לכל משתמש Windows. כדי לשאול שוב: מוחקים את `prefs.json`.
+- בכל זמן: תפריט עליון ← **הגדר כברירת מחדל ל‑PDF** פותח את אותו חלון.
+- לחלופין: לחיצה ימנית על PDF ← **פתח באמצעות** ← **בחר אפליקציה אחרת** ← PDF Viewer ← **תמיד**.
 
 **הסרה**
 הגדרות ← אפליקציות ← אפליקציות מותקנות ← **PDF Viewer** ← **הסר התקנה**. ההסרה מוחקת גם את רישומי סוג הקובץ מהרישום.
 
 **בנייה ו-CI**
-- `.github/workflows/desktop-windows.yml` רץ על `windows-latest`: בונה את האתר ל-`desktop/web-dist`, בונה את המתקין, ומריץ בדיקת עשן (`desktop/test/smoke.ps1`): התקנה שקטה (`/S`), בדיקת מפתחות הרישום וקובץ הסמל, הפעלת התוכנה עם `public/demo-facade.pdf` וצילום מסך, והסרה שקטה. המתקין וצילום המסך נשמרים כ-artifacts של הריצה.
-- פרסום Release: דוחפים תג `desktop-v<גרסה>` (למשל `git tag desktop-v0.1.0 && git push origin desktop-v0.1.0`), או Actions ← **Desktop (Windows installer)** ← **Run workflow** עם `release` מסומן.
+- `.github/workflows/desktop-windows.yml` רץ על `windows-latest`: בונה את האתר ל-`desktop/web-dist`, בונה את המתקין, ומריץ בדיקת עשן (`desktop/test/smoke.ps1`): התקנה שקטה (`/S`), בדיקת מפתחות הרישום וקובץ הסמל, וידוא שהמתקין לא פתח את ההגדרות, הפעלת התוכנה עם `public/demo-facade.pdf` וצילום מסך, הפעלה נוספת עם `PDF_VIEWER_CAPTURE` שמוודאת שחלון השאלה החד-פעמית מוצג (`first-run-default-dialog.png`) ושה-`prefs.json` לא נכתב לפני תשובה, והסרה שקטה. לפני הבנייה צעד `grep` מוודא ש-`installer.nsh` לא מפעיל שום דבר (`ExecShell` / `ms-settings`) ושהרישומים קיימים. המתקין וצילומי המסך נשמרים כ-artifacts של הריצה.
+- פרסום Release: דוחפים תג `desktop-v<גרסה>` (למשל `git tag desktop-v0.2.0 && git push origin desktop-v0.2.0`), או Actions ← **Desktop (Windows installer)** ← **Run workflow** עם `release` מסומן.
 - בנייה מקומית ב-Windows: `npm ci && npm --prefix desktop ci && npm --prefix desktop run dist`; בדיקת עשן מקומית: `powershell -ExecutionPolicy Bypass -File desktop\test\smoke.ps1`.
 - פיתוח: `npm --prefix desktop run build:web && npm --prefix desktop start -- path\to\file.pdf`. האפליקציה מגישה את `desktop/web-dist` מ-`app://pdf-viewer/` (ללא service worker), ומעבירה קובצי PDF משורת הפקודה / מופע שני ל-`window.pdfDesktop` (`src/desktop/bridge.ts`).
 - סמלים: `python3 desktop/scripts/make-icons.py` יוצר את `desktop/build/icon.ico` (16–256) ומעתיק את `file-pdf.ico` מ-`public/icons/`. הגדרות המתקין ורישומי הרישום: `desktop/package.json` (`build`) ו-`desktop/build/installer.nsh`.

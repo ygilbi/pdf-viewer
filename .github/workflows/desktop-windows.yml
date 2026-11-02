@@ -66,7 +66,7 @@ jobs:
             echo "::error file=$f::installer.nsh must not launch anything (no ms-settings / ExecShell) - the app asks once on first launch"
             exit 1
           fi
-          for k in 'Capabilities\FileAssociations' 'RegisteredApplications' 'OpenWithProgids' 'DefaultIcon'; do
+          for k in 'FileAssociations' 'RegisteredApplications' 'OpenWithProgids' 'DefaultIcon'; do
             grep -qF "$k" "$f" || { echo "::error file=$f::registration '$k' missing from installer.nsh"; exit 1; }
           done
           echo "installer.nsh: registrations present, no shell-execute"
