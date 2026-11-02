@@ -36,7 +36,7 @@ export function configOrError(
     console.error(`[download-approval] configuration error: ${err.message}`);
     const error =
       kind === 'json'
-        ? jsonResponse({ ok: false, error: 'server_config', message: 'השירות אינו מוגדר כרגע. נסו שוב מאוחר יותר.' }, 500)
+        ? jsonResponse({ ok: false, code: 'server_config', error: 'השירות אינו מוגדר כרגע. נסו שוב מאוחר יותר.' }, 500)
         : htmlResponse(errorPage('שגיאת הגדרות', 'השירות אינו מוגדר כרגע. נסו שוב מאוחר יותר.'), 500);
     return { error };
   }

@@ -13,7 +13,7 @@ export type FieldErrors = Partial<Record<'name' | 'email' | 'company' | 'message
 
 export const NAME_MIN = 2;
 export const NAME_MAX = 80;
-export const EMAIL_MAX = 254;
+export const EMAIL_MAX = 200;
 export const COMPANY_MAX = 120;
 export const MESSAGE_MAX = 1000;
 

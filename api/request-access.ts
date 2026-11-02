@@ -20,7 +20,7 @@ const rateLimiter = createRateLimiter(5, 10 * 60 * 1000);
 export async function POST(req: Request): Promise<Response> {
   const ip = clientIp(req);
   if (!rateLimiter.hit(ip)) {
-    return jsonResponse({ ok: false, error: 'rate_limited', message: 'נשלחו יותר מדי בקשות. נסו שוב בעוד כמה דקות.' }, 429, {
+    return jsonResponse({ ok: false, code: 'rate_limited', error: 'נשלחו יותר מדי בקשות. נסו שוב בעוד כמה דקות.' }, 429, {
       'Retry-After': '600',
     });
   }
@@ -30,7 +30,7 @@ export async function POST(req: Request): Promise<Response> {
     raw = await readLimitedText(req, MAX_BODY_BYTES);
   } catch (err) {
     if (err instanceof BodyTooLargeError) {
-      return jsonResponse({ ok: false, error: 'too_large', message: 'הבקשה גדולה מדי.' }, 413);
+      return jsonResponse({ ok: false, code: 'too_large', error: 'הבקשה גדולה מדי.' }, 413);
     }
     throw err;
   }
@@ -39,7 +39,7 @@ export async function POST(req: Request): Promise<Response> {
   try {
     body = JSON.parse(raw);
   } catch {
-    return jsonResponse({ ok: false, error: 'bad_json', message: 'גוף הבקשה אינו JSON תקין.' }, 400);
+    return jsonResponse({ ok: false, code: 'bad_json', error: 'גוף הבקשה אינו JSON תקין.' }, 400);
   }
 
   // Honeypot: bots fill every field. Pretend success, do nothing.
@@ -51,7 +51,7 @@ export async function POST(req: Request): Promise<Response> {
 
   const v = validateAccessRequest(body);
   if (!v.ok) {
-    return jsonResponse({ ok: false, error: 'validation', message: 'יש לתקן את השדות המסומנים.', fields: v.errors }, 400);
+    return jsonResponse({ ok: false, code: 'validation', error: 'יש לתקן את השדות המסומנים.', fields: v.errors }, 400);
   }
 
   const { config, error } = configOrError(['mail', 'owner'], 'json');
@@ -75,7 +75,7 @@ export async function POST(req: Request): Promise<Response> {
     await mailer.send({ to: config.ownerEmail, replyTo: v.value.email, ...mail });
   } catch (err) {
     console.error('[download-approval] failed to email owner:', err);
-    return jsonResponse({ ok: false, error: 'mail_failed', message: 'שליחת הבקשה נכשלה. נסו שוב מאוחר יותר.' }, 502);
+    return jsonResponse({ ok: false, code: 'mail_failed', error: 'שליחת הבקשה נכשלה. נסו שוב מאוחר יותר.' }, 502);
   }
   console.log(`[download-approval] request from ${v.value.email} ip=${ip}`);
 

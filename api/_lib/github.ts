@@ -4,11 +4,11 @@
 export const TAG_PREFIX = 'desktop-v';
 export const ASSET_PATTERN = /^PDF-Viewer-Setup-.*\.exe$/;
 
-interface GhAsset {
+export interface GhAsset {
   id: number;
   name: string;
 }
-interface GhRelease {
+export interface GhRelease {
   tag_name: string;
   draft: boolean;
   prerelease: boolean;
