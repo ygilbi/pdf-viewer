@@ -3,10 +3,14 @@
   Smoke test for the PDF Viewer NSIS installer (per-user install).
 
 .DESCRIPTION
-  1. Runs the installer silently (/S) and waits for the uninstall registry entry.
+  1. Runs the installer silently (/S), waits for the uninstall registry entry and
+     asserts the installer did not open Windows Settings.
   2. Locates the install dir from HKCU\...\Uninstall\* (DisplayName "PDF Viewer*").
   3. Asserts PDFViewer.exe, the file-association registry keys, and the DefaultIcon .ico.
   4. Launches PDFViewer.exe with a PDF, checks the process and window title, takes a screenshot.
+     Then launches it again with PDF_VIEWER_CAPTURE: the one-time "make PDF Viewer the
+     default?" dialog must be showing (first run), and %APPDATA%\PDF Viewer\prefs.json
+     must not exist yet (it is written only when the user answers).
   5. Kills the app, runs the uninstaller silently and asserts the keys are removed.
   Prints a summary table (also to $env:GITHUB_STEP_SUMMARY) and exits 1 on any failure.
 
@@ -49,6 +53,9 @@ $CapabilitiesKey = 'HKCU:\Software\PDFViewer\Capabilities'
 $FileAssocKey = "$CapabilitiesKey\FileAssociations"
 $RegisteredAppsKey = 'HKCU:\Software\RegisteredApplications'
 $CapabilitiesPath = 'Software\PDFViewer\Capabilities'
+# Electron userData (app name "PDF Viewer"): the one-time default-app answer lives here.
+$PrefsFile = Join-Path $env:APPDATA 'PDF Viewer\prefs.json'
+$PrefsBackup = "$PrefsFile.smoke-bak"
 
 # ---------------------------------------------------------------- helpers
 $script:Results = New-Object System.Collections.ArrayList
@@ -167,6 +174,11 @@ try {
   $Installer = (Resolve-Path -LiteralPath $Installer).Path
   [void](Assert-True 'Test PDF exists' (Test-Path -LiteralPath $Pdf) "$Pdf")
   if (Get-UninstallEntry) { Add-Result 'Clean machine before install' 'WARN' 'An existing PDF Viewer install was found' }
+  # First-run behaviour needs no stored answer; keep a developer's own answer aside and restore it at the end.
+  if (Test-Path -LiteralPath $PrefsFile) {
+    Move-Item -LiteralPath $PrefsFile -Destination $PrefsBackup -Force
+    Add-Result 'No stored default-app answer before test' 'WARN' "moved aside: $PrefsFile"
+  }
 
   # ---- 1. silent install
   $sw = [System.Diagnostics.Stopwatch]::StartNew()
@@ -175,8 +187,12 @@ try {
   $p.WaitForExit()
   $registered = Wait-Until { $null -ne (Get-UninstallEntry) } $TimeoutSeconds
   [void](Assert-True 'Silent install (/S) finished' ($p.ExitCode -eq 0) ("exit code {0}, {1:N0}s" -f $p.ExitCode, $sw.Elapsed.TotalSeconds))
-  # NSIS may open the "Default apps" settings page after install; close it so it does not cover the screenshot.
-  Get-Process -Name 'SystemSettings' -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+  # The installer must not open Settings any more (the app asks once, in-app). /S never did; the
+  # workflow also greps installer.nsh for a shell-execute step, which covers interactive installs.
+  Start-Sleep -Seconds 2
+  $settingsProcs = @(Get-Process -Name 'SystemSettings' -ErrorAction SilentlyContinue)
+  [void](Assert-True 'Installer did not open Settings (no SystemSettings process)' ($settingsProcs.Count -eq 0) ("{0} process(es)" -f $settingsProcs.Count))
+  $settingsProcs | Stop-Process -Force -ErrorAction SilentlyContinue
   if (-not (Assert-True 'Uninstall entry registered (HKCU)' $registered 'DisplayName like "PDF Viewer*"')) { throw 'Not installed' }
 
   # ---- 2. install dir
@@ -241,6 +257,32 @@ try {
       Add-Result 'Screenshot saved' 'WARN' $_.Exception.Message
     }
     Stop-App
+    [void](Assert-True 'prefs.json not written without an answer' (-not (Test-Path -LiteralPath $PrefsFile)) $PrefsFile)
+
+    # ---- 4b. first-run capture: the one-time default-app question is showing
+    $firstRun = Join-Path $OutDir 'first-run-default-dialog.png'
+    $firstRunJson = "$firstRun.json"
+    Remove-Item -LiteralPath $firstRun, $firstRunJson -Force -ErrorAction SilentlyContinue
+    $env:PDF_VIEWER_CAPTURE = $firstRun
+    $env:PDF_VIEWER_CAPTURE_DELAY_MS = '8000'
+    $env:PDF_VIEWER_CAPTURE_QUIT = '1'
+    try {
+      $cap = Start-Process -FilePath $exe -PassThru
+    } finally {
+      Remove-Item Env:PDF_VIEWER_CAPTURE, Env:PDF_VIEWER_CAPTURE_DELAY_MS, Env:PDF_VIEWER_CAPTURE_QUIT -ErrorAction SilentlyContinue
+    }
+    [void](Wait-Until { Test-Path -LiteralPath $firstRunJson } 60)
+    [void](Wait-Until { -not (Get-Process -Name 'PDFViewer' -ErrorAction SilentlyContinue) } 20)
+    Stop-App
+    $info = $null
+    if (Test-Path -LiteralPath $firstRunJson) { $info = Get-Content -LiteralPath $firstRunJson -Raw | ConvertFrom-Json }
+    if ($info) {
+      $title = [string]$info.defaultAppDialogTitle
+      [void](Assert-True 'First run shows the one-time default-app dialog' ([bool]$info.defaultAppDialog -and $title -like '*PDF Viewer*') ("screenshot {0}" -f $firstRun))
+      [void](Assert-True 'Answer not stored before the user answers' ((-not [bool]$info.prefsFileExists) -and ($null -eq $info.defaultPdfPrompt)) ("prefsFileExists={0}" -f $info.prefsFileExists))
+    } else {
+      Add-Result 'First run shows the one-time default-app dialog' 'FAIL' "no capture at $firstRunJson"
+    }
   } else {
     Add-Result 'Launch app' 'FAIL' 'skipped: exe missing'
   }
@@ -269,6 +311,7 @@ try {
   Add-Result 'Smoke test aborted' 'FAIL' $_.Exception.Message
 } finally {
   Stop-App
+  if (Test-Path -LiteralPath $PrefsBackup) { Move-Item -LiteralPath $PrefsBackup -Destination $PrefsFile -Force -ErrorAction SilentlyContinue }
 }
 
 $failCount = Write-Summary

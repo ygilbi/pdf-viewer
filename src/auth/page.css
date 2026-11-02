@@ -66,3 +66,5 @@ body:has(.download-page) { overflow: hidden; }
 
 /* /welcome: smaller logo, the cards below it are the content. */
 .welcome-logo .logo-fit { width: min(56vw, 24vh * 1.05, 340px); width: min(56vw, 24dvh * 1.05, 340px); }
+/* Scrolling pages (/login, /welcome) grow the document itself instead of scrolling inside a 100%-high body. */
+body:has(.login-page), body:has(.login-page) #root { height: auto; min-height: 100%; }
