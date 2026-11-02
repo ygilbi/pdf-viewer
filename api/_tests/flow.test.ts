@@ -1,20 +1,26 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { POST as requestAccess } from '../request-access.js';
+import { POST as authRequest } from '../auth/request.js';
 import { GET as approveGet, POST as approvePost } from '../approve.js';
 import { GET as denyGet, POST as denyPost } from '../deny.js';
 import { GET as download } from '../download.js';
 import { setMailerForTests } from '../_lib/mailer.js';
 import { signToken, nowSeconds, verifyToken } from '../_lib/token.js';
+import { createMemoryStore, setStoreForTests, type Store } from '../_lib/store.js';
+import { signSession } from '../_lib/session.js';
 import { esc } from '../_lib/templates.js';
 import { pickInstaller } from '../_lib/github.js';
 import { SECRET, fakeMailer, freshIp, linkTo, setEnv } from './helpers.js';
 
 let mailer: ReturnType<typeof fakeMailer>;
+let store: Store;
 
 beforeEach(() => {
   setEnv();
   mailer = fakeMailer();
   setMailerForTests(mailer);
+  store = createMemoryStore();
+  setStoreForTests(store);
   vi.spyOn(console, 'log').mockImplementation(() => {});
   vi.spyOn(console, 'warn').mockImplementation(() => {});
   vi.spyOn(console, 'error').mockImplementation(() => {});
@@ -22,6 +28,7 @@ beforeEach(() => {
 
 afterEach(() => {
   setMailerForTests(null);
+  setStoreForTests(null);
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
 });
@@ -46,18 +53,23 @@ async function submitAndGetApproveToken(): Promise<{ approveUrl: string; denyUrl
   return { approveUrl, denyUrl, token: new URL(approveUrl).searchParams.get('t')! };
 }
 
-describe('POST /api/request-access', () => {
-  it('emails the owner approve/deny links and acknowledges the requester', async () => {
-    const res = await requestAccess(post(valid));
+describe('POST /api/auth/request (and the /api/request-access alias)', () => {
+  it('is the same handler under both URLs', () => {
+    expect(requestAccess).toBe(authRequest);
+  });
+
+  it('stores a pending user, emails the owner approve/deny links and acknowledges the requester', async () => {
+    const res = await authRequest(post({ ...valid, email: 'Dana@Example.test' }));
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ ok: true });
+    expect(await store.getUser('dana@example.test')).toMatchObject({ email: 'dana@example.test', name: 'דנה כהן', status: 'pending', approvedAt: null });
     expect(mailer.sent).toHaveLength(2);
 
     const [owner, ack] = mailer.sent;
     expect(owner.to).toBe('owner@example.test');
     expect(owner.replyTo).toBe('dana@example.test');
     expect(owner.html).toContain('dir="rtl"');
-    expect(owner.html).toContain('אשר הורדה');
+    expect(owner.html).toContain('אשר גישה');
     expect(owner.html).toContain('דחה');
     expect(owner.html).toContain('אקמה');
     const approveUrl = linkTo(owner.html, '/api/approve?t=');
@@ -74,6 +86,23 @@ describe('POST /api/request-access', () => {
     expect(ack.to).toBe('dana@example.test');
     expect(ack.subject + ack.html).toContain('התקבלה');
     expect(ack.html).not.toContain('דנה'); // no user-supplied text in mail sent to an unverified address
+  });
+
+  it('does not email the owner for an already-active user', async () => {
+    await store.putUser({ id: 'uid', email: 'dana@example.test', name: 'דנה', status: 'active', createdAt: 1, approvedAt: 1 });
+    const res = await authRequest(post(valid));
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ ok: true, alreadyActive: true });
+    expect(mailer.sent).toHaveLength(0);
+    expect((await store.getUser('dana@example.test'))!.status).toBe('active');
+  });
+
+  it('re-opens a revoked or denied user as pending', async () => {
+    for (const status of ['revoked', 'denied'] as const) {
+      await store.putUser({ id: 'uid', email: 'dana@example.test', name: 'דנה', status, createdAt: 1, approvedAt: null });
+      expect((await authRequest(post(valid))).status).toBe(200);
+      expect(await store.getUser('dana@example.test')).toMatchObject({ id: 'uid', status: 'pending', createdAt: 1 });
+    }
   });
 
   it('derives the base URL from forwarded headers when APP_URL is unset', async () => {
@@ -136,20 +165,38 @@ describe('POST /api/request-access', () => {
     expect(statuses[5]).toBe(429);
   });
 
-  it('fails closed when SIGNING_SECRET is missing or too short', async () => {
-    for (const secret of [undefined, 'short']) {
-      setEnv({ SIGNING_SECRET: secret });
+  it('fails closed (500 server_config, pointing to /api/health) when env vars are missing', async () => {
+    for (const o of [{ SIGNING_SECRET: undefined }, { SIGNING_SECRET: 'short' }, { SMTP_PASS: undefined }, { OWNER_EMAIL: undefined }, { KV_REST_API_URL: undefined }]) {
+      setEnv(o);
       const res = await requestAccess(post(valid));
       expect(res.status).toBe(500);
-      expect(((await res.json()) as { code: string }).code).toBe('server_config');
+      const json = (await res.json()) as { code: string; error: string };
+      expect(json.code).toBe('server_config');
+      expect(json.error).toContain('/api/health');
     }
     expect(mailer.sent).toHaveLength(0);
   });
 
-  it('reports a mail failure', async () => {
+  it('accepts the UPSTASH_REDIS_REST_* names as well', async () => {
+    setEnv({ KV_REST_API_URL: undefined, KV_REST_API_TOKEN: undefined, UPSTASH_REDIS_REST_URL: 'https://u.example.test', UPSTASH_REDIS_REST_TOKEN: 't' });
+    expect((await requestAccess(post(valid))).status).toBe(200);
+  });
+
+  it('reports a mail failure (502, pointing to /api/health)', async () => {
     setMailerForTests({ send: async () => Promise.reject(new Error('smtp down')) });
     const res = await requestAccess(post(valid));
     expect(res.status).toBe(502);
+    const json = (await res.json()) as { code: string; error: string };
+    expect(json.code).toBe('mail_failed');
+    expect(json.error).toContain('/api/health');
+  });
+
+  it('reports a store failure (502 store_failed)', async () => {
+    setStoreForTests({ getUser: async () => Promise.reject(new Error('redis down')) } as unknown as Store);
+    const res = await requestAccess(post(valid));
+    expect(res.status).toBe(502);
+    expect(((await res.json()) as { code: string }).code).toBe('store_failed');
+    expect(mailer.sent).toHaveLength(0);
   });
 
   it('escapes HTML in user input (XSS)', async () => {
@@ -169,7 +216,7 @@ describe('POST /api/request-access', () => {
 });
 
 describe('/api/approve', () => {
-  it('GET shows a confirmation page with a POST form and sends no mail', async () => {
+  it('GET shows a confirmation page with a POST form and changes nothing', async () => {
     const { approveUrl } = await submitAndGetApproveToken();
     const res = await approveGet(new Request(approveUrl));
     expect(res.status).toBe(200);
@@ -178,40 +225,54 @@ describe('/api/approve', () => {
     const html = await res.text();
     expect(html).toContain('dir="rtl"');
     expect(html).toMatch(/<form method="post" action="\/api\/approve\?t=[\w%-]+\.[\w%-]+">/);
-    expect(html).toContain('אשר ושלח קישור הורדה');
+    expect(html).toContain('אשר ושלח קישור הרשמה');
     expect(html).toContain('dana@example.test');
     expect(mailer.sent).toHaveLength(0);
+    expect((await store.getUser('dana@example.test'))!.status).toBe('pending');
   });
 
-  it('POST emails the requester a download link and confirms to the owner', async () => {
-    setEnv({ DOWNLOAD_LINK_DAYS: '5' });
+  it('POST approves, stores a single-use invite and emails the requester a registration link', async () => {
+    setEnv({ INVITE_HOURS: '48' });
     const { approveUrl } = await submitAndGetApproveToken();
     const res = await approvePost(new Request(approveUrl, { method: 'POST' }));
     expect(res.status).toBe(200);
     const html = await res.text();
-    expect(html).toContain('ההורדה אושרה');
-    expect(html).toContain('נשלח מייל אל');
+    expect(html).toContain('הגישה אושרה');
     expect(html).toContain('dana@example.test');
+    expect(await store.getUser('dana@example.test')).toMatchObject({ status: 'approved', approvedAt: expect.any(Number) });
 
     expect(mailer.sent).toHaveLength(1);
     const m = mailer.sent[0];
     expect(m.to).toBe('dana@example.test');
-    expect(m.html).toContain('הורד את PDF Viewer ל-Windows');
-    expect(m.html).toContain('More info');
-    expect(m.html).toContain('Run anyway');
-    expect(m.html).toContain('5 ימים');
-    const dlUrl = linkTo(m.html, '/api/download?t=');
-    expect(dlUrl.startsWith('https://app.example.test/api/download?t=')).toBe(true);
-    const v = verifyToken(new URL(dlUrl).searchParams.get('t'), SECRET, 'download');
-    expect(v.ok && v.payload).toMatchObject({ t: 'download', email: 'dana@example.test', name: 'דנה כהן' });
-    if (v.ok) expect(v.payload.exp - v.payload.iat).toBe(5 * 86400);
+    expect(m.subject).toBe('הגישה שלך ל-PDF Viewer אושרה');
+    expect(m.html).toContain('dir="rtl"');
+    expect(m.html).toContain('Face ID');
+    expect(m.html).toContain('48 שעות');
+    const inviteUrl = linkTo(m.html, '/login?invite=');
+    expect(inviteUrl.startsWith('https://app.example.test/login?invite=')).toBe(true);
+    const v = verifyToken(new URL(inviteUrl).searchParams.get('invite'), SECRET, 'invite');
+    expect(v.ok && v.payload).toMatchObject({ t: 'invite', email: 'dana@example.test', name: 'דנה כהן', jti: expect.any(String) });
+    if (v.ok) {
+      expect(v.payload.exp - v.payload.iat).toBe(48 * 3600);
+      expect(await store.inviteExists(v.payload.jti)).toBe(true);
+    }
+  });
+
+  it('POST for an already-active user sends nothing', async () => {
+    const { approveUrl } = await submitAndGetApproveToken();
+    const u = (await store.getUser('dana@example.test'))!;
+    await store.putUser({ ...u, status: 'active' });
+    const res = await approvePost(new Request(approveUrl, { method: 'POST' }));
+    expect(res.status).toBe(200);
+    expect(await res.text()).toContain('כבר');
+    expect(mailer.sent).toHaveLength(0);
   });
 
   it('rejects expired, tampered and wrong-type tokens without sending mail', async () => {
     const now = nowSeconds();
     const expired = signToken({ t: 'approve', name: 'דנה', email: 'd@example.test', iat: now - 100, exp: now - 1 }, SECRET);
-    const dl = signToken({ t: 'download', name: 'דנה', email: 'd@example.test', iat: now, exp: now + 100 }, SECRET);
-    for (const t of [expired, dl, 'garbage', `${expired}x`]) {
+    const revoke = signToken({ t: 'revoke', name: 'דנה', email: 'd@example.test', iat: now, exp: now + 100 }, SECRET);
+    for (const t of [expired, revoke, 'garbage', `${expired}x`]) {
       const url = `https://app.example.test/api/approve?t=${encodeURIComponent(t)}`;
       const g = await approveGet(new Request(url));
       expect(g.status).toBe(400);
@@ -226,17 +287,17 @@ describe('/api/approve', () => {
 });
 
 describe('/api/deny', () => {
-  it('GET confirms only; POST declines without emailing by default', async () => {
+  it('GET confirms only; POST marks the user denied without emailing by default', async () => {
     const { denyUrl } = await submitAndGetApproveToken();
     const g = await denyGet(new Request(denyUrl));
-    const gHtml = await g.text();
-    expect(gHtml).toMatch(/<form method="post" action="\/api\/deny\?t=/);
+    expect(await g.text()).toMatch(/<form method="post" action="\/api\/deny\?t=/);
     expect(mailer.sent).toHaveLength(0);
 
     const p = await denyPost(new Request(denyUrl, { method: 'POST' }));
     expect(p.status).toBe(200);
     expect(await p.text()).toContain('הבקשה נדחתה');
     expect(mailer.sent).toHaveLength(0);
+    expect((await store.getUser('dana@example.test'))!.status).toBe('denied');
   });
 
   it('POST emails a polite decline when SEND_DENY_EMAIL=true', async () => {
@@ -246,7 +307,7 @@ describe('/api/deny', () => {
     expect(mailer.sent).toHaveLength(1);
     expect(mailer.sent[0].to).toBe('dana@example.test');
     expect(mailer.sent[0].html).toContain('לא נוכל לאשר');
-    expect(mailer.sent[0].html).not.toContain('/api/download');
+    expect(mailer.sent[0].html).not.toContain('/login?invite');
   });
 });
 
@@ -284,15 +345,40 @@ function mockGitHub(opts: { listStatus?: number; assetStatus?: number } = {}) {
   return calls;
 }
 
-function downloadToken(expDelta = 3 * 86400): string {
-  const now = nowSeconds();
-  return signToken({ t: 'download', name: 'דנה', email: 'dana@example.test', iat: now, exp: now + expDelta }, SECRET);
+async function activeSessionCookie(email = 'dana@example.test'): Promise<string> {
+  await store.putUser({ id: 'uid', email, name: 'דנה', status: 'active', createdAt: 1, approvedAt: 1 });
+  return `pv_session=${await signSession(email, 30, SECRET)}`;
 }
 
 describe('GET /api/download', () => {
-  it('redirects to the signed URL of the newest desktop-v* installer', async () => {
+  it('redirects to /login when not signed in (also for old ?t= links)', async () => {
     const calls = mockGitHub();
-    const res = await download(new Request(`https://app.example.test/api/download?t=${downloadToken()}`));
+    const now = nowSeconds();
+    const oldLink = Buffer.from(JSON.stringify({ t: 'download', email: 'x@example.test', name: 'x', iat: now, exp: now + 100 })).toString('base64url');
+    for (const url of ['https://app.example.test/api/download', `https://app.example.test/api/download?t=${oldLink}.sig`]) {
+      const res = await download(new Request(url));
+      expect(res.status).toBe(302);
+      expect(res.headers.get('location')).toBe('/login?next=%2Fapi%2Fdownload');
+    }
+    expect(calls).toHaveLength(0);
+  });
+
+  it('redirects to /login for a revoked user or a forged cookie', async () => {
+    const calls = mockGitHub();
+    const cookie = await activeSessionCookie();
+    await store.putUser({ ...(await store.getUser('dana@example.test'))!, status: 'revoked' });
+    for (const c of [cookie, `pv_session=${await signSession('dana@example.test', 30, 'another-secret-0123456789abcdef0123')}`]) {
+      const res = await download(new Request('https://app.example.test/api/download', { headers: { cookie: c } }));
+      expect(res.status).toBe(302);
+      expect(res.headers.get('location')).toBe('/login?next=%2Fapi%2Fdownload');
+    }
+    expect(calls).toHaveLength(0);
+  });
+
+  it('with a session, redirects to the signed URL of the newest desktop-v* installer', async () => {
+    const calls = mockGitHub();
+    const cookie = await activeSessionCookie();
+    const res = await download(new Request('https://app.example.test/api/download', { headers: { cookie } }));
     expect(res.status).toBe(302);
     expect(res.headers.get('location')).toBe('https://objects.githubusercontent.example/signed/6?sig=abc');
     expect(res.headers.get('cache-control')).toBe('no-store');
@@ -308,41 +394,22 @@ describe('GET /api/download', () => {
   it('honours GITHUB_REPO', async () => {
     setEnv({ GITHUB_REPO: 'someone/other' });
     const calls = mockGitHub();
-    await download(new Request(`https://app.example.test/api/download?t=${downloadToken()}`));
+    const cookie = await activeSessionCookie();
+    await download(new Request('https://app.example.test/api/download', { headers: { cookie } }));
     expect(calls[0].url).toContain('/repos/someone/other/releases');
   });
 
-  it('shows a Hebrew page linking to /download for expired or invalid tokens', async () => {
-    const calls = mockGitHub();
-    const expired = await download(new Request(`https://app.example.test/api/download?t=${downloadToken(-10)}`));
-    expect(expired.status).toBe(410);
-    const html = await expired.text();
-    expect(html).toContain('תוקף הקישור פג');
-    expect(html).toContain('href="https://app.example.test/download"');
-
-    const now = nowSeconds();
-    const approveTok = signToken({ t: 'approve', name: 'דנה', email: 'd@example.test', iat: now, exp: now + 100 }, SECRET);
-    for (const t of ['bad', approveTok]) {
-      const r = await download(new Request(`https://app.example.test/api/download?t=${encodeURIComponent(t)}`));
-      expect(r.status).toBe(400);
-      expect(r.headers.get('location')).toBeNull();
-    }
-    expect(calls).toHaveLength(0);
-  });
-
   it('returns 502 when GitHub fails', async () => {
+    const cookie = await activeSessionCookie();
     mockGitHub({ listStatus: 401 });
-    const r1 = await download(new Request(`https://app.example.test/api/download?t=${downloadToken()}`));
-    expect(r1.status).toBe(502);
+    expect((await download(new Request('https://app.example.test/api/download', { headers: { cookie } }))).status).toBe(502);
     mockGitHub({ assetStatus: 404 });
-    const r2 = await download(new Request(`https://app.example.test/api/download?t=${downloadToken()}`));
-    expect(r2.status).toBe(502);
+    expect((await download(new Request('https://app.example.test/api/download', { headers: { cookie } }))).status).toBe(502);
   });
 
   it('fails closed without GITHUB_TOKEN', async () => {
     setEnv({ GITHUB_TOKEN: undefined });
-    const r = await download(new Request(`https://app.example.test/api/download?t=${downloadToken()}`));
-    expect(r.status).toBe(500);
+    expect((await download(new Request('https://app.example.test/api/download'))).status).toBe(500);
   });
 });
 

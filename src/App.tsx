@@ -11,6 +11,8 @@ import { useFileLaunch } from './pwa/fileHandling';
 import { DefaultAppPrompt } from './pwa/DefaultAppPrompt';
 import { useFileQueue } from './state/fileQueue';
 import { useDesktopFileOpen } from './desktop/bridge';
+import { useAuthGate } from './auth/session';
+import { AuthSplash } from './auth/AuthSplash';
 
 function isPdf(file: File) {
   return file.type === 'application/pdf' || /\.pdf$/i.test(file.name);
@@ -27,7 +29,13 @@ function hasFiles(e: DragEvent) {
   return !!e.dataTransfer && Array.from(e.dataTransfer.types).includes('Files');
 }
 
+/** Auth gate (web): splash while GET /api/auth/me runs; signed-out visitors are sent to /login. */
 export default function App() {
+  const ready = useAuthGate();
+  return ready ? <Workspace /> : <AuthSplash />;
+}
+
+function Workspace() {
   const numPages = useViewer((s) => s.numPages);
   const fileName = useViewer((s) => s.fileName);
   const loading = useViewer((s) => s.loading);

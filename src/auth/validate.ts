@@ -1,4 +1,4 @@
-/** Client-side validation for the download request form (mirrors api/request-access). */
+/** Client-side validation for the access request form on /login (mirrors the backend request validation). */
 
 export interface AccessRequest {
   name: string;

@@ -1,6 +1,6 @@
 // Compact HMAC-SHA256 signed tokens: base64url(JSON payload) + "." + base64url(signature).
-// Stateless: validity = valid signature + matching type + not expired. Tokens cannot be revoked
-// individually (rotate SIGNING_SECRET to invalidate all of them).
+// Validity = valid signature + matching type + not expired. Invite tokens are additionally single-use
+// (their jti must still exist in Redis). Rotating SIGNING_SECRET invalidates every token and session.
 import { createHmac, timingSafeEqual } from 'node:crypto';
 
 export interface ApprovePayload {
@@ -13,21 +13,33 @@ export interface ApprovePayload {
   exp: number;
 }
 
-export interface DownloadPayload {
-  t: 'download';
+/** One-time passkey registration link sent to an approved requester. Single use is enforced via invite:{jti} in Redis. */
+export interface InvitePayload {
+  t: 'invite';
+  name: string;
+  email: string;
+  jti: string;
+  iat: number;
+  exp: number;
+}
+
+/** Owner-only link (in the "registered" notification) that revokes a user's access. */
+export interface RevokePayload {
+  t: 'revoke';
   name: string;
   email: string;
   iat: number;
   exp: number;
 }
 
-export type TokenPayload = ApprovePayload | DownloadPayload;
+export type TokenPayload = ApprovePayload | InvitePayload | RevokePayload;
 export type TokenType = TokenPayload['t'];
 
 export type VerifyResult<P> = { ok: true; payload: P } | { ok: false; reason: 'malformed' | 'signature' | 'type' | 'expired' };
 
 const DAY_SECONDS = 24 * 60 * 60;
 export const APPROVE_TTL_DAYS = 14;
+export const REVOKE_TTL_DAYS = 365;
 
 export const nowSeconds = (): number => Math.floor(Date.now() / 1000);
 export const daysFromNow = (days: number, now = nowSeconds()): number => now + Math.round(days * DAY_SECONDS);

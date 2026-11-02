@@ -61,31 +61,56 @@ function detailsList(d: { name: string; email: string; company?: string; message
 </dl>`;
 }
 
+export type DecisionAction = 'approve' | 'deny' | 'revoke';
+
+const CONFIRM: Record<DecisionAction, { title: string; question: string; button: string; danger: boolean }> = {
+  approve: {
+    title: 'אישור בקשת גישה',
+    question: 'לאשר את הבקשה? המבקש/ת יקבלו במייל קישור חד-פעמי לרישום מפתח גישה (Face ID / טביעת אצבע / Windows Hello).',
+    button: 'אשר ושלח קישור הרשמה',
+    danger: false,
+  },
+  deny: { title: 'דחיית בקשת גישה', question: 'לדחות את בקשת הגישה?', button: 'דחה בקשה', danger: true },
+  revoke: {
+    title: 'ביטול גישה',
+    question: 'לבטל את הגישה של המשתמש/ת? כל מפתחות הגישה שלו/ה יימחקו וההתחברות תיחסם מיד.',
+    button: 'בטל גישה',
+    danger: true,
+  },
+};
+
 export function confirmPage(
-  action: 'approve' | 'deny',
+  action: DecisionAction,
   d: { name: string; email: string; company?: string; message?: string },
   postUrl: string,
 ): string {
-  const approve = action === 'approve';
-  const title = approve ? 'אישור בקשת הורדה' : 'דחיית בקשת הורדה';
+  const c = CONFIRM[action];
   return page(
-    title,
-    `<h1>${title}</h1>
-<p>${approve ? 'לאשר את הבקשה ולשלוח קישור הורדה אל המבקש?' : 'לדחות את בקשת ההורדה?'}</p>
+    c.title,
+    `<h1>${c.title}</h1>
+<p>${c.question}</p>
 ${detailsList(d)}
 <form method="post" action="${esc(postUrl)}">
-  <button class="btn${approve ? '' : ' danger'}" type="submit">${approve ? 'אשר ושלח קישור הורדה' : 'דחה בקשה'}</button>
+  <button class="btn${c.danger ? ' danger' : ''}" type="submit">${c.button}</button>
 </form>
 <p class="muted" style="margin-top:16px">שום פעולה לא מתבצעת עד שתלחצו על הכפתור.</p>`,
   );
 }
 
-export function approvedPage(email: string, days: number): string {
+export function approvedPage(email: string, hours: number): string {
   return page(
-    'ההורדה אושרה',
-    `<h1>ההורדה אושרה</h1>
-<p>נשלח מייל אל <strong dir="ltr">${esc(email)}</strong> עם קישור הורדה.</p>
-<p class="muted">הקישור תקף ל-${esc(days)} ימים.</p>`,
+    'הגישה אושרה',
+    `<h1>הגישה אושרה</h1>
+<p>נשלח מייל אל <strong dir="ltr">${esc(email)}</strong> עם קישור הרשמה חד-פעמי.</p>
+<p class="muted">הקישור תקף ל-${esc(hours)} שעות. כשההרשמה תושלם יישלח אליכם מייל עם אפשרות לבטל את הגישה.</p>`,
+  );
+}
+
+export function alreadyActivePage(email: string): string {
+  return page(
+    'המשתמש/ת כבר רשום/ה',
+    `<h1>המשתמש/ת כבר רשום/ה</h1>
+<p><strong dir="ltr">${esc(email)}</strong> כבר השלים/ה הרשמה ויכול/ה להתחבר עם מפתח הגישה. לא נשלח מייל נוסף.</p>`,
   );
 }
 
@@ -95,6 +120,15 @@ export function deniedPage(email: string, notified: boolean): string {
     `<h1>הבקשה נדחתה</h1>
 <p>הבקשה של <strong dir="ltr">${esc(email)}</strong> נדחתה.</p>
 <p class="muted">${notified ? 'נשלחה למבקש הודעת דחייה.' : 'לא נשלחה הודעה למבקש.'}</p>`,
+  );
+}
+
+export function revokedPage(email: string, removed: number): string {
+  return page(
+    'הגישה בוטלה',
+    `<h1>הגישה בוטלה</h1>
+<p>הגישה של <strong dir="ltr">${esc(email)}</strong> בוטלה. ${esc(removed)} מפתחות גישה נמחקו, וההתחברויות הפעילות נחסמו.</p>
+<p class="muted">אם תרצו לאפשר גישה שוב — המשתמש/ת יכולים לשלוח בקשה חדשה ותקבלו מייל אישור כרגיל.</p>`,
   );
 }
 
@@ -112,7 +146,7 @@ export function invalidLinkPage(reason: string, requestUrl: string, forRequester
 <p>${esc(REASON_TEXT[reason] ?? REASON_TEXT.malformed)}</p>
 ${
   forRequester
-    ? `<p>ניתן לשלוח בקשת הורדה חדשה:</p><p><a class="btn" href="${esc(requestUrl)}">בקשת הורדה חדשה</a></p>`
+    ? `<p>ניתן לשלוח בקשת גישה חדשה:</p><p><a class="btn" href="${esc(requestUrl)}">בקשת גישה חדשה</a></p>`
     : `<p class="muted">אם המבקש עדיין מעוניין, הוא יכול לשלוח בקשה חדשה בכתובת <a href="${esc(requestUrl)}">${esc(requestUrl)}</a>.</p>`
 }`,
   );
@@ -156,9 +190,9 @@ export function ownerRequestEmail(d: {
   ip?: string;
 }): Rendered {
   const html = emailShell(
-    'בקשת הורדה חדשה',
-    `<h1 style="font-size:20px;margin:0 0 12px">בקשת הורדה חדשה ל-PDF Viewer</h1>
-<p style="margin:0 0 12px">התקבלה בקשה להורדת תוכנת ההתקנה ל-Windows:</p>
+    'בקשת גישה חדשה',
+    `<h1 style="font-size:20px;margin:0 0 12px">בקשת גישה חדשה ל-PDF Viewer</h1>
+<p style="margin:0 0 12px">התקבלה בקשת גישה לאפליקציה ולהורדת תוכנת ההתקנה ל-Windows:</p>
 <table role="presentation" cellpadding="0" cellspacing="0" dir="rtl" style="margin:0 0 20px;${FONT};font-size:15px">
 ${row('שם', esc(d.name))}
 ${row('אימייל', `<span dir="ltr">${esc(d.email)}</span>`)}
@@ -166,20 +200,20 @@ ${d.company ? row('חברה', esc(d.company)) : ''}
 ${d.message ? row('הודעה', escMultiline(d.message)) : ''}
 </table>
 <table role="presentation" cellpadding="0" cellspacing="0"><tr>
-<td style="padding:0 0 0 12px">${button(d.approveUrl, 'אשר הורדה', '#16a34a')}</td>
+<td style="padding:0 0 0 12px">${button(d.approveUrl, 'אשר גישה', '#16a34a')}</td>
 <td>${button(d.denyUrl, 'דחה', '#c62828')}</td>
 </tr></table>
-<p style="margin:20px 0 0;font-size:13px;color:#5b6470">לחיצה על כפתור פותחת דף אישור — הפעולה מתבצעת רק לאחר לחיצה נוספת בדף. הקישורים תקפים ל-14 ימים.</p>`,
+<p style="margin:20px 0 0;font-size:13px;color:#5b6470">לחיצה על כפתור פותחת דף אישור — הפעולה מתבצעת רק לאחר לחיצה נוספת בדף. הקישורים תקפים ל-14 ימים. לאחר האישור יקבל/ת המבקש/ת קישור חד-פעמי לרישום מפתח גישה.</p>`,
   );
   const text = [
-    'בקשת הורדה חדשה ל-PDF Viewer',
+    'בקשת גישה חדשה ל-PDF Viewer',
     '',
     `שם: ${d.name}`,
     `אימייל: ${d.email}`,
     d.company ? `חברה: ${d.company}` : '',
     d.message ? `הודעה:\n${d.message}` : '',
     '',
-    `אשר הורדה: ${d.approveUrl}`,
+    `אשר גישה: ${d.approveUrl}`,
     '',
     `דחה: ${d.denyUrl}`,
     '',
@@ -187,62 +221,87 @@ ${d.message ? row('הודעה', escMultiline(d.message)) : ''}
   ]
     .filter((l, i, a) => l !== '' || a[i - 1] !== '')
     .join('\n');
-  return { subject: `בקשת הורדה ל-PDF Viewer: ${d.name}`, html, text };
+  return { subject: `בקשת גישה ל-PDF Viewer: ${d.name}`, html, text };
 }
 
 /** Sent to an address typed into a public form, so it deliberately contains no user-supplied text. */
 export function requesterAckEmail(): Rendered {
   return {
-    subject: 'הבקשה להורדת PDF Viewer התקבלה',
+    subject: 'בקשת הגישה ל-PDF Viewer התקבלה',
     html: emailShell(
       'הבקשה התקבלה',
       `<h1 style="font-size:20px;margin:0 0 12px">הבקשה התקבלה וממתינה לאישור</h1>
-<p style="margin:0 0 12px">תודה על הפנייה. לאחר אישור הבקשה יישלח אליכם מייל עם קישור להורדת PDF Viewer ל-Windows.</p>
+<p style="margin:0 0 12px">תודה על הפנייה. לאחר אישור הבקשה יישלח אליכם מייל עם קישור חד-פעמי להרשמה ל-PDF Viewer.</p>
 <p style="margin:0;font-size:13px;color:#5b6470">אם לא אתם ביקשתם — אפשר להתעלם מהודעה זו.</p>`,
     ),
     text:
-      'הבקשה התקבלה וממתינה לאישור.\n\nלאחר אישור הבקשה יישלח אליכם מייל עם קישור להורדת PDF Viewer ל-Windows.\n\nאם לא אתם ביקשתם — אפשר להתעלם מהודעה זו.',
+      'הבקשה התקבלה וממתינה לאישור.\n\nלאחר אישור הבקשה יישלח אליכם מייל עם קישור חד-פעמי להרשמה ל-PDF Viewer.\n\nאם לא אתם ביקשתם — אפשר להתעלם מהודעה זו.',
   };
 }
 
-export function downloadEmail(d: { name: string; downloadUrl: string; days: number }): Rendered {
+/** Sent to the requester after the owner approves: one-time passkey registration link. */
+export function inviteEmail(d: { name: string; inviteUrl: string; hours: number }): Rendered {
   const html = emailShell(
-    'ההורדה אושרה',
+    'הגישה אושרה',
     `<h1 style="font-size:20px;margin:0 0 12px">שלום ${esc(d.name)},</h1>
-<p style="margin:0 0 20px">הבקשה שלך אושרה. אפשר להוריד את תוכנת ההתקנה של PDF Viewer ל-Windows:</p>
-<p style="margin:0 0 24px">${button(d.downloadUrl, 'הורד את PDF Viewer ל-Windows', '#2563eb')}</p>
-<h2 style="font-size:17px;margin:0 0 8px">הוראות התקנה</h2>
+<p style="margin:0 0 12px">הגישה שלך ל-PDF Viewer אושרה. נשאר צעד אחד: לרשום מפתח גישה (Passkey) במכשיר שלך.</p>
+<p style="margin:0 0 20px">${button(d.inviteUrl, 'הרשמה ל-PDF Viewer', '#2563eb')}</p>
+<h2 style="font-size:17px;margin:0 0 8px">מה יקרה?</h2>
 <ol style="margin:0 0 16px;padding-right:20px;padding-left:0">
-<li style="margin-bottom:6px">הריצו את הקובץ שהורד (<span dir="ltr">PDF-Viewer-Setup-….exe</span>).</li>
-<li style="margin-bottom:6px">אם מופיע חלון כחול של Windows SmartScreen („Windows הגן על המחשב שלך”): לחצו על <strong>מידע נוסף</strong> (More info) ואז על <strong>הפעל בכל זאת</strong> (Run anyway).</li>
-<li style="margin-bottom:6px">בסיום ההתקנה ייפתח דף „אפליקציות ברירת מחדל” של Windows — שם אפשר לבחור ב-PDF Viewer כתוכנה לפתיחת קובצי PDF.</li>
+<li style="margin-bottom:6px">הקישור יפתח את דף ההרשמה של PDF Viewer.</li>
+<li style="margin-bottom:6px">המכשיר יבקש לאמת אותך עם <strong>Face ID</strong>, <strong>טביעת אצבע</strong> או <strong>Windows Hello</strong> (קוד PIN/פנים) — זה יוצר מפתח גישה שנשמר במכשיר בלבד. אפשר גם לסרוק קוד QR עם הטלפון.</li>
+<li style="margin-bottom:6px">מעכשיו ההתחברות לאפליקציה ולהורדת תוכנת ההתקנה ל-Windows תהיה רק עם מפתח הגישה — בלי סיסמה.</li>
 </ol>
-<p style="margin:0;font-size:13px;color:#5b6470">הקישור תקף ל-${esc(d.days)} ימים ומיועד לך בלבד. אם פג תוקפו, אפשר לשלוח בקשה חדשה.</p>`,
+<p style="margin:0;font-size:13px;color:#5b6470">הקישור חד-פעמי, תקף ל-${esc(d.hours)} שעות ומיועד לך בלבד — אל תעבירו אותו. אם פג תוקפו, אפשר לבקש גישה מחדש.</p>`,
   );
   const text = [
     `שלום ${d.name},`,
     '',
-    'הבקשה שלך אושרה. להורדת PDF Viewer ל-Windows:',
-    d.downloadUrl,
+    'הגישה שלך ל-PDF Viewer אושרה. נשאר צעד אחד: לרשום מפתח גישה (Passkey) במכשיר שלך.',
     '',
-    'הוראות התקנה:',
-    '1. הריצו את הקובץ שהורד (PDF-Viewer-Setup-….exe).',
-    '2. אם מופיע חלון Windows SmartScreen: לחצו "מידע נוסף" (More info) ואז "הפעל בכל זאת" (Run anyway).',
-    '3. בסיום ההתקנה ייפתח דף "אפליקציות ברירת מחדל" של Windows — שם אפשר לבחור ב-PDF Viewer לפתיחת קובצי PDF.',
+    `להרשמה: ${d.inviteUrl}`,
     '',
-    `הקישור תקף ל-${d.days} ימים ומיועד לך בלבד.`,
+    'המכשיר יבקש לאמת אותך עם Face ID, טביעת אצבע או Windows Hello. מעכשיו ההתחברות תהיה רק עם מפתח הגישה.',
+    '',
+    `הקישור חד-פעמי, תקף ל-${d.hours} שעות ומיועד לך בלבד.`,
   ].join('\n');
-  return { subject: 'הורדת PDF Viewer ל-Windows אושרה', html, text };
+  return { subject: 'הגישה שלך ל-PDF Viewer אושרה', html, text };
+}
+
+/** Sent to the owner when someone completes passkey registration; carries the revoke link. */
+export function ownerRegisteredEmail(d: { name: string; email: string; revokeUrl: string }): Rendered {
+  const html = emailShell(
+    'הרשמה הושלמה',
+    `<h1 style="font-size:20px;margin:0 0 12px">${esc(d.name)} נרשם/ה בהצלחה</h1>
+<p style="margin:0 0 12px">המשתמש/ת השלים/ה רישום מפתח גישה ויכול/ה כעת להיכנס ל-PDF Viewer ולהוריד את תוכנת ההתקנה.</p>
+<table role="presentation" cellpadding="0" cellspacing="0" dir="rtl" style="margin:0 0 20px;${FONT};font-size:15px">
+${row('שם', esc(d.name))}
+${row('אימייל', `<span dir="ltr">${esc(d.email)}</span>`)}
+</table>
+<p style="margin:0 0 12px">${button(d.revokeUrl, 'בטל גישה', '#c62828')}</p>
+<p style="margin:0;font-size:13px;color:#5b6470">שמרו את המייל הזה: הכפתור פותח דף אישור, והגישה תבוטל רק לאחר לחיצה נוספת. הקישור תקף לשנה.</p>`,
+  );
+  const text = [
+    `${d.name} נרשם/ה בהצלחה ל-PDF Viewer`,
+    '',
+    `שם: ${d.name}`,
+    `אימייל: ${d.email}`,
+    '',
+    `בטל גישה: ${d.revokeUrl}`,
+    '',
+    'הקישור פותח דף אישור; הגישה תבוטל רק לאחר לחיצה נוספת. תקף לשנה.',
+  ].join('\n');
+  return { subject: `${d.name} נרשם/ה בהצלחה ל-PDF Viewer`, html, text };
 }
 
 export function denyEmail(d: { name: string }): Rendered {
   return {
-    subject: 'בקשת ההורדה של PDF Viewer',
+    subject: 'בקשת הגישה ל-PDF Viewer',
     html: emailShell(
-      'בקשת ההורדה',
+      'בקשת הגישה',
       `<h1 style="font-size:20px;margin:0 0 12px">שלום ${esc(d.name)},</h1>
-<p style="margin:0">תודה על ההתעניינות ב-PDF Viewer. לצערנו לא נוכל לאשר את בקשת ההורדה בשלב זה.</p>`,
+<p style="margin:0">תודה על ההתעניינות ב-PDF Viewer. לצערנו לא נוכל לאשר את בקשת הגישה בשלב זה.</p>`,
     ),
-    text: `שלום ${d.name},\n\nתודה על ההתעניינות ב-PDF Viewer. לצערנו לא נוכל לאשר את בקשת ההורדה בשלב זה.`,
+    text: `שלום ${d.name},\n\nתודה על ההתעניינות ב-PDF Viewer. לצערנו לא נוכל לאשר את בקשת הגישה בשלב זה.`,
   };
 }

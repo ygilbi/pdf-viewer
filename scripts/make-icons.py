@@ -17,6 +17,7 @@ Outputs (public/icons/):
   file-pdf-{32,48,256,512}.png        document sheet with folded corner + mark
                                       (manifest file_handlers icons = .pdf file-type icon)
   logo-wordmark-white.png             white lines on transparent, for the dark start screen
+  logo-wordmark-white@2x.png          same at 1120px wide (big logo on /download, /login)
 """
 from pathlib import Path
 
@@ -292,6 +293,8 @@ def main() -> None:
         file_icon(m, s).save(OUT / f"file-pdf-{s}.png", optimize=True)
 
     wordmark_white(wm, 560).save(OUT / "logo-wordmark-white.png", optimize=True)
+    # 2x for the large logo on /download and /login (srcset); ~ the source crop's resolution.
+    wordmark_white(wm, 1120).save(OUT / "logo-wordmark-white@2x.png", optimize=True)
     print("wrote", ", ".join(sorted(p.name for p in OUT.iterdir())))
 
 

@@ -71,3 +71,26 @@ export async function resolveInstallerUrl(
   await assetRes.body?.cancel().catch(() => {});
   throw new GitHubError(`asset request did not redirect: HTTP ${assetRes.status}`);
 }
+
+/** Diagnostics for /api/health: can we list releases, and is there an installer to hand out? */
+export async function checkGitHub(
+  repo: string,
+  token: string,
+  fetchImpl: typeof fetch = fetch,
+): Promise<{ status: string; installer: string | null }> {
+  try {
+    const res = await fetchImpl(`https://api.github.com/repos/${repo}/releases?per_page=50`, {
+      headers: ghHeaders(token, 'application/vnd.github+json'),
+      signal: AbortSignal.timeout(8000),
+    });
+    if (!res.ok) {
+      await res.body?.cancel().catch(() => {});
+      return { status: `error ${res.status}`, installer: null };
+    }
+    const releases = (await res.json()) as GhRelease[];
+    const picked = pickInstaller(Array.isArray(releases) ? releases : []);
+    return { status: 'ok', installer: picked ? `${picked.tag}/${picked.asset.name}` : null };
+  } catch (err) {
+    return { status: `error ${(err as Error)?.name === 'TimeoutError' ? 'timeout' : 'network'}`, installer: null };
+  }
+}

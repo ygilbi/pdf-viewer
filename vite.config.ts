@@ -9,8 +9,8 @@ export default defineConfig({
   assetsInclude: ['**/*.bcmap', '**/*.pfb'],
   build: {
     target: 'es2022',
-    // Second page: /download (installer request form). Vercel cleanUrls serves download.html at /download.
-    rollupOptions: { input: { main: 'index.html', download: 'download.html' } },
+    // Extra pages: /download (logo + links) and /login (passkey sign-in / access request). Vercel cleanUrls serves x.html at /x.
+    rollupOptions: { input: { main: 'index.html', download: 'download.html', login: 'login.html' } },
   },
   // pdf-lib is only reached through the lazy export worker; pre-bundle it so the first export in dev doesn't trigger a reload.
   optimizeDeps: { exclude: ['pdfjs-dist'], include: ['pdf-lib', '@pdf-lib/fontkit'] },

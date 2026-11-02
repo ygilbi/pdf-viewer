@@ -24,6 +24,14 @@ export function jsonResponse(body: unknown, status = 200, extra: Record<string, 
   });
 }
 
+/** Shown to visitors on server misconfiguration; points the site owner at the diagnostics endpoint. */
+export const CONFIG_ERROR_TEXT =
+  'השירות אינו מוגדר כרגע (חסרים משתני סביבה בשרת). מנהל/ת האתר: פתחו את הכתובת ‎/api/health‏ כדי לראות מה חסר.';
+
+export function jsonError(code: string, error: string, status: number, extra: Record<string, unknown> = {}, headers: Record<string, string> = {}): Response {
+  return jsonResponse({ ok: false, code, error, ...extra }, status, headers);
+}
+
 /** Load config or produce the fail-closed 500 response (variable names are logged, never values). */
 export function configOrError(
   needs: Need[],
@@ -33,11 +41,11 @@ export function configOrError(
     return { config: loadConfig(needs) };
   } catch (err) {
     if (!(err instanceof ConfigError)) throw err;
-    console.error(`[download-approval] configuration error: ${err.message}`);
+    console.error(`[access] configuration error: ${err.message}`);
     const error =
       kind === 'json'
-        ? jsonResponse({ ok: false, code: 'server_config', error: 'השירות אינו מוגדר כרגע. נסו שוב מאוחר יותר.' }, 500)
-        : htmlResponse(errorPage('שגיאת הגדרות', 'השירות אינו מוגדר כרגע. נסו שוב מאוחר יותר.'), 500);
+        ? jsonResponse({ ok: false, code: 'server_config', error: CONFIG_ERROR_TEXT }, 500)
+        : htmlResponse(errorPage('שגיאת הגדרות', CONFIG_ERROR_TEXT), 500);
     return { error };
   }
 }
@@ -106,4 +114,58 @@ export function createRateLimiter(max: number, windowMs: number) {
       hits.clear();
     },
   };
+}
+
+/** Read a small JSON body. Returns the parsed value, or a ready JSON error response. */
+export async function readJsonBody(req: Request, limit: number): Promise<{ body: unknown; error?: undefined } | { body?: undefined; error: Response }> {
+  let raw: string;
+  try {
+    raw = await readLimitedText(req, limit);
+  } catch (err) {
+    if (err instanceof BodyTooLargeError) return { error: jsonError('too_large', 'הבקשה גדולה מדי.', 413) };
+    throw err;
+  }
+  if (!raw.trim()) return { body: {} };
+  try {
+    return { body: JSON.parse(raw) };
+  } catch {
+    return { error: jsonError('bad_json', 'גוף הבקשה אינו JSON תקין.', 400) };
+  }
+}
+
+/** Hostname the request was made to (Vercel sets x-forwarded-host), lower-case, without port. */
+export function requestHost(req: Request): string {
+  const raw = (req.headers.get('x-forwarded-host') ?? req.headers.get('host') ?? new URL(req.url).host).split(',')[0].trim();
+  return raw.replace(/:\d+$/, '').toLowerCase();
+}
+
+export const isLocalHost = (host: string): boolean => host === 'localhost' || host === '127.0.0.1' || host === '[::1]';
+
+export interface CookieOptions {
+  maxAge: number;
+  path?: string;
+  secure: boolean;
+}
+
+export function serializeCookie(name: string, value: string, o: CookieOptions): string {
+  return [
+    `${name}=${encodeURIComponent(value)}`,
+    `Path=${o.path ?? '/'}`,
+    `Max-Age=${Math.max(0, Math.floor(o.maxAge))}`,
+    'HttpOnly',
+    'SameSite=Lax',
+    ...(o.secure ? ['Secure'] : []),
+  ].join('; ');
+}
+
+/** Cookies are Secure everywhere except plain-http localhost development. */
+export function cookieSecure(req: Request): boolean {
+  return !isLocalHost(requestHost(req));
+}
+
+/** JSON response that also sets one or more cookies. */
+export function jsonWithCookies(body: unknown, cookies: string[], status = 200): Response {
+  const headers = new Headers({ 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
+  for (const c of cookies) headers.append('Set-Cookie', c);
+  return new Response(JSON.stringify(body), { status, headers });
 }

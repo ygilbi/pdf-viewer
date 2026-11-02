@@ -24,6 +24,7 @@ import { ActiveCategorySelect } from '../CategorySelect';
 import { fullscreenSupported, toggleFullscreen, useIsFullscreen } from '../toolActions';
 import { InstallButton, currentOs, openDefaultAppDialog } from '../../pwa';
 import { WINDOWS_DOWNLOAD_URL, showWindowsDownload } from '../../pwa/desktopDownload';
+import { signOut, useAuthUser } from '../../auth/session';
 
 function Group({ children, label }: { children: React.ReactNode; label: string }) {
   return (
@@ -54,6 +55,7 @@ export function TopMenu({ onOpenFile }: { onOpenFile(file: File): void }) {
   const measurementCount = useViewer((s) => s.measurements.length);
   const zoom = useZoom().percent;
   const isFs = useIsFullscreen();
+  const authUser = useAuthUser((s) => s.user);
   const hasDoc = numPages > 0;
 
   const ref = useRef<HTMLElement>(null);
@@ -313,6 +315,22 @@ export function TopMenu({ onOpenFile }: { onOpenFile(file: File): void }) {
             label="התקן"
             className="flex h-8 items-center gap-1.5 rounded px-2 text-xs text-sky-300 hover:bg-slate-700 hover:text-white focus:outline-none focus-visible:ring-1 focus-visible:ring-sky-400"
           />
+          {authUser && (
+            <>
+              <ToolbarDivider />
+              <span className="max-w-[10rem] truncate px-1 text-xs text-slate-400" dir="auto" title={authUser.email} data-testid="menu-user">
+                {authUser.name || authUser.email}
+              </span>
+              <button
+                type="button"
+                data-testid="menu-logout"
+                onClick={() => void signOut()}
+                className="flex h-8 items-center whitespace-nowrap rounded px-2 text-xs text-slate-300 hover:bg-slate-700 hover:text-white focus:outline-none focus-visible:ring-1 focus-visible:ring-sky-400"
+              >
+                התנתק
+              </button>
+            </>
+          )}
           <ToolbarDivider />
           <ToolButton label="סגור תפריט" shortcut="Esc" onClick={() => setMenuOpen(false)}>
             <IconX />

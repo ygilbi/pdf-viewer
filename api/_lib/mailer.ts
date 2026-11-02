@@ -13,6 +13,8 @@ export interface MailMessage {
 
 export interface Mailer {
   send(message: MailMessage): Promise<void>;
+  /** Connect + authenticate without sending (used by /api/health). */
+  verify?(): Promise<void>;
 }
 
 let override: Mailer | null = null;
@@ -43,9 +45,29 @@ export function createSmtpMailer(config: MailConfig): Mailer {
         html: message.html,
       });
     },
+    async verify() {
+      await transport.verify();
+    },
   };
 }
 
 export function getMailer(config: MailConfig): Mailer {
   return override ?? createSmtpMailer(config);
+}
+
+/**
+ * Short, secret-free description of an SMTP failure for diagnostics, e.g. "auth failed 535".
+ * Uses only nodemailer's error code / SMTP response code, never the server's message text.
+ */
+export function describeSmtpError(err: unknown): string {
+  const e = (err ?? {}) as { code?: unknown; responseCode?: unknown; message?: unknown };
+  const code = typeof e.code === 'string' ? e.code : '';
+  const rc = typeof e.responseCode === 'number' ? e.responseCode : null;
+  if (code === 'EAUTH' || rc === 535 || rc === 534) return `auth failed${rc ? ` ${rc}` : ''}`;
+  if (code === 'TIMEOUT' || code === 'ETIMEDOUT' || code === 'ETIMEDOUT_HEALTH') return 'timeout';
+  if (code === 'EDNS' || code === 'ENOTFOUND') return 'host not found';
+  if (code === 'ESOCKET' || code === 'ECONNECTION' || code === 'ECONNREFUSED' || code === 'ECONNRESET') return `connection failed (${code})`;
+  if (code === 'ETLS') return 'tls failed';
+  if (rc) return `smtp ${rc}`;
+  return code ? `failed (${code})` : 'failed';
 }
