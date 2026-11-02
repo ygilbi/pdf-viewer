@@ -10,11 +10,11 @@ import {
   readChallengeCookie,
   rpInfo,
   sessionCookie,
-} from '../../_lib/auth.js';
-import { clientIp, configOrError, cookieSecure, createRateLimiter, jsonWithCookies, readJsonBody, serializeCookie } from '../../_lib/http.js';
-import { CHALLENGE_COOKIE } from '../../_lib/session.js';
-import { getStore, type CredentialRecord, type UserRecord } from '../../_lib/store.js';
-import { nowSeconds } from '../../_lib/token.js';
+} from '../../../_lib/auth.js';
+import { clientIp, configOrError, cookieSecure, createRateLimiter, jsonWithCookies, readJsonBody, serializeCookie } from '../../../_lib/http.js';
+import { CHALLENGE_COOKIE } from '../../../_lib/session.js';
+import { getStore, type CredentialRecord, type UserRecord } from '../../../_lib/store.js';
+import { nowSeconds } from '../../../_lib/token.js';
 
 const limiter = createRateLimiter(30, 60 * 1000);
 

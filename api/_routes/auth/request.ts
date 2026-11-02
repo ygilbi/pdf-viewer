@@ -2,13 +2,13 @@
 // Body: { name, email, company?, message?, website? (honeypot) }.
 // Creates/updates user:{email} with status 'pending' and emails the owner signed approve/deny links.
 // Already-active users get { ok: true, alreadyActive: true } and no email is sent.
-import { getMailer } from '../_lib/mailer.js';
-import { daysFromNow, nowSeconds, signToken, APPROVE_TTL_DAYS } from '../_lib/token.js';
-import { ownerRequestEmail, requesterAckEmail } from '../_lib/templates.js';
-import { validateAccessRequest } from '../_lib/validate.js';
-import { appBaseUrl, clientIp, configOrError, createRateLimiter, jsonError, jsonResponse, readJsonBody } from '../_lib/http.js';
-import { authError, randomId } from '../_lib/auth.js';
-import { getStore, normEmail, type UserRecord } from '../_lib/store.js';
+import { getMailer } from '../../_lib/mailer.js';
+import { daysFromNow, nowSeconds, signToken, APPROVE_TTL_DAYS } from '../../_lib/token.js';
+import { ownerRequestEmail, requesterAckEmail } from '../../_lib/templates.js';
+import { validateAccessRequest } from '../../_lib/validate.js';
+import { appBaseUrl, clientIp, configOrError, createRateLimiter, jsonError, jsonResponse, readJsonBody } from '../../_lib/http.js';
+import { authError, randomId } from '../../_lib/auth.js';
+import { getStore, normEmail, type UserRecord } from '../../_lib/store.js';
 
 const MAX_BODY_BYTES = 8 * 1024;
 /** 5 requests per IP per 10 minutes, per warm instance (best effort only). */

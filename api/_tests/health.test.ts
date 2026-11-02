@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { GET as health } from '../health.js';
+import { GET as health } from '../_routes/health.js';
 import { describeSmtpError, setMailerForTests } from '../_lib/mailer.js';
 import { createMemoryStore, setStoreForTests, type Store } from '../_lib/store.js';
 import { BASE_ENV, fakeMailer, get, setEnv } from './helpers.js';

@@ -1,15 +1,15 @@
 // POST /api/auth/register/verify { invite, response: RegistrationResponseJSON } → { ok, user } + pv_session cookie.
 // Verifies the attestation, stores the passkey, consumes the invite (single use) and activates the user.
 import { verifyRegistrationResponse, type RegistrationResponseJSON } from '@simplewebauthn/server';
-import { authError, looksLikeCredentialJson, publicUser, rpInfo, sessionCookie } from '../../_lib/auth.js';
-import { checkInvite } from '../../_lib/invite.js';
-import { appBaseUrl, clientIp, configOrError, createRateLimiter, jsonWithCookies, readJsonBody } from '../../_lib/http.js';
-import { getStore } from '../../_lib/store.js';
-import { ConfigError, loadConfig } from '../../_lib/config.js';
-import { getMailer } from '../../_lib/mailer.js';
-import { ownerRegisteredEmail } from '../../_lib/templates.js';
-import { revokeUrl } from '../../_lib/decision.js';
-import { REVOKE_TTL_DAYS, nowSeconds } from '../../_lib/token.js';
+import { authError, looksLikeCredentialJson, publicUser, rpInfo, sessionCookie } from '../../../_lib/auth.js';
+import { checkInvite } from '../../../_lib/invite.js';
+import { appBaseUrl, clientIp, configOrError, createRateLimiter, jsonWithCookies, readJsonBody } from '../../../_lib/http.js';
+import { getStore } from '../../../_lib/store.js';
+import { ConfigError, loadConfig } from '../../../_lib/config.js';
+import { getMailer } from '../../../_lib/mailer.js';
+import { ownerRegisteredEmail } from '../../../_lib/templates.js';
+import { revokeUrl } from '../../../_lib/decision.js';
+import { REVOKE_TTL_DAYS, nowSeconds } from '../../../_lib/token.js';
 
 const limiter = createRateLimiter(30, 60 * 1000);
 

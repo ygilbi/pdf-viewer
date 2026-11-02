@@ -22,7 +22,8 @@ body:has(.download-page) { overflow: hidden; }
     max(1rem, env(safe-area-inset-left));
 }
 
-/* Takes all free height; the logo is contained in it (largest size that fits both axes). */
+/* Takes all free height; the logo is the largest size that fits both axes.
+   Logo = mark (560x388) + two tagline lines; its total height ≈ 0.95 × its width. */
 .logo-stage {
   flex: 1 1 auto;
   min-height: 0;
@@ -30,14 +31,35 @@ body:has(.download-page) { overflow: hidden; }
   display: flex;
   align-items: center;
   justify-content: center;
+  container-type: size;
 }
-.logo-fit {
-  display: block;
-  width: 100%;
-  height: 100%;
-  object-fit: contain;
+.logo-fit { width: min(100cqw, 100cqh * 1.05); }
+
+/* Brand logo (src/auth/Logo.tsx) */
+.brand-logo {
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  container-type: inline-size;
+  color: #fff;
+}
+.brand-mark { display: block; width: 100%; height: auto; }
+.brand-tagline {
+  margin-top: 3.5cqi;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  font-family: Raleway, "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+  font-weight: 400;
+  font-size: 7.6cqi;
+  line-height: 1.18;
+  letter-spacing: 0.06em;
+  direction: ltr;
+  white-space: nowrap;
 }
 
 .login-page { height: auto; min-height: 100vh; min-height: 100dvh; }
 /* The page may grow (form open), so the logo gets an explicit size instead of filling the stage. */
-.login-logo .logo-fit { width: min(86vw, 38vh * 1.293, 680px); width: min(86vw, 38dvh * 1.293, 680px); height: auto; }
+.login-logo .logo-fit { width: min(86vw, 40vh * 1.05, 680px); width: min(86vw, 40dvh * 1.05, 680px); }
+.login-logo { container-type: normal; flex: none; }

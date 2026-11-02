@@ -2,9 +2,9 @@
 // Discoverable-credential login (empty allowCredentials). The challenge is stored as challenge:{id};
 // the id travels in the short-lived HttpOnly cookie pv_chal (Path=/api/auth, 5 min).
 import { generateAuthenticationOptions } from '@simplewebauthn/server';
-import { authError, challengeCookie, randomId, rpInfo } from '../../_lib/auth.js';
-import { clientIp, configOrError, createRateLimiter, jsonWithCookies } from '../../_lib/http.js';
-import { CHALLENGE_TTL_SECONDS, getStore } from '../../_lib/store.js';
+import { authError, challengeCookie, randomId, rpInfo } from '../../../_lib/auth.js';
+import { clientIp, configOrError, createRateLimiter, jsonWithCookies } from '../../../_lib/http.js';
+import { CHALLENGE_TTL_SECONDS, getStore } from '../../../_lib/store.js';
 
 const limiter = createRateLimiter(30, 60 * 1000);
 

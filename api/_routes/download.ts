@@ -2,11 +2,11 @@
 // Not signed in → 302 /login?next=/api/download. Signed in → 302 to GitHub's short-lived signed URL for the
 // newest desktop-v* installer (the file is never proxied through the function).
 // The old emailed ?t=<download token> links are no longer accepted (they also just redirect to /login).
-import { resolveInstallerUrl } from './_lib/github.js';
-import { errorPage } from './_lib/templates.js';
-import { clientIp, configOrError, htmlResponse } from './_lib/http.js';
-import { currentUser } from './_lib/auth.js';
-import { getStore } from './_lib/store.js';
+import { resolveInstallerUrl } from '../_lib/github.js';
+import { errorPage } from '../_lib/templates.js';
+import { clientIp, configOrError, htmlResponse } from '../_lib/http.js';
+import { currentUser } from '../_lib/auth.js';
+import { getStore } from '../_lib/store.js';
 
 export const LOGIN_FOR_DOWNLOAD = '/login?next=%2Fapi%2Fdownload';
 

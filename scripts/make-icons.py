@@ -264,6 +264,16 @@ def draw_pdf_label(img: Image.Image, x0, y0, x1, y1) -> None:
     img.alpha_composite(big.resize(img.size, Image.LANCZOS))
 
 
+def crop_mark_only(src: Path, dst: Path) -> None:
+    """Cut the tagline (last text row, below the widest blank row gap) off a wordmark PNG."""
+    im = Image.open(src)
+    rows = np.where(np.array(im)[:, :, 3].max(1) > 40)[0]
+    gaps = [(rows[i], rows[i + 1]) for i in range(len(rows) - 1) if rows[i + 1] - rows[i] > 3]
+    cut = int(max(gaps, key=lambda g: g[1] - g[0])[0]) + 2
+    box = im.getbbox()
+    im.crop((box[0], 0, box[2], cut)).save(dst, optimize=True)
+
+
 def wordmark_white(w_alpha: np.ndarray, width: int) -> Image.Image:
     a = render(w_alpha, width, max(1.6, width / 330))
     return colored(a, (241, 245, 249))  # slate-100
@@ -295,6 +305,9 @@ def main() -> None:
     wordmark_white(wm, 560).save(OUT / "logo-wordmark-white.png", optimize=True)
     # 2x for the large logo on /download and /login (srcset); ~ the source crop's resolution.
     wordmark_white(wm, 1120).save(OUT / "logo-wordmark-white@2x.png", optimize=True)
+    # Mark + "PDF" only (tagline cropped off): the pages render the tagline as large HTML text.
+    for name in ("logo-wordmark-white.png", "logo-wordmark-white@2x.png"):
+        crop_mark_only(OUT / name, OUT / name.replace("wordmark-white", "mark-white"))
     print("wrote", ", ".join(sorted(p.name for p in OUT.iterdir())))
 
 

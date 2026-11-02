@@ -1,6 +1,6 @@
 // GET /api/revoke?t=<revoke token> — confirmation page only (safe for email link scanners).
 // POST /api/revoke?t=<revoke token> — sets status 'revoked', deletes the user's passkeys and invalidates sessions.
-import { decisionGet, decisionPost } from './_lib/decision.js';
+import { decisionGet, decisionPost } from '../_lib/decision.js';
 
 export function GET(req: Request): Response {
   return decisionGet(req, 'revoke');

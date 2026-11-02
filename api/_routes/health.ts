@@ -1,11 +1,11 @@
 // GET /api/health — configuration diagnostics for the site owner. Reports only booleans and short status
 // strings; never any secret value. Checks: env vars present, SMTP login (transporter.verify, 8 s timeout),
 // Redis reachability, GitHub release listing. Open it after every change of environment variables.
-import { MIN_SECRET_LENGTH, kvFromEnv, type MailConfig } from './_lib/config.js';
-import { describeSmtpError, getMailer } from './_lib/mailer.js';
-import { checkGitHub } from './_lib/github.js';
-import { clientIp, createRateLimiter, isLocalHost, jsonResponse, requestHost } from './_lib/http.js';
-import { getStore, hasStoreOverride } from './_lib/store.js';
+import { MIN_SECRET_LENGTH, kvFromEnv, type MailConfig } from '../_lib/config.js';
+import { describeSmtpError, getMailer } from '../_lib/mailer.js';
+import { checkGitHub } from '../_lib/github.js';
+import { clientIp, createRateLimiter, isLocalHost, jsonResponse, requestHost } from '../_lib/http.js';
+import { getStore, hasStoreOverride } from '../_lib/store.js';
 
 const limiter = createRateLimiter(10, 60 * 1000);
 const TIMEOUT_MS = 8000;

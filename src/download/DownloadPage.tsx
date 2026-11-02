@@ -10,7 +10,7 @@ export default function DownloadPage() {
   return (
     <main className="page-shell download-page" dir="rtl">
       <div className="logo-stage">
-        {/* Logo aspect 560:433 — fits the free area in both dimensions, never scrolls. */}
+        {/* Logo (mark + 2-line tagline, ~1.05:1) fits the free area in both dimensions, never scrolls. */}
         <WordmarkLogo className="logo-fit select-none" sizes="(min-aspect-ratio: 1/1) 80vh, 92vw" />
       </div>
       <nav className="flex w-full flex-col items-center gap-3 pt-[clamp(1rem,4vh,2.5rem)]" aria-label="כניסה">

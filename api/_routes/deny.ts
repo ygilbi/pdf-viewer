@@ -1,6 +1,6 @@
 // GET /api/deny?t=<approval token> — confirmation page only (safe for email link scanners).
 // POST /api/deny?t=<approval token> — marks the request 'denied'.
-import { decisionGet, decisionPost } from './_lib/decision.js';
+import { decisionGet, decisionPost } from '../_lib/decision.js';
 
 export function GET(req: Request): Response {
   return decisionGet(req, 'deny');

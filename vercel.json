@@ -5,7 +5,7 @@
   "outputDirectory": "dist",
   "cleanUrls": true,
   "functions": {
-    "api/**/*.ts": {
+    "api/router.ts": {
       "maxDuration": 20
     }
   },
@@ -31,6 +31,12 @@
           "value": "noindex, nofollow"
         }
       ]
+    }
+  ],
+  "rewrites": [
+    {
+      "source": "/api/:route((?!router$).+)",
+      "destination": "/api/router?__route=:route"
     }
   ]
 }

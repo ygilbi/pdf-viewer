@@ -1,16 +1,16 @@
 // End-to-end access flow with real WebAuthn crypto (software authenticator), in-memory store and fake mailer:
 // request → owner approves → invite → passkey registration → session → logout → passkey login → revoke.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { POST as requestAccess } from '../auth/request.js';
-import { POST as approvePost } from '../approve.js';
-import { POST as denyPost } from '../deny.js';
-import { GET as revokeGet, POST as revokePost } from '../revoke.js';
-import { POST as regOptions } from '../auth/register/options.js';
-import { POST as regVerify } from '../auth/register/verify.js';
-import { POST as loginOptions } from '../auth/login/options.js';
-import { POST as loginVerify } from '../auth/login/verify.js';
-import { GET as me } from '../auth/me.js';
-import { POST as logout } from '../auth/logout.js';
+import { POST as requestAccess } from '../_routes/auth/request.js';
+import { POST as approvePost } from '../_routes/approve.js';
+import { POST as denyPost } from '../_routes/deny.js';
+import { GET as revokeGet, POST as revokePost } from '../_routes/revoke.js';
+import { POST as regOptions } from '../_routes/auth/register/options.js';
+import { POST as regVerify } from '../_routes/auth/register/verify.js';
+import { POST as loginOptions } from '../_routes/auth/login/options.js';
+import { POST as loginVerify } from '../_routes/auth/login/verify.js';
+import { GET as me } from '../_routes/auth/me.js';
+import { POST as logout } from '../_routes/auth/logout.js';
 import { setMailerForTests } from '../_lib/mailer.js';
 import { createMemoryStore, setStoreForTests, type Store } from '../_lib/store.js';
 import { nowSeconds, signToken, verifyToken } from '../_lib/token.js';

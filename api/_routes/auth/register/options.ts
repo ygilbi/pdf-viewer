@@ -1,10 +1,10 @@
 // POST /api/auth/register/options { invite } → { ok, options: PublicKeyCredentialCreationOptionsJSON, user: { name, email } }
 // Validates the one-time invite and stores the registration challenge (challenge:reg-{jti}, 5 min).
 import { generateRegistrationOptions } from '@simplewebauthn/server';
-import { RP_NAME, authError, publicUser, rpInfo } from '../../_lib/auth.js';
-import { checkInvite } from '../../_lib/invite.js';
-import { clientIp, configOrError, createRateLimiter, jsonResponse, readJsonBody } from '../../_lib/http.js';
-import { getStore } from '../../_lib/store.js';
+import { RP_NAME, authError, publicUser, rpInfo } from '../../../_lib/auth.js';
+import { checkInvite } from '../../../_lib/invite.js';
+import { clientIp, configOrError, createRateLimiter, jsonResponse, readJsonBody } from '../../../_lib/http.js';
+import { getStore } from '../../../_lib/store.js';
 
 const limiter = createRateLimiter(30, 60 * 1000);
 

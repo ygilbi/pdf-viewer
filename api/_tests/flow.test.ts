@@ -1,9 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { POST as requestAccess } from '../request-access.js';
-import { POST as authRequest } from '../auth/request.js';
-import { GET as approveGet, POST as approvePost } from '../approve.js';
-import { GET as denyGet, POST as denyPost } from '../deny.js';
-import { GET as download } from '../download.js';
+import { POST as requestAccess } from '../_routes/request-access.js';
+import { POST as authRequest } from '../_routes/auth/request.js';
+import { GET as approveGet, POST as approvePost } from '../_routes/approve.js';
+import { GET as denyGet, POST as denyPost } from '../_routes/deny.js';
+import { GET as download } from '../_routes/download.js';
 import { setMailerForTests } from '../_lib/mailer.js';
 import { signToken, nowSeconds, verifyToken } from '../_lib/token.js';
 import { createMemoryStore, setStoreForTests, type Store } from '../_lib/store.js';
