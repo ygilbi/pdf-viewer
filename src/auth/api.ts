@@ -16,9 +16,20 @@ import type {
 export interface AuthUser {
   name: string;
   email: string;
+  /** From GET auth/me: whether the account has at least one passkey (absent on older backends). */
+  hasPasskey?: boolean;
 }
 
-export type ApiFailure = { ok: false; code: string; error: string; status: number };
+export type ApiFailure = {
+  ok: false;
+  code: string;
+  error: string;
+  status: number;
+  /** Seconds until a new e-mail code may be requested (429 too_soon). */
+  retryAfter?: number;
+  /** Code guesses left before the code is burned (400 code_invalid). */
+  attemptsLeft?: number;
+};
 export type ApiResult<T extends object = object> = ({ ok: true } & T) | ApiFailure;
 
 const BASE: string = (import.meta.env?.BASE_URL as string | undefined) ?? '/';
@@ -87,15 +98,20 @@ export async function apiRequest<T extends object = object>(
     clearTimeout(timer);
   }
   if (data && typeof data === 'object' && 'ok' in data) {
-    const d = data as { ok: unknown; code?: unknown; error?: unknown };
+    const d = data as { ok: unknown; code?: unknown; error?: unknown; retryAfter?: unknown; attemptsLeft?: unknown };
     if (d.ok === true && res.ok) return data as { ok: true } & T;
     if (d.ok === false || !res.ok) {
-      return {
+      const fail: ApiFailure = {
         ok: false,
         code: typeof d.code === 'string' && d.code ? d.code : res.status === 401 ? 'unauthorized' : 'error',
         error: typeof d.error === 'string' && d.error ? d.error : statusError(res.status),
         status: res.status,
       };
+      const retryAfter = numberOrNull(d.retryAfter) ?? numberOrNull(res.headers?.get?.('Retry-After'));
+      if (retryAfter !== null && retryAfter >= 0) fail.retryAfter = Math.ceil(retryAfter);
+      const attemptsLeft = numberOrNull(d.attemptsLeft);
+      if (attemptsLeft !== null && attemptsLeft >= 0) fail.attemptsLeft = Math.floor(attemptsLeft);
+      return fail;
     }
   }
   if (timedOut) return { ok: false, code: 'timeout', error: TIMEOUT_ERROR, status: 0 };
@@ -105,6 +121,11 @@ export async function apiRequest<T extends object = object>(
     error: statusError(res.status),
     status: res.status,
   };
+}
+
+function numberOrNull(v: unknown): number | null {
+  const n = typeof v === 'number' ? v : typeof v === 'string' && v.trim() !== '' ? Number(v) : NaN;
+  return Number.isFinite(n) ? n : null;
 }
 
 // ---------------------------------------------------------------- endpoints
@@ -126,6 +147,25 @@ export const loginVerify = (response: AuthenticationResponseJSON, o?: RequestOpt
 
 export const logout = (o?: RequestOpts) => apiRequest('POST', 'auth/logout', {}, o);
 
+/** Sign-in by one-time e-mail code, step 1: mail a 6-digit code (404 not_registered, 429 rate_limited / too_soon {retryAfter}). */
+export const emailStart = (email: string, o?: RequestOpts) =>
+  apiRequest<{ sent: boolean }>('POST', 'auth/email/start', { email }, o);
+
+/** Step 2: check the code; sets the session cookie (400 code_invalid {attemptsLeft}, 410 code_expired, 429 too_many_attempts). */
+export const emailVerify = (email: string, code: string, o?: RequestOpts) =>
+  apiRequest<{ user: AuthUser }>('POST', 'auth/email/verify', { email, code }, o);
+
+/** Invite registration without a passkey (later sign-ins by e-mail code); sets the session cookie. */
+export const registerEmail = (invite: string, o?: RequestOpts) =>
+  apiRequest<{ user: AuthUser }>('POST', 'auth/register/email', { invite }, o);
+
+/** Add a passkey to the signed-in account (401 when signed out). */
+export const passkeyAddOptions = (o?: RequestOpts) =>
+  apiRequest<{ options: PublicKeyCredentialCreationOptionsJSON }>('POST', 'auth/passkey/add/options', {}, o);
+
+export const passkeyAddVerify = (response: RegistrationResponseJSON, o?: RequestOpts) =>
+  apiRequest<{ user?: AuthUser }>('POST', 'auth/passkey/add/verify', { response }, o);
+
 export type MeState =
   | { state: 'signed-in'; user: AuthUser }
   | { state: 'signed-out' }
@@ -133,8 +173,13 @@ export type MeState =
   | { state: 'unknown' };
 
 export async function getMe(o?: RequestOpts): Promise<MeState> {
-  const r = await apiRequest<{ user: AuthUser }>('GET', 'auth/me', undefined, { timeoutMs: 6000, ...o });
-  if (r.ok) return r.user ? { state: 'signed-in', user: r.user } : { state: 'unknown' };
+  const r = await apiRequest<{ user: AuthUser; hasPasskey?: boolean }>('GET', 'auth/me', undefined, { timeoutMs: 6000, ...o });
+  if (r.ok) {
+    if (!r.user) return { state: 'unknown' };
+    // `hasPasskey` may sit next to `user` or inside it.
+    const hasPasskey = typeof r.user.hasPasskey === 'boolean' ? r.user.hasPasskey : typeof r.hasPasskey === 'boolean' ? r.hasPasskey : undefined;
+    return { state: 'signed-in', user: hasPasskey === undefined ? r.user : { ...r.user, hasPasskey } };
+  }
   if (r.status === 401) return { state: 'signed-out' };
   return { state: 'unknown' };
 }
@@ -161,6 +206,9 @@ export function safeNext(raw: string | null | undefined, fallback = '/'): string
   if (/^\/login(\.html)?\/?$/i.test(url.pathname)) return fallback;
   return url.pathname + url.search + url.hash;
 }
+
+/** Landing page right after a successful registration (install / default-app / Windows download). */
+export const WELCOME_PATH = `${BASE}welcome`;
 
 /** `/login?next=<current path>` (the gate's redirect target). */
 export function loginUrl(next: string): string {

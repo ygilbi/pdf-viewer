@@ -7,6 +7,9 @@
 //   usercreds:{email}     → SET of credentialIds
 //   invite:{jti}          → { email }  TTL = INVITE_HOURS; deleted when used (single use)
 //   challenge:{id}        → { challenge, ... } TTL = 5 min; deleted when read (single use)
+//   otp:{email}           → OtpRecord          TTL = 10 min; email login code (HMAC hash only, never the code)
+//   otpatt:{email}        → counter            TTL = 10 min; atomic count of verify attempts for the current code
+//   otpsend:{email}       → { times: number[] } TTL = 1 h;  send timestamps (rate limit for codes per email)
 import { Redis } from '@upstash/redis';
 import type { KvConfig } from './config.js';
 
@@ -45,6 +48,17 @@ export interface ChallengeRecord {
   email?: string;
 }
 
+/** Email login code (see api/_lib/otp.ts). */
+export interface OtpRecord {
+  /** HMAC-SHA256(SIGNING_SECRET, "otp:{email}:{code}"), hex. */
+  hash: string;
+  /** Expiry, unix seconds. */
+  exp: number;
+  /** Always 0 when written; the authoritative attempt count is the atomic otpatt:{email} counter
+   *  (rewriting this record on each failure could resurrect a code that a parallel request just consumed). */
+  attempts: number;
+}
+
 /** Raw key/value primitives; both implementations provide exactly these. */
 export interface Kv {
   get(key: string): Promise<string | null>;
@@ -55,6 +69,8 @@ export interface Kv {
   del(...keys: string[]): Promise<number>;
   sadd(key: string, member: string): Promise<void>;
   smembers(key: string): Promise<string[]>;
+  /** Atomic increment; sets the TTL when the key is created. Returns the new value. */
+  incr(key: string, ttlSeconds: number): Promise<number>;
   ping(): Promise<void>;
 }
 
@@ -117,6 +133,30 @@ export class Store {
     return this.kv.getdel(`challenge:${id}`).then(parse<ChallengeRecord>);
   }
 
+  getOtp(email: string): Promise<OtpRecord | null> {
+    return this.kv.get(`otp:${normEmail(email)}`).then(parse<OtpRecord>);
+  }
+  /** Overwrites any previous code and resets its attempt counter. */
+  async putOtp(email: string, rec: OtpRecord, ttlSeconds: number): Promise<void> {
+    await this.kv.del(`otpatt:${normEmail(email)}`);
+    await this.kv.set(`otp:${normEmail(email)}`, JSON.stringify(rec), ttlSeconds);
+  }
+  async deleteOtp(email: string): Promise<void> {
+    await this.kv.del(`otp:${normEmail(email)}`, `otpatt:${normEmail(email)}`);
+  }
+  /** Atomically count one verification attempt for the current code; returns the attempt number. */
+  countOtpAttempt(email: string, ttlSeconds: number): Promise<number> {
+    return this.kv.incr(`otpatt:${normEmail(email)}`, ttlSeconds);
+  }
+
+  async getOtpSends(email: string): Promise<number[]> {
+    const rec = parse<{ times?: unknown }>(await this.kv.get(`otpsend:${normEmail(email)}`));
+    return Array.isArray(rec?.times) ? rec.times.filter((t): t is number => typeof t === 'number') : [];
+  }
+  putOtpSends(email: string, times: number[], ttlSeconds: number): Promise<void> {
+    return this.kv.set(`otpsend:${normEmail(email)}`, JSON.stringify({ times }), ttlSeconds);
+  }
+
   ping(): Promise<void> {
     return this.kv.ping();
   }
@@ -146,6 +186,11 @@ export function createUpstashKv(config: KvConfig): Kv {
     },
     async smembers(key) {
       return (await redis.smembers(key)).map(String);
+    },
+    async incr(key, ttl) {
+      const n = Number(await redis.incr(key));
+      if (n === 1) await redis.expire(key, Math.max(1, Math.round(ttl)));
+      return n;
     },
     async ping() {
       await redis.ping();
@@ -191,6 +236,12 @@ export function createMemoryKv(now: () => number = Date.now): Kv & { dump(): Map
     async smembers(key) {
       const e = live(key);
       return e && e.v instanceof Set ? [...e.v] : [];
+    },
+    async incr(key, ttl) {
+      const e = live(key);
+      const n = (e && typeof e.v === 'string' ? Number(e.v) || 0 : 0) + 1;
+      data.set(key, { v: String(n), exp: e ? e.exp : now() + ttl * 1000 });
+      return n;
     },
     async ping() {},
     dump() {

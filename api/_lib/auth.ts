@@ -1,8 +1,14 @@
 // Passkey (WebAuthn) + session helpers shared by the api/auth/* functions.
+import {
+  generateRegistrationOptions,
+  verifyRegistrationResponse,
+  type PublicKeyCredentialCreationOptionsJSON,
+  type RegistrationResponseJSON,
+} from '@simplewebauthn/server';
 import type { Config } from './config.js';
 import { cookieSecure, isLocalHost, requestHost, serializeCookie } from './http.js';
 import { CHALLENGE_COOKIE, SESSION_COOKIE, readCookie, sessionUserValid, signSession, verifySession } from './session.js';
-import { normEmail, type Store, type UserRecord } from './store.js';
+import { normEmail, type CredentialRecord, type Store, type UserRecord } from './store.js';
 
 export const RP_NAME = 'PDF Viewer';
 
@@ -84,24 +90,104 @@ export const AUTH_ERRORS = {
   bad_request: [400, 'הבקשה אינה תקינה.'],
   invite_invalid: [410, 'קישור ההרשמה אינו תקין (ייתכן שהועתק חלקית).'],
   invite_expired: [410, 'תוקף קישור ההרשמה פג. אפשר לבקש גישה מחדש.'],
-  invite_used: [410, 'קישור ההרשמה כבר נוצל. אם כבר נרשמתם — התחברו עם מפתח הגישה; אחרת בקשו גישה מחדש.'],
+  invite_used: [410, 'קישור ההרשמה כבר נוצל. אם כבר נרשמתם — התחברו עם מפתח הגישה או עם קוד במייל; אחרת בקשו גישה מחדש.'],
   not_approved: [403, 'הבקשה אינה מאושרת כרגע. אפשר לבקש גישה מחדש.'],
   challenge_expired: [400, 'פג הזמן לאימות. נסו שוב.'],
   verification_failed: [400, 'האימות נכשל. נסו שוב.'],
   credential_exists: [409, 'מפתח הגישה הזה כבר רשום.'],
   unknown_credential: [401, 'מפתח הגישה אינו מוכר (ייתכן שהגישה בוטלה). אפשר לבקש גישה מחדש.'],
   not_active: [403, 'הגישה שלך אינה פעילה. אפשר לבקש גישה מחדש.'],
-  unauthenticated: [401, 'יש להתחבר עם מפתח הגישה.'],
+  unauthenticated: [401, 'יש להתחבר (עם מפתח גישה או עם קוד במייל).'],
   rate_limited: [429, 'יותר מדי ניסיונות. נסו שוב בעוד דקה.'],
+  not_registered: [404, 'כתובת המייל לא רשומה או שעדיין לא אושרה. בקש/י גישה.'],
+  too_soon: [429, 'קוד נשלח זה עתה. אפשר לבקש קוד חדש בעוד כמה שניות.'],
+  code_expired: [410, 'תוקף הקוד פג. בקש/י קוד חדש.'],
+  code_invalid: [400, 'הקוד שגוי. נסו שוב.'],
+  too_many_attempts: [429, 'יותר מדי ניסיונות שגויים. בקש/י קוד חדש.'],
+  mail_failed: [502, 'שליחת המייל נכשלה. נסו שוב מאוחר יותר. מנהל/ת האתר: פתחו את הכתובת ‎/api/health‏ לאבחון.'],
   store_failed: [502, 'שגיאה בחיבור למסד הנתונים. מנהל/ת האתר: פתחו את הכתובת ‎/api/health‏ לאבחון.'],
 } as const satisfies Record<string, readonly [number, string]>;
 
 export type AuthErrorCode = keyof typeof AUTH_ERRORS;
 
-export function authError(code: AuthErrorCode, headers: Record<string, string> = {}): Response {
-  const [status, error] = AUTH_ERRORS[code];
-  return new Response(JSON.stringify({ ok: false, code, error }), {
+export function authError(
+  code: AuthErrorCode,
+  headers: Record<string, string> = {},
+  extra: Record<string, unknown> & { error?: string } = {},
+): Response {
+  const [status, defaultError] = AUTH_ERRORS[code];
+  const { error = defaultError, ...rest } = extra;
+  return new Response(JSON.stringify({ ok: false, code, error, ...rest }), {
     status,
     headers: { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store', ...headers },
   });
+}
+
+/** True when the user has at least one registered passkey. */
+export async function hasPasskey(store: Store, email: string): Promise<boolean> {
+  return (await store.listCredIds(email)).length > 0;
+}
+
+/**
+ * Creation options for a new passkey: discoverable + user verification (Face ID / fingerprint / Windows Hello).
+ * No authenticatorAttachment: a phone via cross-device (hybrid/QR) must remain possible; the hints only express a preference.
+ */
+export async function passkeyCreationOptions(rpId: string, user: UserRecord, existingIds: string[]): Promise<PublicKeyCredentialCreationOptionsJSON> {
+  const options = await generateRegistrationOptions({
+    rpName: RP_NAME,
+    rpID: rpId,
+    userName: user.email,
+    userDisplayName: user.name,
+    userID: new Uint8Array(Buffer.from(user.id, 'base64url')),
+    attestationType: 'none',
+    timeout: 120_000,
+    excludeCredentials: existingIds.map((id) => ({ id })),
+    authenticatorSelection: { residentKey: 'required', requireResidentKey: true, userVerification: 'required' },
+  });
+  options.hints = ['client-device', 'hybrid'];
+  return options;
+}
+
+/**
+ * Verify a RegistrationResponseJSON against the stored challenge. Returns the credential id + record to store,
+ * or an error code. Does not write anything.
+ */
+export async function verifyPasskeyRegistration(
+  req: Request,
+  config: Config,
+  user: UserRecord,
+  response: unknown,
+  expectedChallenge: string,
+  now: number,
+): Promise<{ ok: true; id: string; cred: CredentialRecord } | { ok: false; code: AuthErrorCode }> {
+  if (!looksLikeCredentialJson(response)) return { ok: false, code: 'bad_request' };
+  const rp = rpInfo(req, config);
+  try {
+    const result = await verifyRegistrationResponse({
+      response: response as unknown as RegistrationResponseJSON,
+      expectedChallenge,
+      expectedOrigin: rp.origins,
+      expectedRPID: rp.rpId,
+      requireUserVerification: true,
+    });
+    if (!result.verified) return { ok: false, code: 'verification_failed' };
+    const info = result.registrationInfo;
+    const transports = info.credential.transports ?? ((response.response as { transports?: unknown }).transports as string[] | undefined) ?? [];
+    return {
+      ok: true,
+      id: info.credential.id,
+      cred: {
+        userEmail: normEmail(user.email),
+        publicKey: Buffer.from(info.credential.publicKey).toString('base64url'),
+        counter: info.credential.counter,
+        transports: Array.isArray(transports) ? transports.filter((t) => typeof t === 'string').slice(0, 8) : [],
+        createdAt: now,
+        deviceType: info.credentialDeviceType,
+        backedUp: info.credentialBackedUp,
+      },
+    };
+  } catch (err) {
+    console.warn(`[access] registration verification failed for ${user.email}:`, (err as Error)?.message);
+    return { ok: false, code: 'verification_failed' };
+  }
 }

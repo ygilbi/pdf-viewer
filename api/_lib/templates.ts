@@ -66,7 +66,7 @@ export type DecisionAction = 'approve' | 'deny' | 'revoke';
 const CONFIRM: Record<DecisionAction, { title: string; question: string; button: string; danger: boolean }> = {
   approve: {
     title: 'אישור בקשת גישה',
-    question: 'לאשר את הבקשה? המבקש/ת יקבלו במייל קישור חד-פעמי לרישום מפתח גישה (Face ID / טביעת אצבע / Windows Hello).',
+    question: 'לאשר את הבקשה? המבקש/ת יקבלו במייל קישור הרשמה חד-פעמי (עם טביעת אצבע / זיהוי פנים / Windows Hello, או עם קוד במייל).',
     button: 'אשר ושלח קישור הרשמה',
     danger: false,
   },
@@ -110,7 +110,7 @@ export function alreadyActivePage(email: string): string {
   return page(
     'המשתמש/ת כבר רשום/ה',
     `<h1>המשתמש/ת כבר רשום/ה</h1>
-<p><strong dir="ltr">${esc(email)}</strong> כבר השלים/ה הרשמה ויכול/ה להתחבר עם מפתח הגישה. לא נשלח מייל נוסף.</p>`,
+<p><strong dir="ltr">${esc(email)}</strong> כבר השלים/ה הרשמה ויכול/ה להתחבר (עם מפתח גישה או עם קוד במייל). לא נשלח מייל נוסף.</p>`,
   );
 }
 
@@ -203,7 +203,7 @@ ${d.message ? row('הודעה', escMultiline(d.message)) : ''}
 <td style="padding:0 0 0 12px">${button(d.approveUrl, 'אשר גישה', '#16a34a')}</td>
 <td>${button(d.denyUrl, 'דחה', '#c62828')}</td>
 </tr></table>
-<p style="margin:20px 0 0;font-size:13px;color:#5b6470">לחיצה על כפתור פותחת דף אישור — הפעולה מתבצעת רק לאחר לחיצה נוספת בדף. הקישורים תקפים ל-14 ימים. לאחר האישור יקבל/ת המבקש/ת קישור חד-פעמי לרישום מפתח גישה.</p>`,
+<p style="margin:20px 0 0;font-size:13px;color:#5b6470">לחיצה על כפתור פותחת דף אישור — הפעולה מתבצעת רק לאחר לחיצה נוספת בדף. הקישורים תקפים ל-14 ימים. לאחר האישור יקבל/ת המבקש/ת קישור הרשמה חד-פעמי.</p>`,
   );
   const text = [
     'בקשת גישה חדשה ל-PDF Viewer',
@@ -239,29 +239,30 @@ export function requesterAckEmail(): Rendered {
   };
 }
 
-/** Sent to the requester after the owner approves: one-time passkey registration link. */
+/** Sent to the requester after the owner approves: one-time registration link (passkey or email code). */
 export function inviteEmail(d: { name: string; inviteUrl: string; hours: number }): Rendered {
   const html = emailShell(
     'הגישה אושרה',
     `<h1 style="font-size:20px;margin:0 0 12px">שלום ${esc(d.name)},</h1>
-<p style="margin:0 0 12px">הגישה שלך ל-PDF Viewer אושרה. נשאר צעד אחד: לרשום מפתח גישה (Passkey) במכשיר שלך.</p>
+<p style="margin:0 0 12px">הגישה שלך ל-PDF Viewer אושרה. נשאר צעד אחד: להשלים את ההרשמה.</p>
 <p style="margin:0 0 20px">${button(d.inviteUrl, 'הרשמה ל-PDF Viewer', '#2563eb')}</p>
+<p style="margin:0 0 12px">אפשר להירשם עם <strong>טביעת אצבע</strong> / <strong>זיהוי פנים (Face ID)</strong> / <strong>Windows Hello</strong>, או להמשיך עם <strong>קוד במייל</strong>.</p>
 <h2 style="font-size:17px;margin:0 0 8px">מה יקרה?</h2>
 <ol style="margin:0 0 16px;padding-right:20px;padding-left:0">
 <li style="margin-bottom:6px">הקישור יפתח את דף ההרשמה של PDF Viewer.</li>
-<li style="margin-bottom:6px">המכשיר יבקש לאמת אותך עם <strong>Face ID</strong>, <strong>טביעת אצבע</strong> או <strong>Windows Hello</strong> (קוד PIN/פנים) — זה יוצר מפתח גישה שנשמר במכשיר בלבד. אפשר גם לסרוק קוד QR עם הטלפון.</li>
-<li style="margin-bottom:6px">מעכשיו ההתחברות לאפליקציה ולהורדת תוכנת ההתקנה ל-Windows תהיה רק עם מפתח הגישה — בלי סיסמה.</li>
+<li style="margin-bottom:6px">אם במכשיר יש חיישן טביעת אצבע / זיהוי פנים / Windows Hello — אפשר ליצור מפתח גישה (Passkey) שנשמר במכשיר בלבד, ולהיכנס בהמשך בלי סיסמה. אפשר גם לסרוק קוד QR עם הטלפון.</li>
+<li style="margin-bottom:6px">אין חיישן כזה? בוחרים <strong>המשך עם קוד במייל</strong>. בכניסות הבאות מזינים את כתובת המייל ומקבלים קוד חד-פעמי בן 6 ספרות.</li>
 </ol>
 <p style="margin:0;font-size:13px;color:#5b6470">הקישור חד-פעמי, תקף ל-${esc(d.hours)} שעות ומיועד לך בלבד — אל תעבירו אותו. אם פג תוקפו, אפשר לבקש גישה מחדש.</p>`,
   );
   const text = [
     `שלום ${d.name},`,
     '',
-    'הגישה שלך ל-PDF Viewer אושרה. נשאר צעד אחד: לרשום מפתח גישה (Passkey) במכשיר שלך.',
+    'הגישה שלך ל-PDF Viewer אושרה. נשאר צעד אחד: להשלים את ההרשמה.',
     '',
     `להרשמה: ${d.inviteUrl}`,
     '',
-    'המכשיר יבקש לאמת אותך עם Face ID, טביעת אצבע או Windows Hello. מעכשיו ההתחברות תהיה רק עם מפתח הגישה.',
+    'אפשר להירשם עם טביעת אצבע / זיהוי פנים / Windows Hello, או להמשיך עם קוד במייל.',
     '',
     `הקישור חד-פעמי, תקף ל-${d.hours} שעות ומיועד לך בלבד.`,
   ].join('\n');
@@ -269,11 +270,15 @@ export function inviteEmail(d: { name: string; inviteUrl: string; hours: number 
 }
 
 /** Sent to the owner when someone completes passkey registration; carries the revoke link. */
-export function ownerRegisteredEmail(d: { name: string; email: string; revokeUrl: string }): Rendered {
+export function ownerRegisteredEmail(d: { name: string; email: string; revokeUrl: string; method?: 'passkey' | 'email' }): Rendered {
+  const how =
+    d.method === 'email'
+      ? 'המשתמש/ת נרשם/ה עם קוד במייל (בלי מפתח גישה) ויכול/ה כעת להיכנס ל-PDF Viewer עם קוד חד-פעמי שנשלח למייל, ולהוריד את תוכנת ההתקנה.'
+      : 'המשתמש/ת השלים/ה רישום מפתח גישה ויכול/ה כעת להיכנס ל-PDF Viewer ולהוריד את תוכנת ההתקנה.';
   const html = emailShell(
     'הרשמה הושלמה',
     `<h1 style="font-size:20px;margin:0 0 12px">${esc(d.name)} נרשם/ה בהצלחה</h1>
-<p style="margin:0 0 12px">המשתמש/ת השלים/ה רישום מפתח גישה ויכול/ה כעת להיכנס ל-PDF Viewer ולהוריד את תוכנת ההתקנה.</p>
+<p style="margin:0 0 12px">${how}</p>
 <table role="presentation" cellpadding="0" cellspacing="0" dir="rtl" style="margin:0 0 20px;${FONT};font-size:15px">
 ${row('שם', esc(d.name))}
 ${row('אימייל', `<span dir="ltr">${esc(d.email)}</span>`)}
@@ -283,6 +288,8 @@ ${row('אימייל', `<span dir="ltr">${esc(d.email)}</span>`)}
   );
   const text = [
     `${d.name} נרשם/ה בהצלחה ל-PDF Viewer`,
+    '',
+    how,
     '',
     `שם: ${d.name}`,
     `אימייל: ${d.email}`,
@@ -304,4 +311,24 @@ export function denyEmail(d: { name: string }): Rendered {
     ),
     text: `שלום ${d.name},\n\nתודה על ההתעניינות ב-PDF Viewer. לצערנו לא נוכל לאשר את בקשת הגישה בשלב זה.`,
   };
+}
+
+/** Email login code. Contains no user-supplied text besides the code itself. */
+export function loginCodeEmail(d: { code: string; minutes: number }): Rendered {
+  const html = emailShell(
+    'קוד הכניסה שלך',
+    `<h1 style="font-size:20px;margin:0 0 12px">קוד הכניסה שלך ל-PDF Viewer</h1>
+<p style="margin:0 0 16px">הזינו את הקוד בדף הכניסה:</p>
+<p dir="ltr" style="margin:0 0 16px;text-align:center"><span style="display:inline-block;font-family:'Courier New',Consolas,Menlo,monospace;font-size:34px;font-weight:bold;letter-spacing:8px;background:#f4f5f7;border:1px solid #d9dde3;border-radius:8px;padding:12px 20px;color:#1f2328">${esc(d.code)}</span></p>
+<p style="margin:0 0 12px">הקוד תקף ל-${esc(d.minutes)} דקות וניתן להשתמש בו פעם אחת.</p>
+<p style="margin:0;font-size:13px;color:#5b6470">אם לא ביקשת — התעלם מהודעה זו. אל תעבירו את הקוד לאף אחד.</p>`,
+  );
+  const text = [
+    `קוד הכניסה שלך ל-PDF Viewer: ${d.code}`,
+    '',
+    `הקוד תקף ל-${d.minutes} דקות וניתן להשתמש בו פעם אחת.`,
+    '',
+    'אם לא ביקשת — התעלם מהודעה זו.',
+  ].join('\n');
+  return { subject: `קוד הכניסה שלך ל-PDF Viewer: ${d.code}`, html, text };
 }

@@ -11,16 +11,18 @@
 ;   - normalise the ProgID values (quoted exe path, ",0" icon index, Application info),
 ;   - register the app as a Default Apps candidate (Applications\, Capabilities,
 ;     RegisteredApplications) so it is listed in Settings > Apps > Default apps,
-;   - tell Explorer (SHCNE_ASSOCCHANGED) so .pdf files get the new icon at once,
-;   - interactive installs only: open THIS app's Default apps page in Settings.
+;   - tell Explorer (SHCNE_ASSOCCHANGED) so .pdf files get the new icon at once.
 ; The per-user UserChoice is hash-protected by Windows; no installer may set it.
+; The installer does NOT open Windows Settings. The app itself asks once, on its
+; first launch ("make PDF Viewer the default for PDF files?"), and remembers the
+; answer in %APPDATA%\PDF Viewer\prefs.json (main.cjs). CI greps this file to
+; make sure no shell-execute step comes back here.
 
 !define PDFV_PROGID "PDFViewer.Document"
 !define PDFV_EXE "PDFViewer.exe"
 !define PDFV_REGNAME "PDF Viewer"
 !define PDFV_CAPS "Software\PDFViewer\Capabilities"
 !define PDFV_DESC "View PDF drawings and measure aluminium facade areas"
-!define PDFV_SETTINGS_URI "ms-settings:defaultapps?registeredAppUser=PDF%20Viewer"
 
 !macro pdfvNotifyAssocChanged
   ; SHCNE_ASSOCCHANGED, SHCNF_FLUSH
@@ -59,19 +61,6 @@
   WriteRegStr SHELL_CONTEXT "Software\Microsoft\Windows\CurrentVersion\App Paths\${PDFV_EXE}" "Path" "$INSTDIR"
 
   !insertmacro pdfvNotifyAssocChanged
-
-  ; ---- Ask the user once (Windows only allows the user to pick the default).
-  ; Not for silent installs (/S, CI) or auto-updates, and not when we already are the default.
-  ${IfNot} ${Silent}
-  ${AndIfNot} ${isUpdated}
-    ReadRegStr $0 HKCU "Software\Microsoft\Windows\CurrentVersion\Explorer\FileExts\.pdf\UserChoiceLatest\ProgId" "ProgId"
-    ${If} $0 == ""
-      ReadRegStr $0 HKCU "Software\Microsoft\Windows\CurrentVersion\Explorer\FileExts\.pdf\UserChoice" "ProgId"
-    ${EndIf}
-    ${If} $0 != "${PDFV_PROGID}"
-      ExecShell "open" "${PDFV_SETTINGS_URI}"
-    ${EndIf}
-  ${EndIf}
 !macroend
 
 !macro customUnInstall

@@ -18,6 +18,11 @@ import * as loginOptions from './_routes/auth/login/options.js';
 import * as loginVerify from './_routes/auth/login/verify.js';
 import * as registerOptions from './_routes/auth/register/options.js';
 import * as registerVerify from './_routes/auth/register/verify.js';
+import * as registerEmail from './_routes/auth/register/email.js';
+import * as emailStart from './_routes/auth/email/start.js';
+import * as emailVerify from './_routes/auth/email/verify.js';
+import * as passkeyAddOptions from './_routes/auth/passkey/add/options.js';
+import * as passkeyAddVerify from './_routes/auth/passkey/add/verify.js';
 
 type Handler = (req: Request) => Response | Promise<Response>;
 type RouteModule = Partial<Record<'GET' | 'POST', Handler>>;
@@ -36,6 +41,11 @@ export const ROUTES: Record<string, RouteModule> = {
   'auth/login/verify': loginVerify,
   'auth/register/options': registerOptions,
   'auth/register/verify': registerVerify,
+  'auth/register/email': registerEmail,
+  'auth/email/start': emailStart,
+  'auth/email/verify': emailVerify,
+  'auth/passkey/add/options': passkeyAddOptions,
+  'auth/passkey/add/verify': passkeyAddVerify,
 };
 
 /** Route name from the rewrite's __route param, or from the path itself (/api/<route>). */

@@ -20,7 +20,17 @@ export interface PdfDesktopApi {
   openDefaultAppsSettings(): Promise<void>;
   /** The user's .pdf choice is PDF Viewer (true), another app (false), or unknown (null). */
   isDefaultPdfApp(): Promise<boolean | null>;
+  /**
+   * Persistent preferences in the desktop app's userData/prefs.json (survive cleared
+   * site data). Allow-listed keys only (main.cjs PREF_KEYS); null when unset.
+   * Optional: absent in desktop builds older than 0.2.0.
+   */
+  getPref?(key: DesktopPrefKey): Promise<unknown>;
+  setPref?(key: DesktopPrefKey, value: unknown): Promise<void>;
 }
+
+/** Keys accepted by getPref / setPref (keep in sync with PREF_KEYS in desktop/main.cjs). */
+export type DesktopPrefKey = 'defaultPdfPrompt';
 
 declare global {
   interface Window {

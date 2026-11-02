@@ -1,14 +1,34 @@
 # גישה ל-PDF Viewer — מדריך הגדרה
 
-האפליקציה (`/`) וההורדה של תוכנת ההתקנה ל-Windows (`/api/download`) פתוחות רק למשתמשים מאושרים. הכניסה היא עם **מפתח גישה (Passkey)** — Face ID, טביעת אצבע או Windows Hello — בלי סיסמאות.
+האפליקציה (`/`) וההורדה של תוכנת ההתקנה ל-Windows (`/api/download`) פתוחות רק למשתמשים מאושרים. הכניסה היא בלי סיסמאות: עם **מפתח גישה (Passkey)** — Face ID, טביעת אצבע או Windows Hello — או, במחשבים בלי חיישן כזה, עם **קוד חד-פעמי במייל**.
 
 ## איך זה עובד
 
 1. **בקשת גישה** — בעמוד `/login` המשתמש ממלא שם ואימייל (`POST /api/auth/request`). נוצרת רשומה במצב `pending`.
 2. **אישור במייל** — אתם (`OWNER_EMAIL`) מקבלים מייל עם **אשר גישה** / **דחה**. כל כפתור פותח **דף אישור**, והפעולה מתבצעת רק אחרי לחיצה נוספת (סורקי קישורים במערכות דואר לא יאשרו בטעות).
 3. **קישור הרשמה חד-פעמי** — אחרי האישור המשתמש מקבל מייל „הגישה שלך ל-PDF Viewer אושרה” עם קישור `…/login?invite=…`. הקישור תקף `INVITE_HOURS` שעות (ברירת מחדל 72) ואפשר להשתמש בו פעם אחת בלבד.
-4. **רישום מפתח גישה** — בקישור המכשיר מבקש Face ID / טביעת אצבע / Windows Hello ונוצר מפתח גישה שנשמר במכשיר (או בטלפון, דרך סריקת QR). עם סיום הרישום אתם מקבלים מייל „<שם> נרשם/ה בהצלחה” עם כפתור **בטל גישה** — שמרו אותו.
-5. **כניסות הבאות** — רק עם מפתח הגישה. ההתחברות נשמרת בעוגייה מאובטחת למשך `SESSION_DAYS` ימים (ברירת מחדל 30).
+4. **השלמת ההרשמה** — בקישור בוחרים אחת משתי דרכים:
+   - **מפתח גישה** — המכשיר מבקש Face ID / טביעת אצבע / Windows Hello ונוצר מפתח גישה שנשמר במכשיר (או בטלפון, דרך סריקת QR).
+   - **המשך עם קוד במייל** — בלי מפתח גישה (`POST /api/auth/register/email`). הקישור עצמו נשלח לכתובת המייל, ולכן הוא מוכיח שהכתובת שייכת למשתמש.
+
+   עם סיום ההרשמה אתם מקבלים מייל „<שם> נרשם/ה בהצלחה” (מצוין אם נרשם/ה עם קוד במייל) עם כפתור **בטל גישה** — שמרו אותו.
+5. **כניסות הבאות** — עם מפתח הגישה, או עם קוד במייל (למטה). ההתחברות נשמרת בעוגייה מאובטחת למשך `SESSION_DAYS` ימים (ברירת מחדל 30). משתמש שנכנס עם קוד יכול להוסיף מפתח גישה למכשיר בכל שלב (`/api/auth/passkey/add/*`).
+
+## כניסה עם קוד במייל
+
+לרוב המחשבים אין חיישן טביעת אצבע / מצלמת זיהוי פנים, ולכן אפשר להיכנס גם בלי מפתח גישה:
+
+1. בעמוד `/login` מזינים את כתובת המייל ← **שלח לי קוד** (`POST /api/auth/email/start`).
+2. מגיע מייל „קוד הכניסה שלך ל-PDF Viewer: 123456” — קוד בן 6 ספרות, תקף **10 דקות**, לשימוש חד-פעמי. בקשת קוד חדש מבטלת את הקודם.
+3. מזינים את הקוד (`POST /api/auth/email/verify`) ← נכנסים לאפליקציה.
+
+הגבלות ואבטחה:
+- קוד נשלח רק למשתמש במצב `active` (כלומר שהשלים הרשמה). כתובת לא רשומה / שעדיין לא אושרה ← הודעה „כתובת המייל לא רשומה או שעדיין לא אושרה. בקש/י גישה.” (ולא נשלח מייל).
+- עד **5 קודים לשעה** לכל כתובת, ולפחות **30 שניות** בין שליחות (נשמר ב-Redis, כך שזה תקף בין כל מופעי השרת). בנוסף הגבלה לפי כתובת IP.
+- עד **5 ניסיונות** לכל קוד; אחרי החמישי הקוד נמחק וצריך לבקש חדש.
+- הקוד עצמו לא נשמר — רק HMAC-SHA256 שלו (עם `SIGNING_SECRET`), וההשוואה נעשית בזמן קבוע.
+- ביטול גישה חוסם מיד גם כניסה בקוד (הסטטוס כבר אינו `active`).
+- האבטחה של כניסה בקוד שקולה לאבטחת תיבת המייל של המשתמש. מפתח גישה חזק יותר — מומלץ להוסיף אותו במכשירים שתומכים בכך.
 
 המידע נשמר ב-**Upstash Redis** (משתמשים, מפתחות ציבוריים של ה-Passkeys, הזמנות חד-פעמיות). אין סיסמאות ואין מידע ביומטרי בשרת — טביעת האצבע / הפנים לא יוצאות מהמכשיר.
 
@@ -108,15 +128,15 @@ Vercel ← הפרויקט ← **Settings** ← **Environment Variables** (סבי
 
 1. פתחו `/login` ← **משתמש חדש? בקש גישה** ← שם + האימייל שלכם.
 2. במייל „בקשת גישה ל-PDF Viewer” לחצו **אשר גישה** ← **אשר ושלח קישור הרשמה**.
-3. במייל „הגישה שלך ל-PDF Viewer אושרה” לחצו **הרשמה ל-PDF Viewer** ← אשרו עם Face ID / טביעת אצבע / Windows Hello.
-4. תועברו לאפליקציה. מעכשיו — **כניסה עם Face ID / טביעת אצבע** בעמוד `/login`.
+3. במייל „הגישה שלך ל-PDF Viewer אושרה” לחצו **הרשמה ל-PDF Viewer** ← אשרו עם Face ID / טביעת אצבע / Windows Hello, או בחרו **המשך עם קוד במייל**.
+4. תועברו לאפליקציה. מעכשיו — **כניסה עם Face ID / טביעת אצבע**, או **כניסה עם קוד במייל**, בעמוד `/login`.
 
-מכשיר נוסף: מפתחות גישה של Apple (iCloud Keychain) ו-Google (Password Manager) מסתנכרנים אוטומטית בין המכשירים שלכם. במחשב בלי המפתח (למשל Windows) בוחרים בחלון הדפדפן „טלפון או טאבלט” וסורקים QR עם הטלפון הרשום. אם צריך לרשום מפתח חדש לגמרי — בטלו את הגישה (למטה) ובקשו גישה מחדש.
+מכשיר נוסף: מפתחות גישה של Apple (iCloud Keychain) ו-Google (Password Manager) מסתנכרנים אוטומטית בין המכשירים שלכם. במחשב בלי המפתח (למשל Windows) בוחרים בחלון הדפדפן „טלפון או טאבלט” וסורקים QR עם הטלפון הרשום. אפשר גם להיכנס במכשיר החדש עם קוד במייל ולהוסיף בו מפתח גישה נוסף.
 
 ## ביטול גישה
 
 - במייל „<שם> נרשם/ה בהצלחה” לחצו **בטל גישה** ← **בטל גישה** בדף האישור (הקישור תקף שנה).
-- התוצאה מיידית: הסטטוס הופך ל-`revoked`, כל מפתחות הגישה של המשתמש נמחקים, וכל ההתחברויות הפעילות שלו נחסמות (גם בדפדפן שכבר פתוח — בכל טעינת דף ובכל בקשה ל-`/api/auth/me` / `/api/download`).
+- התוצאה מיידית: הסטטוס הופך ל-`revoked`, כל מפתחות הגישה של המשתמש נמחקים, כניסה בקוד במייל נחסמת, וכל ההתחברויות הפעילות שלו נחסמות (גם בדפדפן שכבר פתוח — בכל טעינת דף ובכל בקשה ל-`/api/auth/me` / `/api/download`).
 - אם המשתמש יבקש גישה שוב — תקבלו מייל אישור חדש כרגיל.
 - חירום (ביטול לכולם): החליפו את `SIGNING_SECRET` ← Redeploy. כולם מנותקים וכל הקישורים שנשלחו מתבטלים.
 - ניהול ידני: ב-Upstash Console ← Data Browser אפשר לראות/לערוך את המפתחות `user:<email>` (שדה `status`).
@@ -128,15 +148,19 @@ Vercel ← הפרויקט ← **Settings** ← **Environment Variables** (סבי
   - `GET|POST /api/approve?t=`, `/api/deny?t=`, `/api/revoke?t=` — דפי HTML לבעלים (GET = דף אישור, POST = ביצוע).
   - `POST /api/auth/register/options` `{ invite }` → `{ ok, options, user: { name, email } }`.
   - `POST /api/auth/register/verify` `{ invite, response }` → `{ ok, user }` + עוגיית התחברות.
+  - `POST /api/auth/register/email` `{ invite }` → `{ ok, user }` + עוגיית התחברות — הרשמה בלי מפתח גישה (אותה בדיקת הזמנה כמו ב-`register/options`; ההזמנה נצרכת).
+  - `POST /api/auth/email/start` `{ email }` → `{ ok, sent: true }`. שגיאות: `not_registered` 404, `too_soon` 429 (עם `retryAfter` בשניות), `rate_limited` 429 (עם `retryAfter`), `bad_request` 400, `mail_failed` 502.
+  - `POST /api/auth/email/verify` `{ email, code }` → `{ ok, user }` + עוגיית התחברות. שגיאות: `code_invalid` 400 (עם `attemptsLeft`), `code_expired` 410 (פג תוקף / לא נשלח / כבר נוצל), `too_many_attempts` 429, `not_active` 403.
+  - `POST /api/auth/passkey/add/options` `{}` → `{ ok, options, user }`; `POST /api/auth/passkey/add/verify` `{ response }` → `{ ok, user, hasPasskey: true }` — הוספת מפתח גישה למשתמש מחובר (401 `unauthenticated` בלי התחברות).
   - `POST /api/auth/login/options` `{}` → `{ ok, options }` + עוגייה `pv_chal` (5 דקות).
   - `POST /api/auth/login/verify` `{ response }` → `{ ok, user }` + עוגיית התחברות.
-  - `GET /api/auth/me` → `{ ok, user }` או 401 `unauthenticated`. `POST /api/auth/logout` → `{ ok }`.
+  - `GET /api/auth/me` → `{ ok, user, hasPasskey }` או 401 `unauthenticated`. `POST /api/auth/logout` → `{ ok }`.
   - `GET /api/download` — דורש התחברות; אחרת 302 ל-`/login?next=%2Fapi%2Fdownload`. קישורי ההורדה הישנים מהמייל (`?t=`) **אינם נתמכים עוד** ומפנים גם הם ל-`/login`.
   - `GET /api/health` — אבחון (למעלה).
-- **קודי שגיאה בהרשמה/כניסה**: `invite_invalid` / `invite_expired` / `invite_used` (410), `not_approved` (403), `challenge_expired` (400 — קראו שוב ל-options ונסו שוב), `verification_failed` (400), `credential_exists` (409), `unknown_credential` (401), `not_active` (403), `rate_limited` (429), `store_failed` (502).
+- **קודי שגיאה בהרשמה/כניסה**: `invite_invalid` / `invite_expired` / `invite_used` (410), `not_approved` (403), `challenge_expired` (400 — קראו שוב ל-options ונסו שוב), `verification_failed` (400), `credential_exists` (409), `unknown_credential` (401), `not_active` (403), `rate_limited` (429), `store_failed` (502); כניסה בקוד: `not_registered` (404), `too_soon` (429), `code_invalid` (400), `code_expired` (410), `too_many_attempts` (429), `mail_failed` (502).
 - **עוגיית התחברות** `pv_session`: חתומה ב-HMAC-SHA256 עם `SIGNING_SECRET`, `HttpOnly; Secure; SameSite=Lax; Path=/`. תקפה רק כל עוד המשתמש במצב `active` ובאותו "דור" התחברות (ביטול מקדם את הדור).
 - **WebAuthn** (`@simplewebauthn/server` v14): `residentKey: required`, `userVerification: required`, attestation `none`, ללא חיוב `authenticatorAttachment` (רמזים: `client-device`, `hybrid` — כך שטלפון דרך QR אפשרי). כניסה עם discoverable credentials (`allowCredentials` ריק), בדיקת מונה החתימות ועדכונו.
-- **Middleware** (`middleware.ts` בשורש, Vercel Routing Middleware; הלוגיקה ב-`api/_lib/gate.ts`): מגן על `/`, `/index.html` ונתיבי SPA בלי סיומת. בלי התחברות תקפה (חתימה + סטטוס ב-Redis) ← 302 ל-`/login?next=<נתיב>`. לא נוגע ב-`/login`, `/download`, `/api/*`, `/assets/*`, `/icons/*`, `/tools/*`, `/manifest.webmanifest`, `/sw.js`. בקשות שאינן ניווט (למשל ה-Service Worker ששומר את `index.html` במטמון) עוברות — קוד האפליקציה אינו סודי; ההגנה האמיתית היא על ה-API וההורדה. כשל ב-Redis ← הפניה ל-`/login` (fail closed).
+- **Middleware** (`middleware.ts` בשורש, Vercel Routing Middleware; הלוגיקה ב-`api/_lib/gate.ts`): מגן על `/`, `/index.html`, דף הפתיחה `/welcome` / `/welcome.html` ונתיבי SPA בלי סיומת. בלי התחברות תקפה (חתימה + סטטוס ב-Redis) ← 302 ל-`/login?next=<נתיב>`. לא נוגע ב-`/login`, `/download`, `/api/*`, `/assets/*`, `/icons/*`, `/tools/*`, `/manifest.webmanifest`, `/sw.js`. בקשות שאינן ניווט (למשל ה-Service Worker ששומר את `index.html` במטמון) עוברות — קוד האפליקציה אינו סודי; ההגנה האמיתית היא על ה-API וההורדה. כשל ב-Redis ← הפניה ל-`/login` (fail closed).
 - **PWA offline**: ה-Service Worker עשוי להגיש `index.html` מהמטמון כשאין רשת — זה מקובל (אין גישה לשרת במצב כזה ממילא).
-- **Redis** (מפתחות): `user:{email}`, `cred:{credentialId}`, `usercreds:{email}` (Set), `invite:{jti}` (TTL = `INVITE_HOURS`), `challenge:{id}` (TTL 5 דקות).
-- קוד: `api/auth/*`, `api/{approve,deny,revoke,download,health}.ts`, `api/_lib/*`. בדיקות: `api/_tests/` (כולל מאמת WebAuthn תוכנתי שמייצר חתימות ES256 אמיתיות). הרצה: `npm run typecheck:api` ו-`npx vitest run`.
+- **Redis** (מפתחות): `user:{email}`, `cred:{credentialId}`, `usercreds:{email}` (Set), `invite:{jti}` (TTL = `INVITE_HOURS`), `challenge:{id}` (TTL 5 דקות), `otp:{email}` (`{ hash, exp, attempts }`, TTL 10 דקות), `otpatt:{email}` (מונה ניסיונות), `otpsend:{email}` (זמני שליחה, TTL שעה).
+- קוד: פונקציה אחת `api/router.ts` (מגבלת 12 פונקציות בתוכנית Hobby) שמפנה לנתיבים ב-`api/_routes/**` דרך המפה `ROUTES`; ספריות ב-`api/_lib/*`. בדיקות: `api/_tests/` (כולל מאמת WebAuthn תוכנתי שמייצר חתימות ES256 אמיתיות). הרצה: `npm run typecheck:api` ו-`npx vitest run`.

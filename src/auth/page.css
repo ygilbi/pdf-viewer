@@ -63,3 +63,6 @@ body:has(.download-page) { overflow: hidden; }
 /* The page may grow (form open), so the logo gets an explicit size instead of filling the stage. */
 .login-logo .logo-fit { width: min(86vw, 40vh * 1.05, 680px); width: min(86vw, 40dvh * 1.05, 680px); }
 .login-logo { container-type: normal; flex: none; }
+
+/* /welcome: smaller logo, the cards below it are the content. */
+.welcome-logo .logo-fit { width: min(56vw, 24vh * 1.05, 340px); width: min(56vw, 24dvh * 1.05, 340px); }

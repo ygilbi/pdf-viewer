@@ -35,8 +35,30 @@ export function fromApi(r: { code: string; error: string; status?: number }, kin
   const hints: Hint[] = [];
   if (CONFIG_CODES.has(r.code)) hints.push('health');
   if (kind === 'register' && isInviteError(r.code, r.status)) hints.push('request');
-  if (kind === 'login' && /credential|not_found|unknown|not_active|inactive|revoked|pending/i.test(r.code)) hints.push('request');
+  if (kind === 'login' && /credential|not_found|not_registered|unknown|not_active|inactive|revoked|pending/i.test(r.code)) hints.push('request');
   return { message: r.error, code: r.code, hints };
+}
+
+/** Seconds before "שלח שוב" re-enables after a code was mailed. */
+export const RESEND_SECONDS = 30;
+
+/** POST auth/email/verify failure → UI error; `resend` = the code is dead, offer a new one right away. */
+export function fromEmailVerify(r: { code: string; error: string; status?: number; attemptsLeft?: number }): UiError & { resend: boolean } {
+  if (r.code === 'code_invalid') {
+    const n = r.attemptsLeft;
+    if (n === 0) return { message: 'הקוד שגוי ונחסם. שלח/י קוד חדש.', code: r.code, resend: true };
+    const left = n === undefined ? '' : n === 1 ? ' נותר ניסיון אחד.' : ` נותרו ${n} ניסיונות.`;
+    return { message: `הקוד שגוי.${left}`, code: r.code, resend: false };
+  }
+  if (r.code === 'code_expired' || r.status === 410) return { message: 'תוקף הקוד פג. שלח/י קוד חדש.', code: r.code, resend: true };
+  if (r.code === 'too_many_attempts') return { message: 'יותר מדי ניסיונות שגויים. שלח/י קוד חדש.', code: r.code, resend: true };
+  return { ...fromApi(r, 'login'), resend: false };
+}
+
+/** "0:27" */
+export function formatCountdown(seconds: number): string {
+  const s = Math.max(0, Math.ceil(seconds));
+  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
 }
 
 /** Errors thrown by startAuthentication / startRegistration (WebAuthnError or DOMException). */

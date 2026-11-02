@@ -42,6 +42,8 @@ describe('shouldGate', () => {
     ['/', true],
     ['/index.html', true],
     ['/some/spa/route', true],
+    ['/welcome', true],
+    ['/welcome.html', true],
     ['/login', false],
     ['/login.html', false],
     ['/download', false],
@@ -125,6 +127,25 @@ describe('middleware.ts', () => {
   it('declares a matcher for the app HTML only', () => {
     expect(middlewareConfig.matcher).toContain('/');
     expect(middlewareConfig.matcher).toContain('/index.html');
+    expect(middlewareConfig.matcher).toContain('/welcome.html');
+  });
+
+  it('matcher covers /welcome and /welcome.html but not /login.html, /download.html or files', () => {
+    // Vercel matchers are path-to-regexp patterns; the catch-all here is a plain regex group.
+    const catchAll = new RegExp(`^${middlewareConfig.matcher[middlewareConfig.matcher.length - 1]}$`);
+    const matches = (p: string) => middlewareConfig.matcher.includes(p) || catchAll.test(p);
+    for (const p of ['/', '/index.html', '/welcome', '/welcome.html', '/some/route']) expect(matches(p), p).toBe(true);
+    for (const p of ['/login', '/login.html', '/download', '/download.html', '/api/auth/me', '/assets/a.js', '/sw.js']) expect(matches(p), p).toBe(false);
+  });
+
+  it('redirects /welcome and /welcome.html without a session', async () => {
+    setEnv();
+    const headers = { 'sec-fetch-mode': 'navigate', 'sec-fetch-dest': 'document' };
+    for (const p of ['/welcome', '/welcome.html']) {
+      const res = await middleware(new Request(`https://app.example.test${p}`, { headers }));
+      expect(res!.status).toBe(302);
+      expect(res!.headers.get('location')).toBe(`https://app.example.test/login?next=${encodeURIComponent(p)}`);
+    }
   });
 
   it('302s to /login without a session and continues with one', async () => {

@@ -9,7 +9,9 @@ import {
   parseState,
   recordFileLaunch,
   shouldAutoPrompt,
-  shouldAutoPromptDesktop,
+  desktopFirstRunAction,
+  makeDesktopRecord,
+  parseDesktopRecord,
   type PromptContext,
 } from './defaultApp';
 
@@ -106,21 +108,35 @@ describe('parseState', () => {
   });
 });
 
-describe('shouldAutoPromptDesktop', () => {
-  const now = 1_000_000;
-  it('asks while the registry says another app (or nothing) is the default', () => {
-    expect(shouldAutoPromptDesktop({ isDefault: false, state: INITIAL_STATE, now })).toBe(true);
-    expect(shouldAutoPromptDesktop({ isDefault: null, state: INITIAL_STATE, now })).toBe(true);
-    expect(shouldAutoPromptDesktop({ isDefault: false, state: { ...INITIAL_STATE, status: 'done' }, now })).toBe(true);
-    expect(shouldAutoPromptDesktop({ isDefault: false, state: { ...INITIAL_STATE, status: 'likely-default' }, now })).toBe(true);
+describe('desktop: ask once', () => {
+  const now = Date.UTC(2026, 10, 2, 12, 0, 0);
+  it('asks on the first launch while another app (or nothing) is the default', () => {
+    expect(desktopFirstRunAction({ stored: null, isDefault: false })).toBe('ask');
+    expect(desktopFirstRunAction({ stored: null, isDefault: null })).toBe('ask');
   });
-  it('never asks when already default or the user opted out', () => {
-    expect(shouldAutoPromptDesktop({ isDefault: true, state: INITIAL_STATE, now })).toBe(false);
-    expect(shouldAutoPromptDesktop({ isDefault: false, state: { ...INITIAL_STATE, status: 'never' }, now })).toBe(false);
+  it('does not ask when already the default, but settles the question', () => {
+    expect(desktopFirstRunAction({ stored: null, isDefault: true })).toBe('mark-already-default');
   });
-  it('respects "remind me later"', () => {
-    const later = applyChoice(INITIAL_STATE, 'later', now);
-    expect(shouldAutoPromptDesktop({ isDefault: false, state: later, now: now + 1 })).toBe(false);
-    expect(shouldAutoPromptDesktop({ isDefault: false, state: later, now: now + REMIND_LATER_MS })).toBe(true);
+  it('never asks again once answered, whatever the registry says', () => {
+    for (const answer of ['yes', 'no', 'already-default'] as const) {
+      const stored = JSON.parse(JSON.stringify(makeDesktopRecord(answer, now))) as unknown; // round-trip like prefs.json
+      expect(desktopFirstRunAction({ stored, isDefault: false })).toBe('skip');
+      expect(desktopFirstRunAction({ stored, isDefault: null })).toBe('skip');
+      expect(desktopFirstRunAction({ stored, isDefault: true })).toBe('skip');
+    }
+  });
+  it('does not ask when the answer cannot be stored / read (would re-ask every launch)', () => {
+    expect(desktopFirstRunAction({ stored: undefined, isDefault: false })).toBe('skip');
+  });
+  it('ignores junk in prefs.json', () => {
+    expect(desktopFirstRunAction({ stored: { answered: 'yes' }, isDefault: false })).toBe('ask');
+    expect(desktopFirstRunAction({ stored: 42, isDefault: false })).toBe('ask');
+    expect(desktopFirstRunAction({ stored: [], isDefault: false })).toBe('ask');
+  });
+  it('makes / parses the stored record', () => {
+    expect(makeDesktopRecord('no', now)).toEqual({ answered: true, answer: 'no', at: '2026-11-02T12:00:00.000Z' });
+    expect(parseDesktopRecord({ answered: true, answer: 'weird' })).toEqual({ answered: true, answer: 'no', at: '' });
+    expect(parseDesktopRecord(null)).toBeNull();
+    expect(parseDesktopRecord({ answer: 'yes' })).toBeNull();
   });
 });

@@ -17,6 +17,12 @@ describe('api router', () => {
     expect(Object.keys(ROUTES).sort()).toEqual(files);
   });
 
+  it('registers the email-code and add-passkey routes', () => {
+    for (const r of ['auth/email/start', 'auth/email/verify', 'auth/register/email', 'auth/passkey/add/options', 'auth/passkey/add/verify']) {
+      expect(ROUTES[r]?.POST, r).toBeTypeOf('function');
+    }
+  });
+
   it('keeps the deployment under the Hobby 12-function limit', () => {
     const fns = readdirSync(join(__dirname, '..')).filter((n) => n.endsWith('.ts') && !n.startsWith('_'));
     expect(fns).toEqual(['router.ts']);

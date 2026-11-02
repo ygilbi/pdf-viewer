@@ -6,9 +6,15 @@ import { SESSION_COOKIE, readCookie, sessionUserValid, verifySession, type Sessi
 const PUBLIC_EXACT = new Set(['/login', '/login.html', '/download', '/download.html', '/manifest.webmanifest', '/sw.js']);
 const PUBLIC_PREFIXES = ['/api/', '/assets/', '/icons/', '/tools/', '/login/', '/download/'];
 
-/** True when the path is app HTML that requires a session: "/", "/index.html" and extension-less SPA paths. */
+/** Gated HTML files (paths with a dot are otherwise treated as public static files). */
+const GATED_EXACT = new Set(['/', '/index.html', '/welcome', '/welcome.html']);
+
+/**
+ * True when the path is app HTML that requires a session: "/", "/index.html", the post-login welcome page
+ * ("/welcome", "/welcome.html") and extension-less SPA paths.
+ */
 export function shouldGate(pathname: string): boolean {
-  if (pathname === '/' || pathname === '/index.html') return true;
+  if (GATED_EXACT.has(pathname)) return true;
   if (PUBLIC_EXACT.has(pathname)) return false;
   if (PUBLIC_PREFIXES.some((p) => pathname.startsWith(p))) return false;
   const last = pathname.slice(pathname.lastIndexOf('/') + 1);

@@ -7,7 +7,7 @@
  *
  * Strategy:
  *  - navigation: network-first, fallback to cached index.html (offline / flaky network)
- *  - /download(.html), /login(.html) and api/*: never intercepted (always straight to
+ *  - /download(.html), /login(.html), /welcome(.html) and api/*: never intercepted (always straight to
  *    the network; these pages must not be replaced by the cached app shell, and auth /
  *    download redirects must come from the server)
  *  - assets/*  : cache-first (hashed => immutable); misses (lazy CMaps/fonts) cached on demand
@@ -28,7 +28,7 @@ const PRECACHE_URLS = new Set(PRECACHE_FILES.map(abs));
 const ASSET_URLS = new Set(ALL_ASSETS.map(abs));
 const ASSETS_PREFIX = abs('assets/');
 const API_PREFIX = abs('api/');
-const BYPASS_URLS = new Set(['download', 'download/', 'download.html', 'login', 'login/', 'login.html'].map(abs));
+const BYPASS_URLS = new Set(['download', 'download/', 'download.html', 'login', 'login/', 'login.html', 'welcome', 'welcome/', 'welcome.html'].map(abs));
 
 self.addEventListener('install', (event) => {
   event.waitUntil((async () => {

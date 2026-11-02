@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="he" dir="rtl">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <title>ברוך הבא — PDF Viewer</title>
+    <meta name="description" content="PDF Viewer — כניסה לאפליקציה, התקנה כאפליקציה והורדה ל-Windows" />
+    <meta name="application-name" content="PDF Viewer" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-title" content="PDF Viewer" />
+    <link rel="manifest" href="%BASE_URL%manifest.webmanifest" />
+    <meta name="theme-color" content="#0f172a" />
+    <meta name="robots" content="noindex" />
+    <link rel="icon" href="%BASE_URL%icons/favicon.ico" sizes="16x16 32x32 48x48" />
+    <link rel="icon" type="image/png" sizes="32x32" href="%BASE_URL%icons/favicon-32.png" />
+    <link rel="apple-touch-icon" href="%BASE_URL%icons/apple-touch-icon.png" />
+    <!-- captures beforeinstallprompt before React mounts + registers the service worker (installability) -->
+    <script type="module" src="/src/pwa/register.ts"></script>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Raleway:wght@400&display=swap&text=PROFESSIONALDOCUMENTSLUI%20" />
+  </head>
+  <body class="bg-slate-900 text-slate-100">
+    <div id="root"></div>
+    <script type="module" src="/src/welcome/main.tsx"></script>
+  </body>
+</html>

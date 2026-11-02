@@ -56,4 +56,8 @@ contextBridge.exposeInMainWorld('pdfDesktop', {
   openDefaultAppsSettings: () => ipcRenderer.invoke('pdf:open-default-apps'),
   /** true / false from the user's .pdf UserChoice, null when unknown. */
   isDefaultPdfApp: () => ipcRenderer.invoke('pdf:is-default'),
+  /** Persistent preference from userData/prefs.json (allow-listed keys only); null when unset. */
+  getPref: (key) => ipcRenderer.invoke('pdf:get-pref', String(key)),
+  /** Stores a JSON-serialisable preference in userData/prefs.json. */
+  setPref: (key, value) => ipcRenderer.invoke('pdf:set-pref', String(key), value),
 });

@@ -110,7 +110,7 @@ describe('passkey registration', () => {
 
     const meRes = await me(get('/api/auth/me', jar));
     expect(meRes.status).toBe(200);
-    expect(await json(meRes)).toEqual({ ok: true, user: { name: 'דנה כהן', email: EMAIL } });
+    expect(await json(meRes)).toEqual({ ok: true, user: { name: 'דנה כהן', email: EMAIL }, hasPasskey: true });
 
     const notice = mailer.sent.find((m) => m.to === 'owner@example.test')!;
     expect(notice.subject).toContain('נרשם/ה בהצלחה');

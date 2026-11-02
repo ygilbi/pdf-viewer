@@ -15,6 +15,11 @@ const CONTROL_RE = /[\u0000-\u001f\u007f]/;
 // eslint-disable-next-line no-control-regex
 const CONTROL_EXCEPT_NEWLINE_RE = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/;
 
+/** Syntactically plausible email address (same rule as the request form). */
+export function isValidEmail(v: unknown): v is string {
+  return typeof v === 'string' && v.trim().length > 0 && v.trim().length <= 200 && !CONTROL_RE.test(v.trim()) && EMAIL_RE.test(v.trim());
+}
+
 const asString = (v: unknown): string => (typeof v === 'string' ? v.trim() : '');
 
 export function validateAccessRequest(

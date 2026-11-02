@@ -1,17 +1,19 @@
 /**
- * /login — passkey (Face ID / fingerprint / Windows Hello) sign-in.
+ * /login — sign-in with a one-time e-mail code or a passkey (fingerprint / Face ID / Windows Hello).
  *
- *  - default:          "sign in" → login/options → startAuthentication → login/verify → `next`
+ *  - default:          two equal options. Primary = passkey on devices with a built-in authenticator,
+ *                      e-mail code everywhere else (most PCs).
+ *                      e-mail: auth/email/start → 6-digit code → auth/email/verify → `next`
+ *                      passkey: login/options → startAuthentication → login/verify → `next`
  *  - "new user?":      tiny access-request form (name, email, honeypot) → auth/request
- *  - `?invite=<token>`: registration → register/options → startRegistration → register/verify
+ *  - `?invite=<token>`: registration → passkey (register/options+verify) or "continue with e-mail code"
+ *                      (register/email) → /welcome
  *
  * WebAuthn needs a user gesture on Safari, so the options are fetched ahead of the click
  * whenever possible (and refreshed when stale).
  */
 import { useCallback, useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react';
 import {
-  browserSupportsWebAuthn,
-  platformAuthenticatorIsAvailable,
   startAuthentication,
   startRegistration,
   type PublicKeyCredentialCreationOptionsJSON,
@@ -19,18 +21,24 @@ import {
 } from '@simplewebauthn/browser';
 import {
   HEALTH_URL,
+  WELCOME_PATH,
+  emailStart,
+  emailVerify,
   getMe,
   loginOptions,
   loginVerify,
+  registerEmail,
   registerOptions,
   registerVerify,
   requestAccess,
   safeNext,
   type AuthUser,
 } from '../auth/api';
-import { EMAIL_MAX, NAME_MAX, validateRequest, type FieldErrors } from '../auth/validate';
+import { CODE_LENGTH, EMAIL_MAX, NAME_MAX, isValidEmail, normalizeCode, normalizeEmail, validateRequest, type FieldErrors } from '../auth/validate';
+import { loadLastEmail, saveLastEmail } from '../auth/lastEmail';
 import { WordmarkLogo } from '../auth/Logo';
-import { fromApi, fromWebAuthn, type UiError } from './messages';
+import { AuthButton, Field, FingerprintIcon, MailIcon, Note, Spinner, inputCls, usePasskeySupport } from '../auth/ui';
+import { RESEND_SECONDS, formatCountdown, fromApi, fromEmailVerify, fromWebAuthn, type UiError } from './messages';
 
 const BASE = import.meta.env.BASE_URL;
 /** Server challenges live ~5 min; refetch well before that. */
@@ -40,22 +48,22 @@ const params = new URLSearchParams(location.search);
 const INVITE = params.get('invite')?.trim() || null;
 const NEXT = safeNext(params.get('next'), BASE);
 
+const PASSKEY_LABEL = 'כניסה עם טביעת אצבע / זיהוי פנים / Windows Hello';
+
 function go(path: string) {
   location.replace(path);
 }
 
-export default function LoginPage() {
-  const supported = useState(() => browserSupportsWebAuthn())[0];
-  const [platform, setPlatform] = useState<boolean | null>(null);
-  useEffect(() => {
-    if (!supported) return;
-    platformAuthenticatorIsAvailable()
-      .then(setPlatform)
-      .catch(() => setPlatform(false));
-  }, [supported]);
+interface PanelProps {
+  supported: boolean;
+  platform: boolean | null;
+  setError(e: UiError | null): void;
+  setDone(s: string | null): void;
+}
 
+export default function LoginPage() {
+  const { supported, platform } = usePasskeySupport();
   const [error, setError] = useState<UiError | null>(null);
-  const [busy, setBusy] = useState(false);
   const [done, setDone] = useState<string | null>(null);
   const [showRequest, setShowRequest] = useState(false);
 
@@ -71,29 +79,10 @@ export default function LoginPage() {
       </div>
 
       <section className="flex w-full max-w-sm flex-col items-stretch gap-3 pt-5" aria-live="polite">
-        {!supported && (
-          <Note tone="warn" testId="unsupported">
-            הדפדפן הזה אינו תומך בכניסה עם Face ID / טביעת אצבע (מפתחות גישה). פתח/י את הדף ב-Safari, Chrome או Edge מעודכנים — או
-            בטלפון.
-          </Note>
-        )}
-
         {INVITE ? (
-          <RegisterPanel
-            supported={supported}
-            busy={busy}
-            setBusy={setBusy}
-            setError={setError}
-            setDone={setDone}
-          />
+          <RegisterPanel supported={supported} platform={platform} setError={setError} setDone={setDone} />
         ) : (
-          <LoginPanel supported={supported} busy={busy} setBusy={setBusy} setError={setError} setDone={setDone} />
-        )}
-
-        {supported && platform === false && !done && (
-          <Note testId="no-platform">
-            לא זוהה במכשיר הזה Face ID / טביעת אצבע. אפשר להיכנס עם הטלפון: בחלון שייפתח בחר/י "טלפון או טאבלט" וסרוק/י את קוד ה-QR.
-          </Note>
+          <LoginPanel supported={supported} platform={platform} setError={setError} setDone={setDone} />
         )}
 
         {done && (
@@ -118,16 +107,11 @@ export default function LoginPage() {
 
 // ---------------------------------------------------------------- login
 
-function LoginPanel(props: {
-  supported: boolean;
-  busy: boolean;
-  setBusy(b: boolean): void;
-  setError(e: UiError | null): void;
-  setDone(s: string | null): void;
-}) {
-  const { supported, busy, setBusy, setError, setDone } = props;
+function LoginPanel({ supported, platform, setError, setDone }: PanelProps) {
   const pre = useRef<{ options: PublicKeyCredentialRequestOptionsJSON; at: number } | null>(null);
   const [signedIn, setSignedIn] = useState<AuthUser | null>(null);
+  const [mode, setMode] = useState<'choose' | 'email'>('choose');
+  const [busy, setBusy] = useState(false);
 
   const prefetch = useCallback(async () => {
     const r = await loginOptions();
@@ -136,8 +120,7 @@ function LoginPanel(props: {
   }, []);
 
   useEffect(() => {
-    if (!supported) return;
-    void prefetch();
+    if (supported) void prefetch();
     // Already signed in (e.g. opened /login directly)? Offer to continue — no automatic redirect (no loops).
     void getMe().then((me) => {
       if (me.state === 'signed-in') setSignedIn(me.user);
@@ -170,46 +153,337 @@ function LoginPanel(props: {
         void prefetch();
         return;
       }
-      setDone(v.user?.name ? `שלום ${v.user.name} — נכנסת בהצלחה. מעביר…` : 'נכנסת בהצלחה. מעביר…');
-      go(NEXT);
+      welcomeBack(v.user);
     } finally {
       setBusy(false);
     }
   };
 
+  const welcomeBack = (user: AuthUser | undefined) => {
+    setDone(user?.name ? `שלום ${user.name} — נכנסת בהצלחה. מעביר…` : 'נכנסת בהצלחה. מעביר…');
+    go(NEXT);
+  };
+
+  const continueLink = signedIn && (
+    <a
+      href={NEXT}
+      data-testid="continue"
+      className="rounded-lg border border-slate-700 px-4 py-2 text-center text-sm text-slate-300 hover:bg-slate-800"
+    >
+      מחובר/ת כ-<span dir="auto">{signedIn.name || signedIn.email}</span> — המשך
+    </a>
+  );
+
+  if (mode === 'email')
+    return (
+      <>
+        {continueLink}
+        <EmailCodeFlow
+          setError={setError}
+          onBack={() => {
+            setError(null);
+            setMode('choose');
+          }}
+          onSuccess={welcomeBack}
+        />
+      </>
+    );
+
+  // Most PCs have no fingerprint reader / camera: e-mail code first unless a built-in authenticator exists.
+  const passkeyFirst = supported && platform === true;
+  const emailBtn = (
+    <AuthButton
+      key="email"
+      testId="login-email"
+      variant={passkeyFirst ? 'secondary' : 'primary'}
+      icon={<MailIcon />}
+      disabled={busy}
+      onClick={() => {
+        setError(null);
+        setMode('email');
+      }}
+    >
+      כניסה עם קוד למייל
+    </AuthButton>
+  );
+  const passkeyBtn = supported && (
+    <AuthButton key="passkey" testId="login" variant={passkeyFirst ? 'primary' : 'secondary'} icon={<FingerprintIcon />} busy={busy} onClick={signIn}>
+      {PASSKEY_LABEL}
+    </AuthButton>
+  );
+
   return (
     <>
-      {signedIn && (
-        <a
-          href={NEXT}
-          data-testid="continue"
-          className="rounded-lg border border-slate-700 px-4 py-2 text-center text-sm text-slate-300 hover:bg-slate-800"
-        >
-          מחובר/ת כ-<span dir="auto">{signedIn.name || signedIn.email}</span> — המשך
-        </a>
+      {continueLink}
+      <div className="flex flex-col gap-3" data-testid="login-options" data-primary={passkeyFirst ? 'passkey' : 'email'}>
+        {passkeyFirst ? [passkeyBtn, emailBtn] : [emailBtn, passkeyBtn]}
+      </div>
+      {!supported && (
+        <p className="text-center text-xs leading-relaxed text-slate-400" data-testid="unsupported">
+          הדפדפן הזה אינו תומך בכניסה עם טביעת אצבע / זיהוי פנים — היכנס/י עם קוד למייל.
+        </p>
       )}
-      {supported && (
-        <PrimaryButton onClick={signIn} busy={busy} testId="login">
-          כניסה עם Face ID / טביעת אצבע
-        </PrimaryButton>
+      {supported && platform === false && (
+        <p className="text-center text-xs leading-relaxed text-slate-400" data-testid="no-platform">
+          אין במחשב טביעת אצבע / Windows Hello? היכנס/י עם קוד למייל — או עם הטלפון הרשום: בחלון הכניסה בחר/י "טלפון או טאבלט" וסרוק/י את קוד ה-QR.
+        </p>
       )}
     </>
   );
 }
 
+// ---------------------------------------------------------------- e-mail code
+
+function EmailCodeFlow({ setError, onBack, onSuccess }: { setError(e: UiError | null): void; onBack(): void; onSuccess(user: AuthUser | undefined): void }) {
+  const [step, setStep] = useState<'email' | 'code'>('email');
+  const [email, setEmail] = useState(loadLastEmail);
+  const [emailError, setEmailError] = useState<string | undefined>();
+  const [code, setCode] = useState('');
+  const [sending, setSending] = useState(false);
+  const [verifying, setVerifying] = useState(false);
+  /** The current code can no longer work (expired / burned): only "send again" helps. */
+  const [dead, setDead] = useState(false);
+  const [notice, setNotice] = useState<string | null>(null);
+  const [cooldownUntil, setCooldownUntil] = useState(0);
+  const [now, setNow] = useState(() => Date.now());
+  const emailRef = useRef<HTMLInputElement>(null);
+  const codeRef = useRef<HTMLInputElement>(null);
+  const submitted = useRef<string | null>(null);
+
+  const remaining = Math.max(0, Math.ceil((cooldownUntil - now) / 1000));
+  useEffect(() => {
+    if (cooldownUntil <= Date.now()) return;
+    const t = window.setInterval(() => {
+      const n = Date.now();
+      setNow(n);
+      if (n >= cooldownUntil) window.clearInterval(t);
+    }, 250);
+    return () => window.clearInterval(t);
+  }, [cooldownUntil]);
+
+  useEffect(() => {
+    if (step === 'email') emailRef.current?.focus();
+    else codeRef.current?.focus();
+  }, [step]);
+
+  const startCooldown = (seconds: number) => {
+    const n = Date.now();
+    setNow(n);
+    setCooldownUntil(n + seconds * 1000);
+  };
+
+  const send = async (resend: boolean) => {
+    const addr = normalizeEmail(email);
+    if (!addr) return setEmailError('נא למלא כתובת אימייל');
+    if (!isValidEmail(addr)) return setEmailError('כתובת האימייל אינה תקינה');
+    setEmailError(undefined);
+    setError(null);
+    setNotice(null);
+    setSending(true);
+    try {
+      const r = await emailStart(addr);
+      if (r.ok) {
+        saveLastEmail(addr);
+        setEmail(addr);
+        setCode('');
+        submitted.current = null;
+        setDead(false);
+        setStep('code');
+        startCooldown(RESEND_SECONDS);
+        setNotice(resend ? 'נשלח קוד חדש. הקוד הקודם אינו תקף עוד.' : null);
+        codeRef.current?.focus();
+        return;
+      }
+      if (r.code === 'too_soon') {
+        // A code was mailed moments ago — it is still valid; wait before asking for another.
+        saveLastEmail(addr);
+        setStep('code');
+        startCooldown(r.retryAfter ?? RESEND_SECONDS);
+        setNotice(resend ? r.error : 'כבר שלחנו קוד לכתובת הזו לפני רגע — בדוק/י את תיבת הדואר.');
+        return;
+      }
+      if (r.retryAfter) startCooldown(r.retryAfter);
+      setError(fromApi(r, 'login'));
+    } finally {
+      setSending(false);
+    }
+  };
+
+  const verify = async (value: string) => {
+    if (value.length !== CODE_LENGTH || submitted.current === value || verifying) return;
+    submitted.current = value;
+    setError(null);
+    setNotice(null);
+    setVerifying(true);
+    try {
+      const r = await emailVerify(normalizeEmail(email), value);
+      if (r.ok) {
+        saveLastEmail(normalizeEmail(email));
+        onSuccess(r.user);
+        return;
+      }
+      const e = fromEmailVerify(r);
+      setError(e);
+      setCode('');
+      submitted.current = null;
+      if (e.resend) {
+        setDead(true);
+        setCooldownUntil(0);
+      }
+    } finally {
+      setVerifying(false);
+      window.setTimeout(() => codeRef.current?.focus(), 0);
+    }
+  };
+
+  const onCode = (raw: string) => {
+    const v = normalizeCode(raw);
+    setCode(v);
+    if (v.length === CODE_LENGTH) void verify(v);
+  };
+
+  if (step === 'email')
+    return (
+      <form
+        noValidate
+        className="flex flex-col gap-3"
+        data-testid="email-form"
+        onSubmit={(e: FormEvent) => {
+          e.preventDefault();
+          void send(false);
+        }}
+      >
+        <Field label="כתובת האימייל שלך" error={emailError}>
+          <input
+            ref={emailRef}
+            name="email"
+            type="email"
+            dir="ltr"
+            inputMode="email"
+            autoComplete="email"
+            maxLength={EMAIL_MAX}
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            data-testid="email-input"
+            className={inputCls(!!emailError) + ' py-3 text-left'}
+          />
+        </Field>
+        <AuthButton type="submit" testId="send-code" busy={sending} icon={<MailIcon />}>
+          שלח קוד
+        </AuthButton>
+        <LinkButton onClick={onBack} testId="back">
+          חזרה לאפשרויות הכניסה
+        </LinkButton>
+      </form>
+    );
+
+  return (
+    <form
+      noValidate
+      className="flex flex-col gap-3"
+      data-testid="code-form"
+      onSubmit={(e: FormEvent) => {
+        e.preventDefault();
+        void verify(code);
+      }}
+    >
+      <p className="text-center text-sm leading-relaxed text-slate-300" data-testid="code-sent">
+        שלחנו קוד בן {CODE_LENGTH} ספרות אל{' '}
+        <bdi dir="ltr" className="font-semibold text-slate-100">
+          {normalizeEmail(email)}
+        </bdi>
+        <br />
+        <span className="text-xs text-slate-400">הקוד תקף לכמה דקות. לא הגיע? בדוק/י גם בתיקיית הספאם.</span>
+      </p>
+      <label className="sr-only" htmlFor="otp">
+        קוד חד-פעמי
+      </label>
+      <input
+        ref={codeRef}
+        id="otp"
+        name="one-time-code"
+        type="text"
+        dir="ltr"
+        inputMode="numeric"
+        pattern="[0-9]*"
+        autoComplete="one-time-code"
+        enterKeyHint="done"
+        maxLength={CODE_LENGTH * 3}
+        placeholder={'•'.repeat(CODE_LENGTH)}
+        value={code}
+        disabled={dead}
+        onChange={(e) => onCode(e.target.value)}
+        onPaste={(e) => {
+          e.preventDefault();
+          onCode(e.clipboardData.getData('text'));
+        }}
+        aria-describedby="code-help"
+        data-testid="code-input"
+        className="w-full rounded-xl border border-slate-600 bg-slate-800/80 px-3 py-3 text-center font-mono text-3xl tracking-[0.5em] text-slate-50 outline-none transition placeholder:text-slate-600 focus:border-sky-400 disabled:opacity-50"
+      />
+      <span id="code-help" className="sr-only">
+        הקלד/י או הדבק/י את הקוד — הבדיקה מתבצעת אוטומטית
+      </span>
+      {notice && (
+        <Note tone="ok" testId="code-notice">
+          {notice}
+        </Note>
+      )}
+      {!dead && (
+        <AuthButton type="submit" testId="verify-code" busy={verifying} disabled={code.length !== CODE_LENGTH}>
+          {verifying ? 'בודק…' : 'כניסה'}
+        </AuthButton>
+      )}
+      <div className="flex items-center justify-between gap-2 text-sm">
+        <button
+          type="button"
+          onClick={() => void send(true)}
+          disabled={remaining > 0 || sending}
+          data-testid="resend"
+          className={
+            dead
+              ? 'flex-1 rounded-lg bg-sky-500 px-4 py-2.5 font-semibold text-slate-950 hover:bg-sky-400 disabled:opacity-60'
+              : 'rounded px-2 py-1 text-sky-300 underline underline-offset-4 hover:text-sky-200 disabled:cursor-default disabled:text-slate-500 disabled:no-underline'
+          }
+        >
+          {sending ? 'שולח…' : remaining > 0 ? `שלח שוב בעוד ${formatCountdown(remaining)}` : dead ? 'שלח קוד חדש' : 'שלח שוב'}
+        </button>
+        <LinkButton
+          testId="change-email"
+          onClick={() => {
+            setError(null);
+            setNotice(null);
+            setCode('');
+            setStep('email');
+          }}
+        >
+          שינוי כתובת
+        </LinkButton>
+      </div>
+    </form>
+  );
+}
+
+function LinkButton({ onClick, testId, children }: { onClick(): void; testId: string; children: ReactNode }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      data-testid={testId}
+      className="self-center rounded px-2 py-1 text-sm text-slate-400 underline decoration-slate-600 underline-offset-4 hover:text-slate-200 focus:outline-none focus-visible:ring-1 focus-visible:ring-sky-400"
+    >
+      {children}
+    </button>
+  );
+}
+
 // ---------------------------------------------------------------- registration (invite link)
 
-function RegisterPanel(props: {
-  supported: boolean;
-  busy: boolean;
-  setBusy(b: boolean): void;
-  setError(e: UiError | null): void;
-  setDone(s: string | null): void;
-}) {
-  const { supported, busy, setBusy, setError, setDone } = props;
+function RegisterPanel({ supported, platform, setError, setDone }: PanelProps) {
   const [info, setInfo] = useState<{ options: PublicKeyCredentialCreationOptionsJSON; user: AuthUser; at: number } | null>(null);
   const [loading, setLoading] = useState(true);
   const [failed, setFailed] = useState(false);
+  const [busy, setBusy] = useState<'passkey' | 'email' | null>(null);
 
   const load = useCallback(async () => {
     const r = await registerOptions(INVITE!);
@@ -223,14 +497,19 @@ function RegisterPanel(props: {
   }, [setError]);
 
   useEffect(() => {
-    if (!supported) return setLoading(false);
+    // Also without WebAuthn: the answer carries the invitee's name (and validates the invite) for the e-mail option.
     void load().finally(() => setLoading(false));
-  }, [supported, load]);
+  }, [load]);
 
-  const register = async () => {
+  const finish = () => {
+    setDone('הרישום הושלם! מעביר…');
+    go(WELCOME_PATH);
+  };
+
+  const registerPasskey = async () => {
     if (!info) return;
     setError(null);
-    setBusy(true);
+    setBusy('passkey');
     try {
       let options = info.options;
       if (Date.now() - info.at > OPTIONS_TTL_MS) {
@@ -251,23 +530,72 @@ function RegisterPanel(props: {
         setError(fromApi(v, 'register'));
         return;
       }
-      setDone('הרישום הושלם! מעביר לאפליקציה…');
-      go(NEXT);
+      finish();
     } finally {
-      setBusy(false);
+      setBusy(null);
+    }
+  };
+
+  const registerWithEmail = async () => {
+    setError(null);
+    setBusy('email');
+    try {
+      const r = await registerEmail(INVITE!);
+      if (!r.ok) return setError(fromApi(r, 'register'));
+      if (r.user?.email) saveLastEmail(normalizeEmail(r.user.email));
+      finish();
+    } finally {
+      setBusy(null);
     }
   };
 
   if (loading) return <Spinner label="טוען את פרטי ההזמנה…" />;
   if (failed || !info) return null;
+  const passkeyFirst = supported && platform === true;
+  const passkeyBtn = supported && (
+    <AuthButton
+      key="passkey"
+      testId="register"
+      variant={passkeyFirst ? 'primary' : 'secondary'}
+      icon={<FingerprintIcon />}
+      busy={busy === 'passkey'}
+      disabled={busy !== null}
+      onClick={registerPasskey}
+    >
+      רשום טביעת אצבע / זיהוי פנים / Windows Hello
+    </AuthButton>
+  );
+  const emailBtn = (
+    <AuthButton
+      key="email"
+      testId="register-email"
+      variant={passkeyFirst ? 'secondary' : 'primary'}
+      icon={<MailIcon />}
+      busy={busy === 'email'}
+      disabled={busy !== null}
+      onClick={registerWithEmail}
+    >
+      המשך עם קוד במייל (בלי טביעת אצבע)
+    </AuthButton>
+  );
   return (
     <>
-      <p className="text-center text-base leading-relaxed text-slate-200" data-testid="register-greeting">
-        שלום <span dir="auto" className="font-semibold">{info.user.name}</span>, רשום/י את Face ID / טביעת האצבע כדי להיכנס
+      <div className="text-center" data-testid="register-greeting">
+        <p className="text-lg text-slate-100">
+          שלום <span dir="auto" className="font-semibold">{info.user.name}</span>!
+        </p>
+        <p className="mt-1 text-sm leading-relaxed text-slate-400">איך תרצה/י להיכנס מעכשיו?</p>
+      </div>
+      <div className="flex flex-col gap-3" data-testid="register-options" data-primary={passkeyFirst ? 'passkey' : 'email'}>
+        {passkeyFirst ? [passkeyBtn, emailBtn] : [emailBtn, passkeyBtn]}
+      </div>
+      <p className="text-center text-xs leading-relaxed text-slate-400">
+        בכניסה עם קוד, בכל פעם יישלח קוד חד-פעמי אל{' '}
+        <bdi dir="ltr" className="text-slate-300">
+          {info.user.email}
+        </bdi>
+        . אפשר להוסיף טביעת אצבע גם אחר כך.
       </p>
-      <PrimaryButton onClick={register} busy={busy} testId="register">
-        רישום Face ID / טביעת אצבע
-      </PrimaryButton>
     </>
   );
 }
@@ -306,13 +634,13 @@ function RequestAccess({ open, onToggle, again, onError }: { open: boolean; onTo
   if (result === 'sent')
     return (
       <Note tone="ok" testId="request-sent">
-        הבקשה נשלחה. לאחר אישור תקבל/י מייל עם קישור חד-פעמי לרישום Face ID / טביעת אצבע.
+        הבקשה נשלחה. לאחר אישור תקבל/י מייל עם קישור חד-פעמי להשלמת הרישום.
       </Note>
     );
   if (result === 'active')
     return (
       <Note tone="ok" testId="request-active">
-        את/ה כבר רשום/ה — היכנס/י עם Face ID / טביעת אצבע
+        את/ה כבר רשום/ה — היכנס/י עם קוד למייל או עם טביעת אצבע
       </Note>
     );
 
@@ -375,69 +703,6 @@ function RequestAccess({ open, onToggle, again, onError }: { open: boolean; onTo
 }
 
 // ---------------------------------------------------------------- bits
-
-function inputCls(bad: boolean) {
-  return `w-full rounded-lg border bg-slate-800/80 px-3 py-2 text-base text-slate-100 outline-none transition focus:border-sky-400 ${
-    bad ? 'border-red-400' : 'border-slate-700'
-  }`;
-}
-
-function Field({ label, error, children }: { label: string; error?: string; children: ReactNode }) {
-  return (
-    <label className="flex flex-col gap-1 text-sm text-slate-300">
-      {label}
-      {children}
-      {error && <span className="text-xs text-red-300">{error}</span>}
-    </label>
-  );
-}
-
-function PrimaryButton({ onClick, busy, testId, children }: { onClick(): void; busy: boolean; testId: string; children: ReactNode }) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      disabled={busy}
-      data-testid={testId}
-      className="flex w-full items-center justify-center gap-3 rounded-xl bg-sky-500 px-6 py-4 text-lg font-semibold text-slate-950 shadow-lg shadow-sky-950/40 transition hover:bg-sky-400 focus:outline-none focus-visible:ring-2 focus-visible:ring-sky-200 focus-visible:ring-offset-2 focus-visible:ring-offset-slate-900 disabled:cursor-wait disabled:opacity-70"
-    >
-      {busy ? <span className="h-5 w-5 animate-spin rounded-full border-2 border-slate-900/30 border-t-slate-900" /> : <FaceIcon />}
-      {children}
-    </button>
-  );
-}
-
-function FaceIcon() {
-  return (
-    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" aria-hidden="true">
-      <path d="M4 8V6a2 2 0 0 1 2-2h2M16 4h2a2 2 0 0 1 2 2v2M20 16v2a2 2 0 0 1-2 2h-2M8 20H6a2 2 0 0 1-2-2v-2" />
-      <path d="M9 9.5v1M15 9.5v1M12 9.5v3.5h-1M9.5 15.5c1.4 1.2 3.6 1.2 5 0" />
-    </svg>
-  );
-}
-
-function Spinner({ label }: { label: string }) {
-  return (
-    <div className="flex items-center justify-center gap-2 py-3 text-sm text-slate-400" role="status">
-      <span className="h-4 w-4 animate-spin rounded-full border-2 border-slate-600 border-t-sky-400" />
-      {label}
-    </div>
-  );
-}
-
-function Note({ children, tone = 'info', testId }: { children: ReactNode; tone?: 'info' | 'ok' | 'warn'; testId?: string }) {
-  const cls =
-    tone === 'ok'
-      ? 'border-emerald-700/60 bg-emerald-950/40 text-emerald-200'
-      : tone === 'warn'
-        ? 'border-amber-700/60 bg-amber-950/40 text-amber-200'
-        : 'border-slate-700 bg-slate-800/60 text-slate-300';
-  return (
-    <p className={`rounded-lg border px-3 py-2 text-center text-sm leading-relaxed ${cls}`} data-testid={testId}>
-      {children}
-    </p>
-  );
-}
 
 function ErrorBox({ error, onRequest }: { error: UiError; onRequest(): void }) {
   const hints = error.hints ?? [];

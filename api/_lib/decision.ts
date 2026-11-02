@@ -1,7 +1,7 @@
 // Shared logic for the owner's email actions: /api/approve, /api/deny (approve token) and /api/revoke (revoke token).
 // GET only renders a confirmation page (email link scanners prefetch GET URLs); the action happens on POST.
 import { getMailer } from './mailer.js';
-import { nowSeconds, signToken, verifyToken } from './token.js';
+import { REVOKE_TTL_DAYS, nowSeconds, signToken, verifyToken } from './token.js';
 import {
   alreadyActivePage,
   approvedPage,
@@ -11,13 +11,14 @@ import {
   errorPage,
   inviteEmail,
   invalidLinkPage,
+  ownerRegisteredEmail,
   revokedPage,
   type DecisionAction,
 } from './templates.js';
 import { appBaseUrl, configOrError, htmlResponse } from './http.js';
 import { randomId } from './auth.js';
 import { getStore, normEmail, type Store, type UserRecord } from './store.js';
-import type { Config } from './config.js';
+import { ConfigError, loadConfig, type Config } from './config.js';
 
 const tokenType = (action: DecisionAction) => (action === 'revoke' ? 'revoke' : 'approve');
 
@@ -116,4 +117,23 @@ export function revokeUrl(base: string, secret: string, name: string, email: str
   const now = nowSeconds();
   const t = signToken({ t: 'revoke', name, email, iat: now, exp: now + revokeDays * 86400 }, secret);
   return `${base}/api/revoke?t=${encodeURIComponent(t)}`;
+}
+
+/**
+ * Tell the owner (best effort, never throws) that a user completed registration; the mail carries the revoke link.
+ * `method` = how they registered: with a passkey, or with the invite link alone (email code login).
+ */
+export async function notifyOwnerRegistered(req: Request, user: UserRecord, method: 'passkey' | 'email'): Promise<void> {
+  try {
+    const full = loadConfig(['mail', 'owner']);
+    const url = revokeUrl(appBaseUrl(req, full), full.signingSecret, user.name, user.email, REVOKE_TTL_DAYS);
+    await getMailer(full.mail).send({
+      to: full.ownerEmail,
+      replyTo: user.email,
+      ...ownerRegisteredEmail({ name: user.name, email: user.email, revokeUrl: url, method }),
+    });
+  } catch (err) {
+    if (err instanceof ConfigError) console.warn(`[access] owner not notified of registration: ${err.message}`);
+    else console.error('[access] failed to notify owner of registration:', err);
+  }
 }

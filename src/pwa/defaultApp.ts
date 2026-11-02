@@ -112,23 +112,69 @@ export function shouldAutoPrompt({ os, standalone, launchedWithFile, state, now 
   return now >= state.remindAt;
 }
 
-export interface DesktopPromptContext {
-  /** From the registry (UserChoice ProgId): true = already PDF Viewer, null = unknown. */
+// ---------------------------------------------------------------- desktop app (Electron, Windows)
+
+/**
+ * Desktop app: the question "make PDF Viewer the default for PDF files?" is asked
+ * ONCE per Windows user — on the first launch after install — and never again
+ * automatically (the TopMenu entry still opens it on demand). The answer lives in
+ * the desktop shell's userData/prefs.json (pref key below), not in localStorage.
+ */
+export const DESKTOP_PROMPT_PREF = 'defaultPdfPrompt' as const;
+
+/** yes = "כן, הגדר"; no = "לא, תודה" (also Esc / ×); already-default = registry said so at first launch. */
+export type DesktopAnswer = 'yes' | 'no' | 'already-default';
+
+export interface DesktopPromptRecord {
+  answered: true;
+  answer: DesktopAnswer;
+  /** ISO timestamp. */
+  at: string;
+}
+
+const DESKTOP_ANSWERS: readonly DesktopAnswer[] = ['yes', 'no', 'already-default'];
+
+export function makeDesktopRecord(answer: DesktopAnswer, now: number): DesktopPromptRecord {
+  return { answered: true, answer, at: new Date(now).toISOString() };
+}
+
+/** Tolerant read of the stored pref: anything with `answered: true` counts as answered. */
+export function parseDesktopRecord(v: unknown): DesktopPromptRecord | null {
+  if (!v || typeof v !== 'object') return null;
+  const r = v as Partial<DesktopPromptRecord>;
+  if (r.answered !== true) return null;
+  return {
+    answered: true,
+    answer: DESKTOP_ANSWERS.includes(r.answer as DesktopAnswer) ? (r.answer as DesktopAnswer) : 'no',
+    at: typeof r.at === 'string' ? r.at : '',
+  };
+}
+
+export type DesktopFirstRunAction =
+  /** Nothing to do (already answered, or the answer could not be persisted). */
+  | 'skip'
+  /** Show the one-time question. */
+  | 'ask'
+  /** Already the default: don't ask, just remember that the question is settled. */
+  | 'mark-already-default';
+
+export interface DesktopFirstRunContext {
+  /** The stored pref (getPref result); `undefined` = prefs unavailable / unreadable. */
+  stored: unknown;
+  /** From the registry (UserChoice ProgId): true = PDF Viewer, false = another app, null = unknown. */
   isDefault: boolean | null;
-  state: PromptState;
-  now: number;
 }
 
 /**
- * Desktop app (installed by the Windows installer): the registry says whether we
- * are the .pdf default, so ask exactly while we are not — unless the user chose
- * "never" or postponed. "done" is re-asked (the user may have picked another app
- * since); unknown (no UserChoice / reg failed) asks too, a launch with a file does not suppress it.
+ * First-launch decision. Never asks when the answer could not be read (no prefs
+ * store → we could not remember the answer, and asking on every launch is
+ * exactly what we must not do). Unknown default (no UserChoice yet) asks.
  */
-export function shouldAutoPromptDesktop({ isDefault, state, now }: DesktopPromptContext): boolean {
-  if (isDefault === true) return false;
-  if (state.status === 'never') return false;
-  return now >= state.remindAt;
+export function desktopFirstRunAction({ stored, isDefault }: DesktopFirstRunContext): DesktopFirstRunAction {
+  if (stored === undefined) return 'skip';
+  if (parseDesktopRecord(stored)) return 'skip';
+  if (isDefault === true) return 'mark-already-default';
+  return 'ask';
 }
 
 export function applyChoice(state: PromptState, choice: PromptChoice, now: number): PromptState {

@@ -10,6 +10,10 @@
  * - Default-app check reads the per-user UserChoice ProgId (read-only: Windows
  *   hash-protects UserChoice, no app may set it); the Settings deep link opens
  *   THIS app's page in Settings › Apps › Default apps.
+ * - Small persistent preferences (userData/prefs.json, allow-listed keys) for the
+ *   one-time "make PDF Viewer the default?" question: the renderer's localStorage
+ *   is per-origin and can be cleared, this file survives (also uninstall +
+ *   reinstall: deleteAppDataOnUninstall is false, so it is asked once per Windows user).
  *
  * Auto-update is intentionally not implemented yet (new versions: run the new installer).
  */
@@ -179,6 +183,30 @@ function isDefaultPdfApp() {
   });
 }
 
+// ---------------------------------------------------------------- preferences (userData/prefs.json)
+
+/** Keys the renderer may read / write. defaultPdfPrompt = {answered, answer, at} of the one-time question. */
+const PREF_KEYS = new Set(['defaultPdfPrompt']);
+const MAX_PREF_BYTES = 4096;
+const prefsFile = () => path.join(app.getPath('userData'), 'prefs.json');
+
+function readPrefs() {
+  try {
+    const v = JSON.parse(fs.readFileSync(prefsFile(), 'utf8'));
+    return v && typeof v === 'object' && !Array.isArray(v) ? v : {};
+  } catch {
+    return {}; // missing or corrupt
+  }
+}
+
+function writePrefs(prefs) {
+  const file = prefsFile();
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  const tmp = `${file}.tmp`;
+  fs.writeFileSync(tmp, JSON.stringify(prefs, null, 2));
+  fs.renameSync(tmp, file); // atomic replace: never a half-written prefs.json
+}
+
 // ---------------------------------------------------------------- app:// protocol
 
 function registerProtocol() {
@@ -209,7 +237,9 @@ function registerProtocol() {
 
 function isAppUrl(u) {
   try {
-    return new URL(u).origin === ORIGIN;
+    // Not `.origin`: Node's URL does not know app:// is a standard scheme and reports origin "null".
+    const url = new URL(u);
+    return url.protocol === `${SCHEME}:` && url.host === HOST;
   } catch {
     return false;
   }
@@ -297,6 +327,24 @@ ipcMain.on('pdf:renderer-ready', (e) => {
   void flush();
 });
 ipcMain.handle('pdf:is-default', () => isDefaultPdfApp());
+
+/** Only our own page (app://pdf-viewer) may touch the preferences. */
+function fromApp(e) {
+  return !!win && e.sender === win.webContents && isAppUrl(e.senderFrame ? e.senderFrame.url : e.sender.getURL());
+}
+ipcMain.handle('pdf:get-pref', (e, key) => {
+  if (!fromApp(e) || !PREF_KEYS.has(key)) throw new Error('pref not allowed');
+  const v = readPrefs()[key];
+  return v === undefined ? null : v;
+});
+ipcMain.handle('pdf:set-pref', (e, key, value) => {
+  if (!fromApp(e) || !PREF_KEYS.has(key)) throw new Error('pref not allowed');
+  const json = JSON.stringify(value === undefined ? null : value);
+  if (json.length > MAX_PREF_BYTES) throw new Error('pref too large');
+  const prefs = readPrefs();
+  prefs[key] = JSON.parse(json);
+  writePrefs(prefs);
+});
 ipcMain.handle('pdf:open-default-apps', async () => {
   if (process.platform !== 'win32') return;
   await shell.openExternal(DEFAULT_APPS_URI);
@@ -307,7 +355,8 @@ ipcMain.handle('pdf:open-default-apps', async () => {
 /**
  * Smoke tests: PDF_VIEWER_CAPTURE=<file.png> saves a screenshot of the window
  * PDF_VIEWER_CAPTURE_DELAY_MS (default 8000) after the page loaded, plus
- * <file.png>.json with what the page shows; PDF_VIEWER_CAPTURE_QUIT=1 then quits.
+ * <file.png>.json with what the page shows (incl. whether the one-time default-app
+ * dialog is open and whether prefs.json exists yet); PDF_VIEWER_CAPTURE_QUIT=1 then quits.
  */
 function captureForTest(out) {
   const delay = Number(process.env.PDF_VIEWER_CAPTURE_DELAY_MS) || 8000;
@@ -316,7 +365,7 @@ function captureForTest(out) {
   w.webContents.once('did-finish-load', () => {
     setTimeout(async () => {
       try {
-        const info = await w.webContents.executeJavaScript(`({
+        const info = await w.webContents.executeJavaScript(`(async () => ({
           url: location.href,
           title: document.title,
           desktop: !!(window.pdfDesktop && window.pdfDesktop.isDesktop),
@@ -325,9 +374,12 @@ function captureForTest(out) {
           openFile: (document.querySelector('[data-testid=viewer-main]') || {}).ariaLabel || null,
           pageLabel: (document.querySelector('[data-testid=pill-page]') || {}).ariaLabel || null,
           defaultAppDialog: !!document.querySelector('[data-testid=default-app-dialog]'),
+          defaultAppDialogTitle: (document.querySelector('#default-app-title') || {}).textContent || null,
+          defaultPdfPrompt: window.pdfDesktop && window.pdfDesktop.getPref ? await window.pdfDesktop.getPref('defaultPdfPrompt').catch(() => 'error') : null,
           error: (document.querySelector('[role=alert]') || {}).textContent || null,
-        })`);
+        }))()`);
         info.windowTitle = w.getTitle();
+        info.prefsFileExists = fs.existsSync(prefsFile());
         const img = await w.webContents.capturePage();
         fs.mkdirSync(path.dirname(path.resolve(out)), { recursive: true });
         fs.writeFileSync(out, img.toPNG());

@@ -8,10 +8,13 @@
  * - A launch that came from opening a PDF never shows it (probably already default).
  * - Browser tab: after `appinstalled`, a toast says to open the installed app.
  * - `openDefaultAppDialog()` opens it on demand (TopMenu entry).
- * - Windows desktop app (Electron, `window.pdfDesktop`): the registry tells whether
- *   we are the default, so it asks exactly while we are not; the button opens
- *   PDF Viewer's own page in Settings › Default apps and the dialog closes by
- *   itself once Windows reports the change. No install / icon-fix hints there.
+ * - Windows desktop app (Electron, `window.pdfDesktop`): asks ONCE, on the first
+ *   launch after install — "make PDF Viewer the default for PDF files?" Yes / No
+ *   thanks — unless the registry already says we are the default. The answer is
+ *   stored by the desktop shell (userData/prefs.json) and it is never asked again
+ *   automatically (no polling, no "remind me later"). "Yes" opens PDF Viewer's own
+ *   page in Settings › Default apps with a 2-step guide that closes by itself once
+ *   Windows reports the change (or on "סיימתי"). The menu entry opens it on demand.
  *
  * No app can make itself the default programmatically; this only guides the user.
  */
@@ -19,15 +22,18 @@ import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import { create } from 'zustand';
 import {
+  DESKTOP_PROMPT_PREF,
   WINDOWS_DEFAULT_APPS_URI,
   applyChoice,
+  desktopFirstRunAction,
   detectOs,
   isStandalone,
   loadState,
   recordFileLaunch,
+  makeDesktopRecord,
   saveState,
   shouldAutoPrompt,
-  shouldAutoPromptDesktop,
+  type DesktopAnswer,
   type Os,
   type PromptChoice,
 } from './defaultApp';
@@ -62,6 +68,7 @@ const BASE = import.meta.env.BASE_URL;
 /** Mount once (App). Runs the auto-prompt logic and renders the modal + install toast. */
 export function DefaultAppPrompt() {
   const open = useDefaultAppUi((s) => s.open);
+  const auto = useDefaultAppUi((s) => s.auto);
   const toast = useDefaultAppUi((s) => s.installedToast);
 
   useEffect(() => {
@@ -70,13 +77,16 @@ export function DefaultAppPrompt() {
       if (desktop.platform !== undefined && desktop.platform !== 'win32') return;
       let cancelled = false;
       const timer = window.setTimeout(() => {
-        void desktop
-          .isDefaultPdfApp()
-          .catch(() => null)
-          .then((isDefault) => {
-            if (cancelled || useDefaultAppUi.getState().open) return;
-            if (shouldAutoPromptDesktop({ isDefault, state: loadState(), now: Date.now() })) useDefaultAppUi.setState({ open: true, auto: true });
-          });
+        void (async () => {
+          // undefined = no prefs store (older shell) or read failed → never auto-ask (could not remember the answer)
+          const stored: unknown = desktop.getPref ? await desktop.getPref(DESKTOP_PROMPT_PREF).catch(() => undefined) : undefined;
+          if (cancelled || desktopFirstRunAction({ stored, isDefault: false }) === 'skip') return;
+          const isDefault = await desktop.isDefaultPdfApp().catch(() => null);
+          if (cancelled) return;
+          const action = desktopFirstRunAction({ stored, isDefault });
+          if (action === 'mark-already-default') recordDesktopAnswer(desktop, 'already-default');
+          else if (action === 'ask' && !useDefaultAppUi.getState().open) useDefaultAppUi.setState({ open: true, auto: true });
+        })();
       }, AUTO_PROMPT_DELAY_MS);
       return () => {
         cancelled = true;
@@ -113,7 +123,7 @@ export function DefaultAppPrompt() {
 
   return (
     <>
-      {open && <DefaultAppDialog />}
+      {open && (getDesktop() ? <DesktopDefaultDialog auto={auto} /> : <DefaultAppDialog />)}
       {toast && (
         <div
           role="status"
@@ -142,8 +152,7 @@ function choose(choice: PromptChoice) {
 }
 
 function DefaultAppDialog() {
-  const [desktop] = useState(getDesktop);
-  const os: Os = desktop ? 'windows' : currentOs();
+  const [os] = useState<Os>(currentOs);
   const [standalone] = useState(() => isStandalone(window));
   const [settingsOpened, setSettingsOpened] = useState(false);
   const primary = useRef<HTMLElement | null>(null);
@@ -201,11 +210,9 @@ function DefaultAppDialog() {
         </div>
 
         <div className="flex flex-col gap-4 overflow-y-auto px-5 py-4">
-          {!standalone && !desktop && <InstallFirst />}
+          {!standalone && <InstallFirst />}
 
-          {desktop && <DesktopSteps desktop={desktop} setPrimary={setPrimary} onOpened={() => setSettingsOpened(true)} />}
-
-          {os === 'windows' && !desktop && (
+          {os === 'windows' && (
             <>
               <div className="flex flex-col gap-2">
                 <a
@@ -367,28 +374,79 @@ function DefaultAppDialog() {
   );
 }
 
-/** Desktop app: Settings opens on PDF Viewer's own default-apps page; the dialog closes once Windows reports the change. */
-function DesktopSteps({
-  desktop,
-  setPrimary,
-  onOpened,
-}: {
-  desktop: PdfDesktopApi;
-  setPrimary: (el: HTMLElement | null) => void;
-  onOpened: () => void;
-}) {
-  const [opened, setOpened] = useState(false);
-  const [confirmed, setConfirmed] = useState(false);
+/** Persist the one-time answer in the desktop shell (userData/prefs.json). */
+function recordDesktopAnswer(desktop: PdfDesktopApi, answer: DesktopAnswer): void {
+  if (!desktop.setPref) return;
+  void desktop.setPref(DESKTOP_PROMPT_PREF, makeDesktopRecord(answer, Date.now())).catch((err) => console.error('[desktop] cannot save the answer', err));
+}
+
+type DesktopPhase = 'ask' | 'guide' | 'confirmed';
+
+/**
+ * Windows desktop app: the one-time question (auto, first launch) or the same
+ * dialog from the menu. Compact, Windows-dialog-like; "כן, הגדר" opens Settings
+ * and shows a 2-step guide that closes itself once Windows reports the change.
+ */
+function DesktopDefaultDialog({ auto }: { auto: boolean }) {
+  const [desktop] = useState(getDesktop);
+  const [phase, setPhase] = useState<DesktopPhase>('ask');
+  const [alreadyDefault, setAlreadyDefault] = useState(false);
+  const answered = useRef(false);
+  const primary = useRef<HTMLButtonElement | null>(null);
+
+  const close = () => useDefaultAppUi.setState({ open: false, auto: false });
+  const answer = (a: DesktopAnswer) => {
+    if (!desktop || answered.current) return;
+    answered.current = true;
+    recordDesktopAnswer(desktop, a);
+  };
+  const dismiss = () => {
+    // Esc / × on the automatic question = "לא, תודה" (it is asked only once).
+    if (auto && phase === 'ask') answer('no');
+    close();
+  };
+  const dismissRef = useRef(dismiss);
+  dismissRef.current = dismiss;
 
   useEffect(() => {
-    if (!opened || confirmed) return;
+    const prev = document.activeElement as HTMLElement | null;
+    primary.current?.focus({ preventScroll: true });
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.stopPropagation();
+        dismissRef.current();
+      }
+    };
+    window.addEventListener('keydown', onKey, true);
+    return () => {
+      window.removeEventListener('keydown', onKey, true);
+      prev?.focus?.({ preventScroll: true });
+    };
+  }, []);
+
+  // Opened from the menu: say so when we already are the default.
+  useEffect(() => {
+    if (auto || !desktop) return;
+    let stop = false;
+    void desktop
+      .isDefaultPdfApp()
+      .catch(() => null)
+      .then((d) => !stop && setAlreadyDefault(d === true));
+    return () => {
+      stop = true;
+    };
+  }, [auto, desktop]);
+
+  // Only while the user is in Settings: watch for the change, then close by ourselves.
+  useEffect(() => {
+    if (phase !== 'guide' || !desktop) return;
     let stop = false;
     const check = () => {
       void desktop
         .isDefaultPdfApp()
         .catch(() => null)
-        .then((isDefault) => {
-          if (!stop && isDefault === true) setConfirmed(true);
+        .then((d) => {
+          if (!stop && d === true) setPhase('confirmed');
         });
     };
     const iv = window.setInterval(check, 2000);
@@ -398,77 +456,148 @@ function DesktopSteps({
       window.clearInterval(iv);
       window.removeEventListener('focus', check);
     };
-  }, [desktop, opened, confirmed]);
+  }, [phase, desktop]);
 
   useEffect(() => {
-    if (!confirmed) return;
-    const t = window.setTimeout(() => choose('done'), 2500);
+    if (phase !== 'confirmed') return;
+    const t = window.setTimeout(close, 2500);
     return () => window.clearTimeout(t);
-  }, [confirmed]);
+  }, [phase]);
 
-  if (confirmed) {
-    return (
-      <div role="status" data-testid="default-app-confirmed" className="rounded-lg border border-emerald-600 bg-emerald-950/60 px-4 py-3 text-sm text-emerald-100">
-        <b>✓ PDF Viewer היא עכשיו תוכנת ברירת המחדל לקובצי PDF.</b> לחיצה כפולה על קובץ PDF תפתח אותו כאן.
-      </div>
-    );
-  }
+  const openSettings = () => {
+    if (!desktop) return;
+    void desktop.openDefaultAppsSettings().catch((err) => console.error('[desktop] cannot open Settings', err));
+  };
 
-  return (
-    <>
-      <div className="flex flex-col gap-2">
-        <button
-          type="button"
-          ref={setPrimary}
-          data-testid="open-default-apps"
-          onClick={() => {
-            setOpened(true);
-            onOpened();
-            void desktop.openDefaultAppsSettings().catch((err) => console.error('[desktop] cannot open Settings', err));
-          }}
-          className="inline-flex w-max items-center gap-2 rounded-md bg-sky-600 px-4 py-2 text-sm font-semibold text-white hover:bg-sky-500 focus:outline-none focus-visible:ring-2 focus-visible:ring-sky-300"
-        >
-          פתח את הגדרות ברירת המחדל של PDF Viewer
-          <span aria-hidden="true">↗</span>
-        </button>
-        <p className="text-xs text-slate-400" data-testid="settings-hint">
-          {opened ? 'בצע את השלבים בחלון ההגדרות — חלון זה ייסגר מעצמו כשההגדרה תיקלט:' : 'ייפתח עמוד ההגדרות של PDF Viewer. שם:'}
-        </p>
+  const btn =
+    'min-w-[6.5rem] rounded-md px-4 py-1.5 text-sm font-semibold focus:outline-none focus-visible:ring-2 focus-visible:ring-sky-300';
+
+  return createPortal(
+    <div className="fixed inset-0 z-[70] flex items-center justify-center bg-slate-950/60 p-4" dir="rtl">
+      <div
+        role={phase === 'ask' ? 'alertdialog' : 'dialog'}
+        aria-modal="true"
+        aria-labelledby="default-app-title"
+        aria-describedby="default-app-desc"
+        data-testid="default-app-dialog"
+        data-os="windows"
+        data-desktop="true"
+        data-phase={phase}
+        className="w-full max-w-md overflow-hidden rounded-lg border border-slate-600 bg-slate-800 text-slate-100 shadow-2xl"
+      >
+        <div className="flex h-8 items-center justify-between border-b border-slate-700 bg-slate-900/60 ps-3 text-xs text-slate-400">
+          <span className="flex items-center gap-1.5">
+            <img src={`${BASE}icons/icon-192.png`} alt="" className="h-4 w-4" />
+            PDF Viewer
+          </span>
+          <button
+            type="button"
+            onClick={dismiss}
+            aria-label="סגור"
+            data-testid="default-app-close"
+            className="flex h-8 w-11 items-center justify-center text-base text-slate-400 hover:bg-red-600 hover:text-white"
+          >
+            ×
+          </button>
+        </div>
+
+        {phase === 'ask' && (
+          <>
+            <div className="flex items-start gap-4 px-5 pb-4 pt-5">
+              <img src={`${BASE}icons/icon-192.png`} alt="" width={48} height={48} className="h-12 w-12 shrink-0 rounded-lg" />
+              <div className="min-w-0">
+                <h2 id="default-app-title" className="text-base font-semibold leading-snug">
+                  להפוך את PDF Viewer לתוכנת ברירת המחדל לקובצי PDF?
+                </h2>
+                <p id="default-app-desc" className="mt-1.5 text-sm text-slate-400">
+                  לחיצה כפולה על קובץ PDF תפתח אותו כאן. Windows מבקשת לאשר זאת פעם אחת בחלון ההגדרות.
+                </p>
+                {alreadyDefault && (
+                  <p role="status" data-testid="default-app-already" className="mt-2 text-sm text-emerald-300">
+                    ✓ PDF Viewer כבר מוגדרת כתוכנת ברירת המחדל לקובצי PDF.
+                  </p>
+                )}
+              </div>
+            </div>
+            <div className="flex justify-end gap-2 border-t border-slate-700 bg-slate-900/40 px-5 py-3">
+              <button
+                type="button"
+                ref={primary}
+                data-testid="default-app-yes"
+                onClick={() => {
+                  answer('yes');
+                  setPhase('guide');
+                  openSettings();
+                }}
+                className={`${btn} bg-sky-600 text-white hover:bg-sky-500`}
+              >
+                כן, הגדר
+              </button>
+              <button
+                type="button"
+                data-testid="default-app-no"
+                onClick={() => {
+                  answer('no');
+                  close();
+                }}
+                className={`${btn} border border-slate-600 text-slate-200 hover:bg-slate-700`}
+              >
+                לא, תודה
+              </button>
+            </div>
+          </>
+        )}
+
+        {phase === 'guide' && (
+          <>
+            <div className="flex flex-col gap-3 px-5 pb-4 pt-5">
+              <h2 id="default-app-title" className="text-base font-semibold">
+                כמעט סיימנו — בחלון ההגדרות שנפתח:
+              </h2>
+              <ol className="grid grid-cols-2 gap-3" data-testid="steps">
+                <Step n={1} text={<>בחר <b>PDF Viewer</b> עבור <b dir="ltr">.pdf</b></>}>
+                  <MockSettings>
+                    <div className="text-[9px] font-semibold text-slate-700" dir="ltr">.pdf</div>
+                    <div className="mt-1 flex h-6 items-center gap-1.5 rounded bg-sky-50 px-1.5 text-[10px] font-semibold text-slate-800 ring-2 ring-sky-500" dir="ltr">
+                      <img src={`${BASE}icons/icon-192.png`} alt="" className="h-3.5 w-3.5" />
+                      PDF Viewer
+                    </div>
+                  </MockSettings>
+                </Step>
+                <Step n={2} text={<>לחץ <b>„הגדר ברירת מחדל”</b></>}>
+                  <MockSettings>
+                    <div className="flex h-6 items-center justify-end" dir="ltr">
+                      <span className="rounded bg-sky-700 px-2 py-0.5 text-[9px] text-white">Set default</span>
+                    </div>
+                  </MockSettings>
+                </Step>
+              </ol>
+              <p id="default-app-desc" className="text-xs text-slate-400" data-testid="settings-hint">
+                חלון זה ייסגר מעצמו כשההגדרה תיקלט. ההגדרות לא נפתחו?{' '}
+                <button type="button" onClick={openSettings} className="text-sky-300 underline hover:text-sky-200">
+                  פתח שוב
+                </button>
+              </p>
+            </div>
+            <div className="flex justify-end gap-2 border-t border-slate-700 bg-slate-900/40 px-5 py-3">
+              <button type="button" data-testid="default-app-finished" onClick={close} className={`${btn} bg-sky-600 text-white hover:bg-sky-500`}>
+                סיימתי
+              </button>
+            </div>
+          </>
+        )}
+
+        {phase === 'confirmed' && (
+          <div role="status" data-testid="default-app-confirmed" className="px-5 py-5 text-sm text-emerald-100">
+            <h2 id="default-app-title" className="text-base font-semibold text-emerald-300">
+              ✓ PDF Viewer היא עכשיו תוכנת ברירת המחדל לקובצי PDF
+            </h2>
+            <p id="default-app-desc" className="mt-1.5 text-slate-300">לחיצה כפולה על קובץ PDF תפתח אותו כאן.</p>
+          </div>
+        )}
       </div>
-      <ol className="grid gap-3 sm:grid-cols-3" data-testid="steps">
-        <Step n={1} text={<>לחץ על התיבה שמתחת ל‑<b dir="ltr">.pdf</b></>}>
-          <MockSettings>
-            <div className="text-[9px] font-semibold text-slate-700" dir="ltr">.pdf</div>
-            <div className="mt-1 flex h-7 items-center gap-1.5 rounded bg-white px-1.5 text-[10px] text-slate-800 ring-2 ring-sky-500" dir="ltr">
-              <span className="h-3.5 w-3.5 rounded-sm bg-gradient-to-br from-sky-400 to-emerald-400" />
-              Microsoft Edge
-              <span className="ml-auto text-slate-400">↗</span>
-            </div>
-          </MockSettings>
-        </Step>
-        <Step n={2} text={<>בחר <b>PDF Viewer</b></>}>
-          <MockSettings>
-            <div className="flex h-6 items-center gap-1.5 rounded bg-sky-50 px-1.5 text-[10px] font-semibold text-slate-800 ring-1 ring-sky-500" dir="ltr">
-              <img src={`${BASE}icons/icon-192.png`} alt="" className="h-3.5 w-3.5" />
-              PDF Viewer
-            </div>
-          </MockSettings>
-        </Step>
-        <Step n={3} text={<>לחץ <b>„הגדר ברירת מחדל”</b></>}>
-          <MockSettings>
-            <div className="flex justify-end" dir="ltr">
-              <span className="rounded bg-sky-700 px-2 py-0.5 text-[9px] text-white">Set default</span>
-            </div>
-          </MockSettings>
-        </Step>
-      </ol>
-      <p className="text-xs text-slate-500">
-        ב‑Windows 10, אם נפתח העמוד הכללי: „בחר אפליקציות ברירת מחדל לפי סוג קובץ” ← <span dir="ltr">.pdf</span> ← PDF Viewer.
-      </p>
-      <Alt>
-        <b>דרך נוספת:</b> לחיצה ימנית על קובץ PDF כלשהו ← <b>פתח באמצעות</b> ← <b>בחר אפליקציה אחרת</b> ← <b>PDF Viewer</b> ← <b>תמיד</b>.
-      </Alt>
-    </>
+    </div>,
+    document.body,
   );
 }
 

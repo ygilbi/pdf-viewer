@@ -41,3 +41,27 @@ export function validateRequest(input: AccessRequest): { data: AccessRequest; er
   if ((data.message ?? '').length > MESSAGE_MAX) errors.message = `עד ${MESSAGE_MAX} תווים`;
   return { data, errors };
 }
+
+/** Length of the one-time sign-in code mailed by POST auth/email/start. */
+export const CODE_LENGTH = 6;
+
+/**
+ * Typed / pasted / autofilled code → digits only, at most CODE_LENGTH.
+ * Accepts "123 456", "123-456", full-width / Arabic-Indic digits, and a pasted
+ * sentence that contains the code ("הקוד שלך: 123456").
+ */
+export function normalizeCode(raw: string): string {
+  const ascii = raw.replace(/[٠-٩۰-۹０-９]/g, (ch) => {
+    const c = ch.charCodeAt(0);
+    const zero = c >= 0xff10 ? 0xff10 : c >= 0x06f0 ? 0x06f0 : 0x0660;
+    return String(c - zero);
+  });
+  const run = ascii.match(new RegExp(`\\d{${CODE_LENGTH}}`));
+  if (run && /\D/.test(ascii.replace(/[\s-]/g, ''))) return run[0]; // the code inside surrounding text
+  return ascii.replace(/\D/g, '').slice(0, CODE_LENGTH);
+}
+
+/** Trimmed, lower-cased e-mail for the code flow. */
+export function normalizeEmail(raw: string): string {
+  return raw.trim().toLowerCase();
+}
