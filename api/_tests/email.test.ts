@@ -300,13 +300,14 @@ describe('adding a passkey later (auth/passkey/add/*)', () => {
     const o = await addOptions(jsonPost('/api/auth/passkey/add/options', {}, jar));
     expect(o.status).toBe(200);
     const ob = await json(o);
-    expect(ob.options.authenticatorSelection).toMatchObject({ residentKey: 'required', userVerification: 'required' });
+    expect(ob.options.authenticatorSelection).toMatchObject({ authenticatorAttachment: 'platform', residentKey: 'required', userVerification: 'required' });
+    expect(ob.options.hints).toEqual(['client-device']);
     expect(ob.user).toEqual({ name: 'דנה כהן', email: EMAIL });
 
     const auth = new SoftAuthenticator({ origin: ORIGIN });
     const v = await addVerify(jsonPost('/api/auth/passkey/add/verify', { response: auth.create(ob.options) }, jar));
     expect(v.status).toBe(200);
-    expect(await json(v)).toEqual({ ok: true, user: { name: 'דנה כהן', email: EMAIL }, hasPasskey: true });
+    expect(await json(v)).toEqual({ ok: true, user: { name: 'דנה כהן', email: EMAIL }, hasPasskey: true, credentialId: auth.id });
     expect(await store.listCredIds(EMAIL)).toEqual([auth.id]);
     expect(await json(await me(get('/api/auth/me', jar)))).toMatchObject({ hasPasskey: true });
 
@@ -315,10 +316,20 @@ describe('adding a passkey later (auth/passkey/add/*)', () => {
     expect(await json(replay)).toMatchObject({ code: 'challenge_expired' });
 
     // Passkey login works.
-    const lo = await loginOptions(jsonPost('/api/auth/login/options', {}));
+    const lo = await loginOptions(jsonPost('/api/auth/login/options', { credentialIds: [auth.id] }));
     const ljar = new CookieJar().absorb(lo);
     const lr = await loginVerify(jsonPost('/api/auth/login/verify', { response: auth.get((await json(lo)).options) }, ljar));
     expect(lr.status).toBe(200);
+    expect((await json(lr)).credentialId).toBe(auth.id);
+  });
+
+  it('rejects a cross-platform authenticator (phone via QR / security key) with not_platform', async () => {
+    const jar = await registeredByEmail();
+    const ob = await json(await addOptions(jsonPost('/api/auth/passkey/add/options', {}, jar)));
+    const v = await addVerify(jsonPost('/api/auth/passkey/add/verify', { response: new SoftAuthenticator({ origin: ORIGIN, attachment: 'cross-platform' }).create(ob.options) }, jar));
+    expect(v.status).toBe(400);
+    expect(await json(v)).toMatchObject({ ok: false, code: 'not_platform' });
+    expect(await store.listCredIds(EMAIL)).toEqual([]);
   });
 
   it('rejects a wrong origin and a credential already registered', async () => {

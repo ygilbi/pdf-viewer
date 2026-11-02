@@ -95,7 +95,8 @@ export const AUTH_ERRORS = {
   challenge_expired: [400, 'פג הזמן לאימות. נסו שוב.'],
   verification_failed: [400, 'האימות נכשל. נסו שוב.'],
   credential_exists: [409, 'מפתח הגישה הזה כבר רשום.'],
-  unknown_credential: [401, 'מפתח הגישה אינו מוכר (ייתכן שהגישה בוטלה). אפשר לבקש גישה מחדש.'],
+  unknown_credential: [401, 'לא נמצא Face ID / טביעת אצבע רשום עבור המכשיר הזה. היכנס/י עם קוד למייל והפעל/י את הכניסה המהירה במכשיר הזה.'],
+  not_platform: [400, 'יש להשתמש בזיהוי הפנים / טביעת האצבע / Windows Hello של המכשיר הזה'],
   not_active: [403, 'הגישה שלך אינה פעילה. אפשר לבקש גישה מחדש.'],
   unauthenticated: [401, 'יש להתחבר (עם מפתח גישה או עם קוד במייל).'],
   rate_limited: [429, 'יותר מדי ניסיונות. נסו שוב בעוד דקה.'],
@@ -128,9 +129,28 @@ export async function hasPasskey(store: Store, email: string): Promise<boolean> 
   return (await store.listCredIds(email)).length > 0;
 }
 
+/** Base64url credential id as WebAuthn reports it (same bound as looksLikeCredentialJson). */
+export const CREDENTIAL_ID_RE = /^[\w-]{1,1024}$/;
+export const MAX_CREDENTIAL_IDS = 10;
+
 /**
- * Creation options for a new passkey: discoverable + user verification (Face ID / fingerprint / Windows Hello).
- * No authenticatorAttachment: a phone via cross-device (hybrid/QR) must remain possible; the hints only express a preference.
+ * Parse an optional `credentialIds` list from a request body: undefined when absent/empty,
+ * the de-duplicated ids when valid (array of ≤ 10 base64url strings), or 'invalid'.
+ */
+export function parseCredentialIds(v: unknown): string[] | undefined | 'invalid' {
+  if (v === undefined || v === null) return undefined;
+  if (!Array.isArray(v) || v.length > MAX_CREDENTIAL_IDS) return 'invalid';
+  if (!v.every((id) => typeof id === 'string' && CREDENTIAL_ID_RE.test(id))) return 'invalid';
+  const ids = [...new Set(v as string[])];
+  return ids.length ? ids : undefined;
+}
+
+/**
+ * Creation options for a new passkey, bound to THIS device's platform authenticator (Face ID / Touch ID /
+ * fingerprint / Windows Hello): authenticatorAttachment 'platform', discoverable, user verification required,
+ * hint 'client-device' only. No cross-device (hybrid / QR "phone or tablet") registrations: the frontend
+ * remembers the created credential id on this device and later asks for exactly that credential, so the
+ * browser goes straight to the biometric prompt. verifyPasskeyRegistration rejects 'cross-platform' responses.
  */
 export async function passkeyCreationOptions(rpId: string, user: UserRecord, existingIds: string[]): Promise<PublicKeyCredentialCreationOptionsJSON> {
   const options = await generateRegistrationOptions({
@@ -142,9 +162,14 @@ export async function passkeyCreationOptions(rpId: string, user: UserRecord, exi
     attestationType: 'none',
     timeout: 120_000,
     excludeCredentials: existingIds.map((id) => ({ id })),
-    authenticatorSelection: { residentKey: 'required', requireResidentKey: true, userVerification: 'required' },
+    authenticatorSelection: {
+      authenticatorAttachment: 'platform',
+      residentKey: 'required',
+      requireResidentKey: true,
+      userVerification: 'required',
+    },
   });
-  options.hints = ['client-device', 'hybrid'];
+  options.hints = ['client-device'];
   return options;
 }
 
@@ -161,6 +186,11 @@ export async function verifyPasskeyRegistration(
   now: number,
 ): Promise<{ ok: true; id: string; cred: CredentialRecord } | { ok: false; code: AuthErrorCode }> {
   if (!looksLikeCredentialJson(response)) return { ok: false, code: 'bad_request' };
+  // Browsers report the attachment of the authenticator actually used; a security key or a phone via QR is
+  // 'cross-platform'. (Absent on some older browsers — then the 'platform' requirement in the options applies.)
+  if ((response as { authenticatorAttachment?: unknown }).authenticatorAttachment === 'cross-platform') {
+    return { ok: false, code: 'not_platform' };
+  }
   const rp = rpInfo(req, config);
   try {
     const result = await verifyRegistrationResponse({

@@ -136,14 +136,30 @@ export const requestAccess = (input: { name: string; email: string; website?: st
 export const registerOptions = (invite: string, o?: RequestOpts) =>
   apiRequest<{ options: PublicKeyCredentialCreationOptionsJSON; user: AuthUser }>('POST', 'auth/register/options', { invite }, o);
 
+/** Platform-only registration (400 not_platform when a phone / security key was used); returns the new credential id. */
 export const registerVerify = (invite: string, response: RegistrationResponseJSON, o?: RequestOpts) =>
-  apiRequest<{ user: AuthUser }>('POST', 'auth/register/verify', { invite, response }, o);
+  apiRequest<{ user: AuthUser; credentialId?: string }>('POST', 'auth/register/verify', { invite, response }, o);
 
-export const loginOptions = (o?: RequestOpts) =>
-  apiRequest<{ options: PublicKeyCredentialRequestOptionsJSON }>('POST', 'auth/login/options', {}, o);
+/**
+ * With `credentialIds` (the passkeys this device created, see deviceKeys.ts) the options carry
+ * allowCredentials (transport internal) + hints ['client-device'] → straight to Face ID / Touch ID /
+ * Windows Hello, never the cross-device (QR) chooser.
+ */
+export const loginOptions = (credentialIds?: readonly string[], o?: RequestOpts) =>
+  apiRequest<{ options: PublicKeyCredentialRequestOptionsJSON }>(
+    'POST',
+    'auth/login/options',
+    credentialIds && credentialIds.length ? { credentialIds: [...credentialIds] } : {},
+    o,
+  );
 
+/** 401 unknown_credential (Hebrew error) when the passkey is no longer on any account. */
 export const loginVerify = (response: AuthenticationResponseJSON, o?: RequestOpts) =>
-  apiRequest<{ user: AuthUser }>('POST', 'auth/login/verify', { response }, o);
+  apiRequest<{ user: AuthUser; credentialId?: string }>('POST', 'auth/login/verify', { response }, o);
+
+/** Which of these credential ids the server still knows (stale local entries are dropped). */
+export const passkeyStatus = (credentialIds: readonly string[], o?: RequestOpts) =>
+  apiRequest<{ known: string[] }>('POST', 'auth/passkey/status', { credentialIds: [...credentialIds] }, { timeoutMs: 6000, ...o });
 
 export const logout = (o?: RequestOpts) => apiRequest('POST', 'auth/logout', {}, o);
 
@@ -164,7 +180,7 @@ export const passkeyAddOptions = (o?: RequestOpts) =>
   apiRequest<{ options: PublicKeyCredentialCreationOptionsJSON }>('POST', 'auth/passkey/add/options', {}, o);
 
 export const passkeyAddVerify = (response: RegistrationResponseJSON, o?: RequestOpts) =>
-  apiRequest<{ user?: AuthUser }>('POST', 'auth/passkey/add/verify', { response }, o);
+  apiRequest<{ user?: AuthUser; credentialId?: string }>('POST', 'auth/passkey/add/verify', { response }, o);
 
 export type MeState =
   | { state: 'signed-in'; user: AuthUser }
@@ -244,4 +260,13 @@ export const inviteStatus = (invite: string, o?: RequestOpts) =>
 /** Full-page navigation target for "continue with Google"; `next` passes the open-redirect guard (default `/`). */
 export function googleStartUrl(next: string | null | undefined): string {
   return `${API_BASE}auth/google/start?next=${encodeURIComponent(safeNext(next, BASE))}`;
+}
+
+/**
+ * Google round trip that comes back to /login?after=google&next=<next> (instead of straight to `next`),
+ * so /login can offer "enable quick sign-in with Face ID on this device" before continuing.
+ */
+export function googleStartUrlViaLogin(next: string | null | undefined): string {
+  const back = `${LOGIN_PATH}?after=google&next=${encodeURIComponent(safeNext(next, BASE))}`;
+  return `${API_BASE}auth/google/start?next=${encodeURIComponent(back)}`;
 }

@@ -23,6 +23,7 @@ import * as emailStart from './_routes/auth/email/start.js';
 import * as emailVerify from './_routes/auth/email/verify.js';
 import * as passkeyAddOptions from './_routes/auth/passkey/add/options.js';
 import * as passkeyAddVerify from './_routes/auth/passkey/add/verify.js';
+import * as passkeyStatus from './_routes/auth/passkey/status.js';
 import * as authProviders from './_routes/auth/providers.js';
 import * as inviteStatus from './_routes/auth/invite-status.js';
 import * as googleStart from './_routes/auth/google/start.js';
@@ -50,6 +51,7 @@ export const ROUTES: Record<string, RouteModule> = {
   'auth/email/verify': emailVerify,
   'auth/passkey/add/options': passkeyAddOptions,
   'auth/passkey/add/verify': passkeyAddVerify,
+  'auth/passkey/status': passkeyStatus,
   'auth/providers': authProviders,
   'auth/invite-status': inviteStatus,
   'auth/google/start': googleStart,

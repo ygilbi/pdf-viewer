@@ -40,7 +40,7 @@ describe('apiRequest', () => {
 
   it('passes the server error code and Hebrew message through', async () => {
     const fetchImpl = vi.fn(async () => jsonResponse(500, { ok: false, code: 'server_config', error: 'חסרה הגדרה' }));
-    const r = await loginOptions({ fetchImpl });
+    const r = await loginOptions(undefined, { fetchImpl });
     expect(r).toEqual({ ok: false, code: 'server_config', error: 'חסרה הגדרה', status: 500 });
   });
 

@@ -1,6 +1,7 @@
-// POST /api/auth/login/verify { response: AuthenticationResponseJSON } → { ok, user } + pv_session cookie.
+// POST /api/auth/login/verify { response: AuthenticationResponseJSON } → { ok, user, credentialId } + pv_session cookie.
 // Looks the passkey up by credential id, requires the user to be 'active', verifies the assertion
-// (user verification required) and stores the new signature counter.
+// (user verification required) and stores the new signature counter. Unknown credential → 401 unknown_credential
+// (no Face ID / fingerprint registered for this device: sign in with an email code and enable quick sign-in here).
 import { verifyAuthenticationResponse, type AuthenticationResponseJSON } from '@simplewebauthn/server';
 import {
   CHALLENGE_COOKIE_PATH,
@@ -77,5 +78,5 @@ export async function POST(req: Request): Promise<Response> {
     return authError('store_failed');
   }
   console.log(`[access] login ${user.email}`);
-  return jsonWithCookies({ ok: true, user: publicUser(user) }, [await sessionCookie(req, config, user), clearChal]);
+  return jsonWithCookies({ ok: true, user: publicUser(user), credentialId: response.id }, [await sessionCookie(req, config, user), clearChal]);
 }

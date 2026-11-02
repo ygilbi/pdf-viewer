@@ -1,5 +1,6 @@
-// POST /api/auth/passkey/add/verify { response: RegistrationResponseJSON } → { ok, user, hasPasskey: true }
-// For a signed-in user: verifies the attestation (same checks as registration) and stores the extra passkey.
+// POST /api/auth/passkey/add/verify { response: RegistrationResponseJSON } → { ok, user, hasPasskey: true, credentialId }
+// For a signed-in user: verifies the attestation (same checks as registration, incl.
+// platform authenticator only → 400 not_platform) and stores the extra passkey.
 import { authError, currentUser, publicUser, verifyPasskeyRegistration } from '../../../../_lib/auth.js';
 import { clientIp, configOrError, createRateLimiter, jsonResponse, readJsonBody } from '../../../../_lib/http.js';
 import { getStore, normEmail, type ChallengeRecord, type UserRecord } from '../../../../_lib/store.js';
@@ -40,5 +41,5 @@ export async function POST(req: Request): Promise<Response> {
     return authError('store_failed');
   }
   console.log(`[access] added passkey for ${user.email}`);
-  return jsonResponse({ ok: true, user: publicUser(user), hasPasskey: true });
+  return jsonResponse({ ok: true, user: publicUser(user), hasPasskey: true, credentialId: v.id });
 }

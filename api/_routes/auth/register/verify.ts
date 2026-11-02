@@ -1,5 +1,5 @@
-// POST /api/auth/register/verify { invite, response: RegistrationResponseJSON } → { ok, user } + pv_session cookie.
-// Verifies the attestation, stores the passkey, consumes the invite (single use) and activates the user.
+// POST /api/auth/register/verify { invite, response: RegistrationResponseJSON } → { ok, user, credentialId } + pv_session cookie.
+// Verifies the attestation (platform authenticator only — cross-platform → 400 not_platform), stores the passkey, consumes the invite (single use) and activates the user.
 import { authError, publicUser, sessionCookie, verifyPasskeyRegistration } from '../../../_lib/auth.js';
 import { checkInvite } from '../../../_lib/invite.js';
 import { clientIp, configOrError, createRateLimiter, jsonWithCookies, readJsonBody } from '../../../_lib/http.js';
@@ -47,5 +47,5 @@ export async function POST(req: Request): Promise<Response> {
   console.log(`[access] registered passkey for ${user.email}`);
 
   await notifyOwnerRegistered(req, user, 'passkey');
-  return jsonWithCookies({ ok: true, user: publicUser(user) }, [await sessionCookie(req, config, user)]);
+  return jsonWithCookies({ ok: true, user: publicUser(user), credentialId: v.id }, [await sessionCookie(req, config, user)]);
 }

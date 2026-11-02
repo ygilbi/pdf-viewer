@@ -14,6 +14,8 @@ export interface SoftAuthenticatorOptions {
   origin: string;
   /** Set false to simulate an authenticator that skipped user verification. */
   userVerified?: boolean;
+  /** Reported authenticatorAttachment (default 'platform'); 'cross-platform' simulates a security key / phone via QR. */
+  attachment?: 'platform' | 'cross-platform';
 }
 
 export class SoftAuthenticator {
@@ -82,12 +84,12 @@ export class SoftAuthenticator {
       id: this.id,
       rawId: this.id,
       type: 'public-key',
-      authenticatorAttachment: 'platform',
+      authenticatorAttachment: this.opts.attachment ?? 'platform',
       clientExtensionResults: {},
       response: {
         clientDataJSON: b64u(clientDataJSON),
         attestationObject: b64u(attestationObject),
-        transports: ['internal', 'hybrid'],
+        transports: this.opts.attachment === 'cross-platform' ? ['hybrid'] : ['internal'],
       },
     };
   }
@@ -102,7 +104,7 @@ export class SoftAuthenticator {
       id: this.id,
       rawId: this.id,
       type: 'public-key',
-      authenticatorAttachment: 'platform',
+      authenticatorAttachment: this.opts.attachment ?? 'platform',
       clientExtensionResults: {},
       response: {
         clientDataJSON: b64u(clientDataJSON),

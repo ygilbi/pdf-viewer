@@ -3,6 +3,8 @@
 export type Hint =
   /** Offer the "request access" form. */
   | 'request'
+  /** Offer "sign in with an e-mail code" (the passkey route failed on this device). */
+  | 'email'
   /** Offer the /api/health diagnostics link. */
   | 'health';
 
@@ -13,15 +15,20 @@ export interface UiError {
 }
 
 export const MSG = {
-  loginCancelled: 'הכניסה בוטלה.',
-  loginNoPasskeyHint:
-    'אין במכשיר הזה מפתח גישה? בחלון הכניסה בחר/י "טלפון או טאבלט" וסרוק/י את קוד ה-QR עם הטלפון שבו נרשמת — או בקש/י גישה.',
+  loginCancelled: 'הכניסה בוטלה או שלא נמצא Face ID רשום במכשיר הזה.',
   registerCancelled: 'הרישום בוטל. לחץ/י שוב כדי לרשום את Face ID / טביעת האצבע.',
   alreadyRegistered: 'המכשיר הזה כבר רשום — היכנס/י עם Face ID / טביעת אצבע.',
   domain: 'כתובת האתר אינה תואמת להגדרות השרת (RP ID / ORIGIN).',
   unsupported: 'המכשיר או הדפדפן אינם תומכים בכניסה ביומטרית מהסוג הזה. נסה/י דפדפן מעודכן (Safari, Chrome, Edge) או הטלפון.',
   generic: 'משהו השתבש. נסה/י שוב.',
+  quickLoginTitle: 'הפעל כניסה מהירה עם Face ID / טביעת אצבע במכשיר הזה',
+  quickLoginAdded: 'מעכשיו אפשר להיכנס במכשיר הזה עם Face ID',
+  quickLoginCancelled: 'ההפעלה בוטלה. אפשר לנסות שוב.',
+  noDeviceKeyNote: 'רוצה כניסה עם Face ID / טביעת אצבע? היכנס/י פעם אחת עם קוד במייל ואז הפעל/י כניסה מהירה במכשיר הזה.',
 } as const;
+
+/** The passkey used for sign-in is not on any account any more (drop it from this device's memory). */
+export const isUnknownCredential = (code: string | undefined) => code === 'unknown_credential';
 
 const CONFIG_CODES = new Set(['server_config', 'mail_failed']);
 
@@ -35,7 +42,8 @@ export function fromApi(r: { code: string; error: string; status?: number }, kin
   const hints: Hint[] = [];
   if (CONFIG_CODES.has(r.code)) hints.push('health');
   if (kind === 'register' && isInviteError(r.code, r.status)) hints.push('request');
-  if (kind === 'login' && /credential|not_found|not_registered|unknown|not_active|inactive|revoked|pending/i.test(r.code)) hints.push('request');
+  if (kind === 'login' && isUnknownCredential(r.code)) hints.push('email');
+  else if (kind === 'login' && /credential|not_found|not_registered|unknown|not_active|inactive|revoked|pending/i.test(r.code)) hints.push('request');
   return { message: r.error, code: r.code, hints };
 }
 
@@ -71,7 +79,7 @@ export function fromWebAuthn(err: unknown, kind: 'login' | 'register'): UiError 
   }
   if (code === 'ERROR_CEREMONY_ABORTED' || name === 'NotAllowedError' || name === 'AbortError') {
     return kind === 'login'
-      ? { message: `${MSG.loginCancelled} ${MSG.loginNoPasskeyHint}`, code: 'cancelled', hints: ['request'] }
+      ? { message: MSG.loginCancelled, code: 'cancelled', hints: ['email'] }
       : { message: MSG.registerCancelled, code: 'cancelled' };
   }
   if (code === 'ERROR_INVALID_DOMAIN' || code === 'ERROR_INVALID_RP_ID' || name === 'SecurityError') {

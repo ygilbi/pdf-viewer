@@ -1,12 +1,20 @@
 import { describe, expect, it } from 'vitest';
-import { MSG, formatCountdown, fromApi, fromEmailVerify, fromGoogleError, fromWebAuthn, isInviteError } from './messages';
+import { MSG, formatCountdown, fromApi, fromEmailVerify, fromGoogleError, fromWebAuthn, isInviteError, isUnknownCredential } from './messages';
 
 describe('fromWebAuthn', () => {
-  it('maps a cancelled login to the Hebrew message + QR / request hint', () => {
+  it('maps a cancelled login (or no Face ID on this device) to the Hebrew message + e-mail code hint', () => {
     const r = fromWebAuthn({ name: 'NotAllowedError', message: 'x' }, 'login');
-    expect(r.message).toContain(MSG.loginCancelled);
-    expect(r.message).toContain('QR');
-    expect(r.hints).toContain('request');
+    expect(r.message).toBe('הכניסה בוטלה או שלא נמצא Face ID רשום במכשיר הזה.');
+    expect(r.code).toBe('cancelled');
+    expect(r.hints).toEqual(['email']);
+    expect(fromWebAuthn({ code: 'ERROR_CEREMONY_ABORTED' }, 'login').hints).toEqual(['email']);
+  });
+  it('never mentions a QR code / phone or tablet', () => {
+    const all = [...Object.values(MSG), fromWebAuthn({ name: 'NotAllowedError' }, 'login').message, fromWebAuthn({ name: 'AbortError' }, 'register').message];
+    for (const m of all) {
+      expect(m).not.toMatch(/QR/i);
+      expect(m).not.toContain('טאבלט');
+    }
   });
   it('maps a cancelled registration', () => {
     expect(fromWebAuthn({ name: 'NotAllowedError' }, 'register').message).toBe(MSG.registerCancelled);
@@ -22,6 +30,20 @@ describe('fromWebAuthn', () => {
 });
 
 describe('fromApi', () => {
+  it('keeps the server text for unknown_credential / not_platform', () => {
+    expect(fromApi({ code: 'unknown_credential', error: 'מפתח הגישה אינו מוכר', status: 401 }, 'login')).toEqual({
+      message: 'מפתח הגישה אינו מוכר',
+      code: 'unknown_credential',
+      hints: ['email'],
+    });
+    expect(isUnknownCredential('unknown_credential')).toBe(true);
+    expect(isUnknownCredential('cancelled')).toBe(false);
+    expect(fromApi({ code: 'not_platform', error: 'יש לרשום במכשיר הזה', status: 400 }, 'register')).toEqual({
+      message: 'יש לרשום במכשיר הזה',
+      code: 'not_platform',
+      hints: [],
+    });
+  });
   it('adds the health hint for server_config / mail_failed', () => {
     expect(fromApi({ code: 'server_config', error: 'x' }, 'request').hints).toEqual(['health']);
     expect(fromApi({ code: 'mail_failed', error: 'x' }, 'request').hints).toEqual(['health']);

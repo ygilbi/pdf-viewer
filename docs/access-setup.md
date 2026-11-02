@@ -8,7 +8,7 @@
 2. **אישור במייל** — אתם (`OWNER_EMAIL`) מקבלים מייל עם **אשר גישה** / **דחה**. כל כפתור פותח **דף אישור**, והפעולה מתבצעת רק אחרי לחיצה נוספת (סורקי קישורים במערכות דואר לא יאשרו בטעות).
 3. **קישור הרשמה חד-פעמי** — אחרי האישור המשתמש מקבל מייל „הגישה שלך ל-PDF Viewer אושרה” עם קישור `…/login?invite=…`. הקישור תקף `INVITE_HOURS` שעות (ברירת מחדל 72) ואפשר להשתמש בו פעם אחת בלבד.
 4. **השלמת ההרשמה** — בקישור בוחרים אחת משתי דרכים:
-   - **מפתח גישה** — המכשיר מבקש Face ID / טביעת אצבע / Windows Hello ונוצר מפתח גישה שנשמר במכשיר (או בטלפון, דרך סריקת QR).
+   - **מפתח גישה** — המכשיר מבקש Face ID / טביעת אצבע / Windows Hello ונוצר מפתח גישה ששמור **במכשיר הזה בלבד** (אין אפשרות QR / „טלפון או טאבלט”; מפתח אבטחה חיצוני או טלפון אחר נדחים עם `not_platform`).
    - **המשך עם קוד במייל** — בלי מפתח גישה (`POST /api/auth/register/email`). הקישור עצמו נשלח לכתובת המייל, ולכן הוא מוכיח שהכתובת שייכת למשתמש.
 
    עם סיום ההרשמה אתם מקבלים מייל „<שם> נרשם/ה בהצלחה” (מצוין אם נרשם/ה עם קוד במייל) עם כפתור **בטל גישה** — שמרו אותו.
@@ -183,7 +183,7 @@ Vercel ← הפרויקט ← **Settings** ← **Environment Variables** (סבי
 3. במייל „הגישה שלך ל-PDF Viewer אושרה” לחצו **הרשמה ל-PDF Viewer** ← אשרו עם Face ID / טביעת אצבע / Windows Hello, או בחרו **המשך עם קוד במייל**.
 4. תועברו לאפליקציה. מעכשיו — **כניסה עם Face ID / טביעת אצבע**, או **כניסה עם קוד במייל**, בעמוד `/login`.
 
-מכשיר נוסף: מפתחות גישה של Apple (iCloud Keychain) ו-Google (Password Manager) מסתנכרנים אוטומטית בין המכשירים שלכם. במחשב בלי המפתח (למשל Windows) בוחרים בחלון הדפדפן „טלפון או טאבלט” וסורקים QR עם הטלפון הרשום. אפשר גם להיכנס במכשיר החדש עם קוד במייל ולהוסיף בו מפתח גישה נוסף.
+מכשיר נוסף: אין כניסה דרך QR / „טלפון או טאבלט”. בכל מכשיר חדש נכנסים פעם אחת עם קוד במייל (או Google) ומפעילים בו את הכניסה המהירה (Face ID / טביעת אצבע / Windows Hello) — נוצר מפתח גישה של המכשיר עצמו. האתר זוכר במכשיר את מזהה המפתח שנוצר בו, ובכניסה הבאה מבקש מהדפדפן בדיוק את המפתח הזה, כך שחלון Face ID / Windows Hello נפתח ישירות, בלי חלון בחירה ובלי QR. אם אין במכשיר מפתח רשום — הכניסה עם Face ID לא תוצג / תחזיר הודעה להיכנס עם קוד במייל.
 
 ## ביטול גישה
 
@@ -199,22 +199,23 @@ Vercel ← הפרויקט ← **Settings** ← **Environment Variables** (סבי
   - `POST /api/auth/request` `{ name, email, company?, message?, website? }` → `{ ok }` / `{ ok, alreadyActive: true }`. שגיאות: `validation` 400, `bad_json` 400, `too_large` 413, `rate_limited` 429, `server_config` 500, `mail_failed` 502, `store_failed` 502. `/api/request-access` הוא כינוי ישן לאותה פונקציה.
   - `GET|POST /api/approve?t=`, `/api/deny?t=`, `/api/revoke?t=` — דפי HTML לבעלים (GET = דף אישור, POST = ביצוע).
   - `POST /api/auth/register/options` `{ invite }` → `{ ok, options, user: { name, email } }`.
-  - `POST /api/auth/register/verify` `{ invite, response }` → `{ ok, user }` + עוגיית התחברות.
+  - `POST /api/auth/register/verify` `{ invite, response }` → `{ ok, user, credentialId }` + עוגיית התחברות. מאמת מסוג `cross-platform` (טלפון דרך QR / מפתח אבטחה) ← `not_platform` 400.
   - `POST /api/auth/register/email` `{ invite }` → `{ ok, user }` + עוגיית התחברות — הרשמה בלי מפתח גישה (אותה בדיקת הזמנה כמו ב-`register/options`; ההזמנה נצרכת).
   - `POST /api/auth/email/start` `{ email }` → `{ ok, sent: true }`. שגיאות: `not_registered` 404, `too_soon` 429 (עם `retryAfter` בשניות), `rate_limited` 429 (עם `retryAfter`), `bad_request` 400, `mail_failed` 502.
   - `POST /api/auth/email/verify` `{ email, code }` → `{ ok, user }` + עוגיית התחברות. שגיאות: `code_invalid` 400 (עם `attemptsLeft`), `code_expired` 410 (פג תוקף / לא נשלח / כבר נוצל), `too_many_attempts` 429, `not_active` 403.
-  - `POST /api/auth/passkey/add/options` `{}` → `{ ok, options, user }`; `POST /api/auth/passkey/add/verify` `{ response }` → `{ ok, user, hasPasskey: true }` — הוספת מפתח גישה למשתמש מחובר (401 `unauthenticated` בלי התחברות).
-  - `POST /api/auth/login/options` `{}` → `{ ok, options }` + עוגייה `pv_chal` (5 דקות).
-  - `POST /api/auth/login/verify` `{ response }` → `{ ok, user }` + עוגיית התחברות.
+  - `POST /api/auth/passkey/add/options` `{}` → `{ ok, options, user }`; `POST /api/auth/passkey/add/verify` `{ response }` → `{ ok, user, hasPasskey: true, credentialId }` — הוספת מפתח גישה של המכשיר הזה למשתמש מחובר (401 `unauthenticated` בלי התחברות; `not_platform` 400 כמו בהרשמה).
+  - `POST /api/auth/passkey/status` `{ credentialIds: string[] }` (עד 10, base64url) → `{ ok, known: string[] }` — אילו מהמזהים שהמכשיר זוכר עדיין רשומים ושייכים למשתמש פעיל (לניקוי רשומות מקומיות ישנות). בלי התחברות; מוגבל לפי IP.
+  - `POST /api/auth/login/options` `{ credentialIds?: string[] }` → `{ ok, options }` + עוגייה `pv_chal` (5 דקות). עם `credentialIds` (עד 10, base64url — המפתחות שהמכשיר זוכר): `allowCredentials` = המזהים הרשומים מתוכם (אם אף אחד לא רשום — כל המזהים שנשלחו, להתנהגות אחידה) עם `transports: ['internal']`; בלעדיו — `allowCredentials` ריק (discoverable). בשני המקרים `hints: ['client-device']`. קלט לא תקין ← `bad_request` 400.
+  - `POST /api/auth/login/verify` `{ response }` → `{ ok, user, credentialId }` + עוגיית התחברות. מפתח לא מוכר ← `unknown_credential` 401 („לא נמצא Face ID / טביעת אצבע רשום עבור המכשיר הזה…”).
   - `GET /api/auth/me` → `{ ok, user, hasPasskey }` או 401 `unauthenticated`. `POST /api/auth/logout` → `{ ok }`.
   - `GET /api/auth/providers` → `{ ok, google: boolean, passkey: true, emailCode: true }` — אילו דרכי כניסה להציג.
   - `GET /api/auth/google/start?next=/path` → 302 ל-Google (+ עוגייה `pv_gstate`). `GET /api/auth/google/callback?code&state` → 302 ל-`next` (משתמש פעיל, + עוגיית התחברות), ל-`/welcome` (משתמש מאושר שנרשם עכשיו, + עוגיית התחברות), ל-`/login?google=pending&email=<email>` (נשלחה/ממתינה בקשת גישה), ל-`/login?google=denied`, או ל-`/login?google=error&reason=<code>`.
   - `GET /api/auth/invite-status?invite=<token>` → `{ ok, email, name, status, expired, used }` — מצב ההזמנה (חתימה תקפה נדרשת; פג תוקף / נוצל מדווחים ולא נחסמים). `status`: `pending` / `approved` / `active` / `denied` / `revoked` / `unknown`. שגיאה: `invite_invalid` 410.
   - `GET /api/download` — דורש התחברות; אחרת 302 ל-`/login?next=%2Fapi%2Fdownload`. קישורי ההורדה הישנים מהמייל (`?t=`) **אינם נתמכים עוד** ומפנים גם הם ל-`/login`.
   - `GET /api/health` — אבחון (למעלה).
-- **קודי שגיאה בהרשמה/כניסה**: `invite_invalid` / `invite_expired` / `invite_used` (410), `not_approved` (403), `challenge_expired` (400 — קראו שוב ל-options ונסו שוב), `verification_failed` (400), `credential_exists` (409), `unknown_credential` (401), `not_active` (403), `rate_limited` (429), `store_failed` (502); כניסה בקוד: `not_registered` (404), `too_soon` (429), `code_invalid` (400), `code_expired` (410), `too_many_attempts` (429), `mail_failed` (502).
+- **קודי שגיאה בהרשמה/כניסה**: `invite_invalid` / `invite_expired` / `invite_used` (410), `not_approved` (403), `challenge_expired` (400 — קראו שוב ל-options ונסו שוב), `verification_failed` (400), `credential_exists` (409), `not_platform` (400), `unknown_credential` (401), `not_active` (403), `rate_limited` (429), `store_failed` (502); כניסה בקוד: `not_registered` (404), `too_soon` (429), `code_invalid` (400), `code_expired` (410), `too_many_attempts` (429), `mail_failed` (502).
 - **עוגיית התחברות** `pv_session`: חתומה ב-HMAC-SHA256 עם `SIGNING_SECRET`, `HttpOnly; Secure; SameSite=Lax; Path=/`. תקפה רק כל עוד המשתמש במצב `active` ובאותו "דור" התחברות (ביטול מקדם את הדור).
-- **WebAuthn** (`@simplewebauthn/server` v14): `residentKey: required`, `userVerification: required`, attestation `none`, ללא חיוב `authenticatorAttachment` (רמזים: `client-device`, `hybrid` — כך שטלפון דרך QR אפשרי). כניסה עם discoverable credentials (`allowCredentials` ריק), בדיקת מונה החתימות ועדכונו.
+- **WebAuthn** (`@simplewebauthn/server` v14): מפתחות קשורים למכשיר — `authenticatorAttachment: platform`, `residentKey: required`, `userVerification: required`, attestation `none`, רמז `client-device` בלבד (ללא `hybrid`, כלומר ללא QR); תגובת הרשמה עם `authenticatorAttachment: cross-platform` נדחית (`not_platform`). ה-`transports` של המפתח נשמרים. כניסה: עם `credentialIds` שהמכשיר זוכר ← `allowCredentials` עם `transports: ['internal']` (הדפדפן קופץ ישר ל-Face ID / Touch ID / Windows Hello); בלי ← discoverable (`allowCredentials` ריק). בדיקת מונה החתימות ועדכונו.
 - **Middleware** (`middleware.ts` בשורש, Vercel Routing Middleware; הלוגיקה ב-`api/_lib/gate.ts`): מגן על `/`, `/index.html`, דף הפתיחה `/welcome` / `/welcome.html` ונתיבי SPA בלי סיומת. בלי התחברות תקפה (חתימה + סטטוס ב-Redis) ← 302 ל-`/login?next=<נתיב>`. לא נוגע ב-`/login`, `/download`, `/api/*`, `/assets/*`, `/icons/*`, `/tools/*`, `/manifest.webmanifest`, `/sw.js`. בקשות שאינן ניווט (למשל ה-Service Worker ששומר את `index.html` במטמון) עוברות — קוד האפליקציה אינו סודי; ההגנה האמיתית היא על ה-API וההורדה. כשל ב-Redis ← הפניה ל-`/login` (fail closed).
 - **PWA offline**: ה-Service Worker עשוי להגיש `index.html` מהמטמון כשאין רשת — זה מקובל (אין גישה לשרת במצב כזה ממילא).
 - **Redis** (מפתחות): `user:{email}`, `cred:{credentialId}`, `usercreds:{email}` (Set), `invite:{jti}` (TTL = `INVITE_HOURS`), `challenge:{id}` (TTL 5 דקות), `otp:{email}` (`{ hash, exp, attempts }`, TTL 10 דקות), `otpatt:{email}` (מונה ניסיונות), `otpsend:{email}` (זמני שליחה, TTL שעה), `userinvites:{email}` (ההזמנות הפתוחות של משתמש — מבוטלות כשנרשם עם Google). ברשומת `user:{email}` נשמרים גם `requestedAt` (מתי נשלחה אליכם בקשה אחרונה) ו-`googleSub` (מזהה חשבון Google, לעיון בלבד).
