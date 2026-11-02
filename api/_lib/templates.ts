@@ -188,6 +188,8 @@ export function ownerRequestEmail(d: {
   approveUrl: string;
   denyUrl: string;
   ip?: string;
+  /** Set when the request came from "Sign in with Google" (the address is verified by Google). */
+  via?: 'google';
 }): Rendered {
   const html = emailShell(
     'בקשת גישה חדשה',
@@ -198,6 +200,7 @@ ${row('שם', esc(d.name))}
 ${row('אימייל', `<span dir="ltr">${esc(d.email)}</span>`)}
 ${d.company ? row('חברה', esc(d.company)) : ''}
 ${d.message ? row('הודעה', escMultiline(d.message)) : ''}
+${d.via === 'google' ? row('אימות', 'נשלח דרך „כניסה עם Google” — כתובת המייל אומתה על ידי Google') : ''}
 </table>
 <table role="presentation" cellpadding="0" cellspacing="0"><tr>
 <td style="padding:0 0 0 12px">${button(d.approveUrl, 'אשר גישה', '#16a34a')}</td>
@@ -212,6 +215,7 @@ ${d.message ? row('הודעה', escMultiline(d.message)) : ''}
     `אימייל: ${d.email}`,
     d.company ? `חברה: ${d.company}` : '',
     d.message ? `הודעה:\n${d.message}` : '',
+    d.via === 'google' ? 'אימות: נשלח דרך „כניסה עם Google” — כתובת המייל אומתה על ידי Google' : '',
     '',
     `אשר גישה: ${d.approveUrl}`,
     '',
@@ -221,7 +225,7 @@ ${d.message ? row('הודעה', escMultiline(d.message)) : ''}
   ]
     .filter((l, i, a) => l !== '' || a[i - 1] !== '')
     .join('\n');
-  return { subject: `בקשת גישה ל-PDF Viewer: ${d.name}`, html, text };
+  return { subject: `בקשת גישה ל-PDF Viewer: ${d.name}${d.via === 'google' ? ' (Google)' : ''}`, html, text };
 }
 
 /** Sent to an address typed into a public form, so it deliberately contains no user-supplied text. */
@@ -270,14 +274,17 @@ export function inviteEmail(d: { name: string; inviteUrl: string; hours: number 
 }
 
 /** Sent to the owner when someone completes passkey registration; carries the revoke link. */
-export function ownerRegisteredEmail(d: { name: string; email: string; revokeUrl: string; method?: 'passkey' | 'email' }): Rendered {
+export function ownerRegisteredEmail(d: { name: string; email: string; revokeUrl: string; method?: 'passkey' | 'email' | 'google' }): Rendered {
   const how =
     d.method === 'email'
       ? 'המשתמש/ת נרשם/ה עם קוד במייל (בלי מפתח גישה) ויכול/ה כעת להיכנס ל-PDF Viewer עם קוד חד-פעמי שנשלח למייל, ולהוריד את תוכנת ההתקנה.'
-      : 'המשתמש/ת השלים/ה רישום מפתח גישה ויכול/ה כעת להיכנס ל-PDF Viewer ולהוריד את תוכנת ההתקנה.';
+      : d.method === 'google'
+        ? 'המשתמש/ת נרשם/ה עם חשבון Google (כתובת המייל אומתה על ידי Google) ויכול/ה כעת להיכנס ל-PDF Viewer עם Google או עם קוד במייל, ולהוריד את תוכנת ההתקנה.'
+        : 'המשתמש/ת השלים/ה רישום מפתח גישה ויכול/ה כעת להיכנס ל-PDF Viewer ולהוריד את תוכנת ההתקנה.';
+  const suffix = d.method === 'google' ? ' (Google)' : '';
   const html = emailShell(
     'הרשמה הושלמה',
-    `<h1 style="font-size:20px;margin:0 0 12px">${esc(d.name)} נרשם/ה בהצלחה</h1>
+    `<h1 style="font-size:20px;margin:0 0 12px">${esc(d.name)} נרשם/ה בהצלחה${suffix}</h1>
 <p style="margin:0 0 12px">${how}</p>
 <table role="presentation" cellpadding="0" cellspacing="0" dir="rtl" style="margin:0 0 20px;${FONT};font-size:15px">
 ${row('שם', esc(d.name))}
@@ -287,7 +294,7 @@ ${row('אימייל', `<span dir="ltr">${esc(d.email)}</span>`)}
 <p style="margin:0;font-size:13px;color:#5b6470">שמרו את המייל הזה: הכפתור פותח דף אישור, והגישה תבוטל רק לאחר לחיצה נוספת. הקישור תקף לשנה.</p>`,
   );
   const text = [
-    `${d.name} נרשם/ה בהצלחה ל-PDF Viewer`,
+    `${d.name} נרשם/ה בהצלחה ל-PDF Viewer${suffix}`,
     '',
     how,
     '',
@@ -298,7 +305,7 @@ ${row('אימייל', `<span dir="ltr">${esc(d.email)}</span>`)}
     '',
     'הקישור פותח דף אישור; הגישה תבוטל רק לאחר לחיצה נוספת. תקף לשנה.',
   ].join('\n');
-  return { subject: `${d.name} נרשם/ה בהצלחה ל-PDF Viewer`, html, text };
+  return { subject: `${d.name} נרשם/ה בהצלחה ל-PDF Viewer${suffix}`, html, text };
 }
 
 export function denyEmail(d: { name: string }): Rendered {

@@ -82,3 +82,18 @@ export function fromWebAuthn(err: unknown, kind: 'login' | 'register'): UiError 
   }
   return { message: MSG.generic + (e?.message ? ` (${e.message})` : ''), code: 'webauthn' };
 }
+
+/** `/login?google=error&reason=…` (return from the Google sign-in) → Hebrew message; `retry` = offer "try again with Google". */
+export function fromGoogleError(reason: string | null | undefined): UiError & { retry: boolean } {
+  const r = (reason ?? '').toLowerCase();
+  const code = `google_${r || 'error'}`;
+  if (/cancel|access_denied|consent/.test(r)) return { message: 'הכניסה עם Google בוטלה.', code, retry: true };
+  if (/state|expired|timeout|csrf/.test(r)) return { message: 'פג תוקף הכניסה עם Google. נסה/י שוב.', code, retry: true };
+  if (/unverified|email_not_verified|verify/.test(r))
+    return { message: 'כתובת האימייל בחשבון Google אינה מאומתת. אמת/י אותה ב-Google או היכנס/י עם קוד למייל.', code, retry: false };
+  if (/no_email|email_missing|missing_email/.test(r)) return { message: 'לא התקבלה כתובת אימייל מ-Google. היכנס/י עם קוד למייל.', code, retry: false };
+  if (/config|disabled|not_enabled|unavailable/.test(r))
+    return { message: 'הכניסה עם Google אינה זמינה כרגע. היכנס/י עם קוד למייל.', code, hints: ['health'], retry: false };
+  if (/rate|too_many/.test(r)) return { message: 'יותר מדי ניסיונות. נסה/י שוב בעוד כמה דקות.', code, retry: true };
+  return { message: 'הכניסה עם Google נכשלה. נסה/י שוב.', code, retry: true };
+}

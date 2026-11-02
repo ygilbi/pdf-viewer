@@ -214,3 +214,34 @@ export const WELCOME_PATH = `${BASE}welcome`;
 export function loginUrl(next: string): string {
   return `${LOGIN_PATH}?next=${encodeURIComponent(next)}`;
 }
+
+// ---------------------------------------------------------------- providers / invite status / Google
+
+export interface AuthProviders {
+  google: boolean;
+  passkey: boolean;
+  emailCode: boolean;
+}
+
+/** GET auth/providers. Never throws; when unknown (old backend / offline) Google is hidden, the rest stays on. */
+export async function getProviders(o?: RequestOpts): Promise<AuthProviders> {
+  const r = await apiRequest<Partial<AuthProviders>>('GET', 'auth/providers', undefined, { timeoutMs: 6000, ...o });
+  if (!r.ok) return { google: false, passkey: true, emailCode: true };
+  return { google: r.google === true, passkey: r.passkey !== false, emailCode: r.emailCode !== false };
+}
+
+export interface InviteStatus {
+  email: string;
+  name: string;
+  /** User status behind the invite; 'active' = already registered (sign in instead of registering). */
+  status: string;
+}
+
+/** GET auth/invite-status?invite=… (410 / 400 for expired / used / unknown invites). */
+export const inviteStatus = (invite: string, o?: RequestOpts) =>
+  apiRequest<InviteStatus>('GET', `auth/invite-status?invite=${encodeURIComponent(invite)}`, undefined, o);
+
+/** Full-page navigation target for "continue with Google"; `next` passes the open-redirect guard (default `/`). */
+export function googleStartUrl(next: string | null | undefined): string {
+  return `${API_BASE}auth/google/start?next=${encodeURIComponent(safeNext(next, BASE))}`;
+}

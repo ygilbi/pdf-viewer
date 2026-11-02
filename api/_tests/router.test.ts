@@ -23,6 +23,12 @@ describe('api router', () => {
     }
   });
 
+  it('registers the Google sign-in, providers and invite-status routes (GET)', () => {
+    for (const r of ['auth/providers', 'auth/invite-status', 'auth/google/start', 'auth/google/callback']) {
+      expect(ROUTES[r]?.GET, r).toBeTypeOf('function');
+    }
+  });
+
   it('keeps the deployment under the Hobby 12-function limit', () => {
     const fns = readdirSync(join(__dirname, '..')).filter((n) => n.endsWith('.ts') && !n.startsWith('_'));
     expect(fns).toEqual(['router.ts']);

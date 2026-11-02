@@ -4,6 +4,9 @@ import {
   emailStart,
   emailVerify,
   getMe,
+  getProviders,
+  googleStartUrl,
+  inviteStatus,
   loginOptions,
   loginUrl,
   passkeyAddOptions,
@@ -215,5 +218,51 @@ describe('safeNext', () => {
 describe('loginUrl', () => {
   it('encodes next', () => {
     expect(loginUrl('/a?b=1&c=2')).toBe('/login?next=%2Fa%3Fb%3D1%26c%3D2');
+  });
+});
+
+describe('getProviders', () => {
+  it('reads the flags', async () => {
+    const fetchImpl = vi.fn(async () => jsonResponse(200, { ok: true, google: true, passkey: true, emailCode: true }));
+    expect(await getProviders({ fetchImpl })).toEqual({ google: true, passkey: true, emailCode: true });
+    expect((fetchImpl.mock.calls[0] as unknown as [string])[0]).toBe('/api/auth/providers');
+  });
+  it('google is off unless explicitly true', async () => {
+    const fetchImpl = vi.fn(async () => jsonResponse(200, { ok: true, google: 'yes' }));
+    expect(await getProviders({ fetchImpl })).toEqual({ google: false, passkey: true, emailCode: true });
+  });
+  it('hides Google when the endpoint is missing or the network fails', async () => {
+    expect((await getProviders({ fetchImpl: vi.fn(async () => jsonResponse(404, { ok: false, code: 'not_found', error: 'x' })) })).google).toBe(false);
+    const fetchImpl = vi.fn(async () => {
+      throw new TypeError('offline');
+    });
+    expect(await getProviders({ fetchImpl })).toEqual({ google: false, passkey: true, emailCode: true });
+  });
+});
+
+describe('inviteStatus', () => {
+  it('GETs with the encoded token', async () => {
+    const fetchImpl = vi.fn(async () => jsonResponse(200, { ok: true, email: 'd@x.co', name: 'דנה', status: 'active' }));
+    const r = await inviteStatus('a b/c+d', { fetchImpl });
+    expect(r).toEqual({ ok: true, email: 'd@x.co', name: 'דנה', status: 'active' });
+    const [url, init] = fetchImpl.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toBe('/api/auth/invite-status?invite=a%20b%2Fc%2Bd');
+    expect(init.method).toBe('GET');
+  });
+  it('passes invite errors through', async () => {
+    const fetchImpl = vi.fn(async () => jsonResponse(410, { ok: false, code: 'invite_expired', error: 'פג תוקף' }));
+    expect(await inviteStatus('t', { fetchImpl })).toEqual({ ok: false, code: 'invite_expired', error: 'פג תוקף', status: 410 });
+  });
+});
+
+describe('googleStartUrl', () => {
+  it('encodes a safe next', () => {
+    expect(googleStartUrl('/download?x=1')).toBe('/api/auth/google/start?next=%2Fdownload%3Fx%3D1');
+  });
+  it('falls back to / for missing or unsafe next', () => {
+    expect(googleStartUrl(null)).toBe('/api/auth/google/start?next=%2F');
+    expect(googleStartUrl('https://evil.com')).toBe('/api/auth/google/start?next=%2F');
+    expect(googleStartUrl('//evil.com')).toBe('/api/auth/google/start?next=%2F');
+    expect(googleStartUrl('/login?next=/x')).toBe('/api/auth/google/start?next=%2F');
   });
 });

@@ -18,6 +18,12 @@ export interface KvConfig {
   token: string;
 }
 
+/** Google OAuth client (optional feature: null when GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET are not both set). */
+export interface GoogleConfig {
+  clientId: string;
+  clientSecret: string;
+}
+
 export interface Config {
   signingSecret: string;
   ownerEmail: string;
@@ -32,6 +38,7 @@ export interface Config {
   githubToken: string;
   mail: MailConfig;
   kv: KvConfig;
+  google: GoogleConfig | null;
 }
 
 /** What a given endpoint needs. Only the listed groups are required to be present. */
@@ -55,6 +62,13 @@ export function kvFromEnv(env: Env = process.env): KvConfig | null {
   const url = str(env, 'KV_REST_API_URL') || str(env, 'UPSTASH_REDIS_REST_URL');
   const token = str(env, 'KV_REST_API_TOKEN') || str(env, 'UPSTASH_REDIS_REST_TOKEN');
   return url && token ? { url: url.replace(/\/+$/, ''), token } : null;
+}
+
+/** "Sign in with Google" is enabled only when both GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET are set. */
+export function googleFromEnv(env: Env = process.env): GoogleConfig | null {
+  const clientId = str(env, 'GOOGLE_CLIENT_ID');
+  const clientSecret = str(env, 'GOOGLE_CLIENT_SECRET');
+  return clientId && clientSecret ? { clientId, clientSecret } : null;
 }
 
 function num(env: Env, key: string, fallback: number, min: number, max: number, missing: string[]): number {
@@ -148,5 +162,6 @@ export function loadConfig(needs: Need[], env: Env = process.env): Config {
       from: str(env, 'MAIL_FROM') || `"PDF Viewer" <${user}>`,
     },
     kv: kv ?? { url: '', token: '' },
+    google: googleFromEnv(env),
   };
 }

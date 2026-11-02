@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { MSG, formatCountdown, fromApi, fromEmailVerify, fromWebAuthn, isInviteError } from './messages';
+import { MSG, formatCountdown, fromApi, fromEmailVerify, fromGoogleError, fromWebAuthn, isInviteError } from './messages';
 
 describe('fromWebAuthn', () => {
   it('maps a cancelled login to the Hebrew message + QR / request hint', () => {
@@ -62,5 +62,18 @@ describe('formatCountdown', () => {
     expect(formatCountdown(5.2)).toBe('0:06');
     expect(formatCountdown(75)).toBe('1:15');
     expect(formatCountdown(-3)).toBe('0:00');
+  });
+});
+
+describe('fromGoogleError', () => {
+  it('maps known reasons to Hebrew messages', () => {
+    expect(fromGoogleError('access_denied')).toMatchObject({ message: 'הכניסה עם Google בוטלה.', retry: true });
+    expect(fromGoogleError('state_mismatch').message).toMatch(/פג תוקף/);
+    expect(fromGoogleError('email_unverified')).toMatchObject({ retry: false });
+    expect(fromGoogleError('not_configured')).toMatchObject({ retry: false, hints: ['health'] });
+  });
+  it('falls back to a generic retryable error', () => {
+    expect(fromGoogleError(null)).toMatchObject({ message: 'הכניסה עם Google נכשלה. נסה/י שוב.', retry: true, code: 'google_error' });
+    expect(fromGoogleError('weird')).toMatchObject({ retry: true, code: 'google_weird' });
   });
 });

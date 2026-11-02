@@ -1,7 +1,7 @@
 // GET /api/health — configuration diagnostics for the site owner. Reports only booleans and short status
-// strings; never any secret value. Checks: env vars present, SMTP login (transporter.verify, 8 s timeout),
+// strings; never any secret value. env.google = Google sign-in configured (optional). Checks: env vars present, SMTP login (transporter.verify, 8 s timeout),
 // Redis reachability, GitHub release listing. Open it after every change of environment variables.
-import { MIN_SECRET_LENGTH, kvFromEnv, type MailConfig } from '../_lib/config.js';
+import { MIN_SECRET_LENGTH, googleFromEnv, kvFromEnv, type MailConfig } from '../_lib/config.js';
 import { describeSmtpError, getMailer } from '../_lib/mailer.js';
 import { checkGitHub } from '../_lib/github.js';
 import { clientIp, createRateLimiter, isLocalHost, jsonResponse, requestHost } from '../_lib/http.js';
@@ -37,6 +37,8 @@ export async function GET(req: Request): Promise<Response> {
     GITHUB_TOKEN: !!s(env.GITHUB_TOKEN),
     KV: !!kv,
   };
+  // Optional feature ("Sign in with Google"): reported, but does not affect `ok`.
+  const google = googleFromEnv(env) !== null;
 
   const smtpCheck = async (): Promise<string> => {
     if (!envReport.SMTP_USER || !envReport.SMTP_PASS) return 'skipped';
@@ -91,7 +93,7 @@ export async function GET(req: Request): Promise<Response> {
   const ok = Object.values(envReport).every(Boolean) && smtp === 'ok' && redis === 'ok' && gh.status === 'ok';
   return jsonResponse({
     ok,
-    env: envReport,
+    env: { ...envReport, google },
     smtp,
     redis,
     github: gh.status,

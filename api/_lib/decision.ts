@@ -121,9 +121,9 @@ export function revokeUrl(base: string, secret: string, name: string, email: str
 
 /**
  * Tell the owner (best effort, never throws) that a user completed registration; the mail carries the revoke link.
- * `method` = how they registered: with a passkey, or with the invite link alone (email code login).
+ * `method` = how they registered: with a passkey, with the invite link alone (email code login), or with Google.
  */
-export async function notifyOwnerRegistered(req: Request, user: UserRecord, method: 'passkey' | 'email'): Promise<void> {
+export async function notifyOwnerRegistered(req: Request, user: UserRecord, method: 'passkey' | 'email' | 'google'): Promise<void> {
   try {
     const full = loadConfig(['mail', 'owner']);
     const url = revokeUrl(appBaseUrl(req, full), full.signingSecret, user.name, user.email, REVOKE_TTL_DAYS);

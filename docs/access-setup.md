@@ -1,6 +1,6 @@
 # גישה ל-PDF Viewer — מדריך הגדרה
 
-האפליקציה (`/`) וההורדה של תוכנת ההתקנה ל-Windows (`/api/download`) פתוחות רק למשתמשים מאושרים. הכניסה היא בלי סיסמאות: עם **מפתח גישה (Passkey)** — Face ID, טביעת אצבע או Windows Hello — או, במחשבים בלי חיישן כזה, עם **קוד חד-פעמי במייל**.
+האפליקציה (`/`) וההורדה של תוכנת ההתקנה ל-Windows (`/api/download`) פתוחות רק למשתמשים מאושרים. הכניסה היא בלי סיסמאות: עם **מפתח גישה (Passkey)** — Face ID, טביעת אצבע או Windows Hello — או, במחשבים בלי חיישן כזה, עם **קוד חד-פעמי במייל**, או (אופציונלי) **כניסה עם Google**. בכל הדרכים הגישה עצמה דורשת את אישורכם.
 
 ## איך זה עובד
 
@@ -31,6 +31,56 @@
 - האבטחה של כניסה בקוד שקולה לאבטחת תיבת המייל של המשתמש. מפתח גישה חזק יותר — מומלץ להוסיף אותו במכשירים שתומכים בכך.
 
 המידע נשמר ב-**Upstash Redis** (משתמשים, מפתחות ציבוריים של ה-Passkeys, הזמנות חד-פעמיות). אין סיסמאות ואין מידע ביומטרי בשרת — טביעת האצבע / הפנים לא יוצאות מהמכשיר.
+
+## כניסה עם Google
+
+כפתור **כניסה עם Google** בעמוד `/login` (OAuth 2.0 / OpenID Connect, ללא ספריות צד-שלישי). Google רק **מאמת את כתובת המייל** — ההחלטה מי מקבל גישה נשארת שלכם:
+
+| מצב המשתמש (לפי המייל של חשבון Google) | מה קורה |
+|---|---|
+| `active` (כבר רשום/ה) | נכנס/ת מיד ← חוזר/ת לעמוד שממנו הגיע/ה (`next`, ברירת מחדל `/`) |
+| `approved` (אישרתם, אבל עוד לא השלים/ה הרשמה) | ההרשמה מושלמת עכשיו (Google אימת את המייל): הסטטוס הופך ל-`active`, קישורי ההרשמה שנשלחו מבוטלים, ואתם מקבלים מייל „<שם> נרשם/ה בהצלחה (Google)” עם כפתור **בטל גישה** ← `/welcome` |
+| לא מוכר / `pending` / `revoked` | נשלחת אליכם **בקשת גישה רגילה** (אשר/דחה), עם הציון „כתובת המייל אומתה על ידי Google”, והמשתמש/ת רואה „הבקשה ממתינה לאישור”. אם כבר יש בקשה ממתינה מ-24 השעות האחרונות — לא נשלח מייל נוסף |
+| `denied` | הודעה שהבקשה נדחתה; לא נשלח מייל |
+
+אחרי שאישרתם בקשה כזו, המשתמש/ת יכול/ה פשוט ללחוץ שוב **כניסה עם Google** (או להשתמש בקישור ההרשמה מהמייל).
+
+### הגדרה (פעם אחת, כ-10 דקות)
+
+1. היכנסו ל-<https://console.cloud.google.com> עם חשבון Google שלכם.
+2. בראש הדף ← בורר הפרויקטים ← **New Project** ← שם: `PDF Viewer` ← **Create**. ודאו שהפרויקט החדש נבחר.
+3. תפריט ☰ ← **APIs & Services** ← **OAuth consent screen** (בממשק החדש: **Google Auth Platform** ← **Branding** / **Audience**) ← **Get started**:
+   - **App name**: `PDF Viewer`
+   - **User support email**: הכתובת שלכם
+   - **Audience**: **External**
+   - **Contact information**: הכתובת שלכם ← **Create**.
+   - **Authorized domains** — השאירו ריק. `vercel.app` הוא דומיין ציבורי משותף ואי אפשר לרשום אותו כ-authorized domain; זה לא נדרש כל עוד האפליקציה מבקשת רק את ההרשאות הבסיסיות (רק עם דומיין מותאם אישית תוכלו להוסיף אותו כאן).
+   - **Scopes** (Data Access): אין צורך להוסיף דבר — האפליקציה מבקשת רק `openid`, `email`, `profile`. אלו הרשאות **לא רגישות**, ולכן **אין צורך באימות (verification) של Google**.
+4. **מצב Testing מול Production** (Audience ← Publishing status):
+   - במצב **Testing** רק משתמשים שהוספתם ב-**Test users** (עד 100 כתובות) יכולים להיכנס עם Google; לאחרים Google יציג שגיאה „Access blocked”.
+   - כדי שכל אחד יוכל לנסות ← **Publish app** ← **Confirm**. בגלל שההרשאות לא רגישות, הפרסום מיידי ואין תהליך בדיקה. (זה לא פותח גישה — כל מי שאינו מאושר עדיין יגיע לבקשת גישה שתצטרכו לאשר.)
+5. **APIs & Services** ← **Credentials** (או Google Auth Platform ← **Clients**) ← **Create credentials** ← **OAuth client ID**:
+   - **Application type**: **Web application**, **Name**: `PDF Viewer Vercel`
+   - **Authorized JavaScript origins**: `https://pdf-viewer-lemon.vercel.app`
+   - **Authorized redirect URIs**: `https://pdf-viewer-lemon.vercel.app/api/auth/google/callback` (בדיוק כך — בלי `/` בסוף)
+   - **Create**.
+6. בחלון שנפתח העתיקו את **Client ID** (`….apps.googleusercontent.com`) ואת **Client secret** (`GOCSPX-…`). (אפשר לחזור אליהם בכל שלב בעמוד ה-Client.)
+7. Vercel ← הפרויקט ← **Settings** ← **Environment Variables** (Production):
+   - `GOOGLE_CLIENT_ID` = ה-Client ID
+   - `GOOGLE_CLIENT_SECRET` = ה-Client secret (סמנו **Sensitive**)
+   - מומלץ גם `APP_URL` = `https://pdf-viewer-lemon.vercel.app` — כתובת ה-callback נבנית ממנו, והיא חייבת להיות זהה לזו שרשמתם ב-Google.
+8. **Deployments** ← הפריסה האחרונה ← **⋯** ← **Redeploy**.
+9. פתחו `https://pdf-viewer-lemon.vercel.app/api/health` ← צריך להופיע `"google": true` בתוך `env`. בעמוד `/login` יופיע הכפתור **כניסה עם Google** (`GET /api/auth/providers` מחזיר `google: true`).
+
+בלי שני המשתנים האלה הכפתור פשוט לא מוצג והכל עובד כמו קודם.
+
+תקלות נפוצות:
+- **`Error 400: redirect_uri_mismatch`** בדף של Google — ה-Redirect URI בשלב 5 שונה מהכתובת שהאתר שולח (`<APP_URL>/api/auth/google/callback`). בדקו `https`, את הדומיין, ושאין `/` בסוף. כניסה מכתובת Preview של Vercel לא תעבוד אם `APP_URL` לא מוגדר — זה צפוי.
+- **`Access blocked: … has not completed the Google verification process`** — האפליקציה במצב Testing והמשתמש לא ברשימת Test users. הוסיפו אותו, או פרסמו (שלב 4).
+- חזרה ל-`/login?google=error&reason=…`:
+  `disabled` (המשתנים חסרים), `cancelled` (המשתמש ביטל במסך של Google), `state` (עברו יותר מ-10 דקות, או שהכניסה הושלמה בדפדפן אחר — נסו שוב), `exchange` (בדרך כלל `GOOGLE_CLIENT_SECRET` שגוי או Redirect URI לא תואם — ראו Logs), `token` (אימות ה-ID token נכשל — בדרך כלל `GOOGLE_CLIENT_ID` שגוי), `unverified` (לחשבון Google אין מייל מאומת), `store` / `mail` / `config` (ראו `/api/health`), `google`, `rate_limited`.
+
+אבטחה: ה-`state` חתום (HMAC עם `SIGNING_SECRET`, תוקף 10 דקות) ומכיל `nonce` אקראי שנשמר גם בעוגייה `pv_gstate` (`HttpOnly; SameSite=Lax; Path=/api/auth/google`, 10 דקות) — כך הכניסה קשורה לדפדפן שהתחיל אותה. ה-ID token נבדק בשרת: חתימת RS256 מול המפתחות הציבוריים של Google (JWKS, נשמרים במטמון לפי `Cache-Control`), `iss` = `accounts.google.com`, `aud` = ה-Client ID, תוקף (`exp`), ה-`nonce`, ו-`email_verified: true`. `next` מתקבל רק כנתיב יחסי באותו אתר. ה-Client secret לא יוצא מהשרת.
 
 ## שלב 1 — מסד נתונים: Upstash Redis (דרך Vercel)
 
@@ -85,8 +135,9 @@ Vercel ← הפרויקט ← **Settings** ← **Environment Variables** (סבי
 | `SEND_DENY_EMAIL` | לא | `true` — מייל דחייה מנומס (ברירת מחדל `false`) |
 | `MAIL_FROM`, `SMTP_HOST`, `SMTP_PORT`, `SMTP_SECURE` | לא | ברירות מחדל ל-Gmail (`smtp.gmail.com`, `465`) |
 | `GITHUB_REPO` | לא | ברירת מחדל `ygilbi/pdf-viewer` |
+| `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` | לא | מפעילים **כניסה עם Google** (ראו „כניסה עם Google” למעלה). בלעדיהם הכפתור לא מוצג |
 
-סמנו את `SMTP_PASS`, `SIGNING_SECRET` ו-`GITHUB_TOKEN` כ-**Sensitive**.
+סמנו את `SMTP_PASS`, `SIGNING_SECRET`, `GITHUB_TOKEN` ו-`GOOGLE_CLIENT_SECRET` כ-**Sensitive**.
 
 > **חשוב — דומיין קבוע:** מפתח גישה קשור לדומיין שבו נרשם. אם תעברו לדומיין אחר (דומיין מותאם אישית), המשתמשים יצטרכו להירשם מחדש. בכתובות Preview של Vercel ההרשמה לא תעבוד כש-`APP_URL` מצביע על הדומיין הראשי — זה צפוי.
 
@@ -101,7 +152,7 @@ Vercel ← הפרויקט ← **Settings** ← **Environment Variables** (סבי
 ```json
 {
   "ok": true,
-  "env": { "OWNER_EMAIL": true, "SMTP_USER": true, "SMTP_PASS": true, "SIGNING_SECRET": true, "GITHUB_TOKEN": true, "KV": true },
+  "env": { "OWNER_EMAIL": true, "SMTP_USER": true, "SMTP_PASS": true, "SIGNING_SECRET": true, "GITHUB_TOKEN": true, "KV": true, "google": true },
   "smtp": "ok",
   "redis": "ok",
   "github": "ok",
@@ -114,6 +165,7 @@ Vercel ← הפרויקט ← **Settings** ← **Environment Variables** (סבי
 | מה רואים | מה לעשות |
 |---|---|
 | `env.X: false` | המשתנה X חסר (או `SIGNING_SECRET` קצר מ-32 תווים). הוסיפו ← Redeploy |
+| `env.google: false` | כניסה עם Google כבויה (אופציונלי — לא משפיע על `ok`). להפעלה: `GOOGLE_CLIENT_ID` + `GOOGLE_CLIENT_SECRET` ← Redeploy |
 | `smtp: "error: auth failed 535"` | Gmail דחה את ההתחברות: `SMTP_PASS` אינו סיסמת אפליקציה, הועתק עם טעות, או בוטל; או ש-`SMTP_USER` אינו אותו חשבון |
 | `smtp: "error: timeout"` / `"connection failed …"` | בעיית רשת/פורט — בדקו `SMTP_HOST`/`SMTP_PORT` |
 | `smtp: "skipped"` | `SMTP_USER` או `SMTP_PASS` חסרים |
@@ -155,6 +207,9 @@ Vercel ← הפרויקט ← **Settings** ← **Environment Variables** (סבי
   - `POST /api/auth/login/options` `{}` → `{ ok, options }` + עוגייה `pv_chal` (5 דקות).
   - `POST /api/auth/login/verify` `{ response }` → `{ ok, user }` + עוגיית התחברות.
   - `GET /api/auth/me` → `{ ok, user, hasPasskey }` או 401 `unauthenticated`. `POST /api/auth/logout` → `{ ok }`.
+  - `GET /api/auth/providers` → `{ ok, google: boolean, passkey: true, emailCode: true }` — אילו דרכי כניסה להציג.
+  - `GET /api/auth/google/start?next=/path` → 302 ל-Google (+ עוגייה `pv_gstate`). `GET /api/auth/google/callback?code&state` → 302 ל-`next` (משתמש פעיל, + עוגיית התחברות), ל-`/welcome` (משתמש מאושר שנרשם עכשיו, + עוגיית התחברות), ל-`/login?google=pending&email=<email>` (נשלחה/ממתינה בקשת גישה), ל-`/login?google=denied`, או ל-`/login?google=error&reason=<code>`.
+  - `GET /api/auth/invite-status?invite=<token>` → `{ ok, email, name, status, expired, used }` — מצב ההזמנה (חתימה תקפה נדרשת; פג תוקף / נוצל מדווחים ולא נחסמים). `status`: `pending` / `approved` / `active` / `denied` / `revoked` / `unknown`. שגיאה: `invite_invalid` 410.
   - `GET /api/download` — דורש התחברות; אחרת 302 ל-`/login?next=%2Fapi%2Fdownload`. קישורי ההורדה הישנים מהמייל (`?t=`) **אינם נתמכים עוד** ומפנים גם הם ל-`/login`.
   - `GET /api/health` — אבחון (למעלה).
 - **קודי שגיאה בהרשמה/כניסה**: `invite_invalid` / `invite_expired` / `invite_used` (410), `not_approved` (403), `challenge_expired` (400 — קראו שוב ל-options ונסו שוב), `verification_failed` (400), `credential_exists` (409), `unknown_credential` (401), `not_active` (403), `rate_limited` (429), `store_failed` (502); כניסה בקוד: `not_registered` (404), `too_soon` (429), `code_invalid` (400), `code_expired` (410), `too_many_attempts` (429), `mail_failed` (502).
@@ -162,5 +217,5 @@ Vercel ← הפרויקט ← **Settings** ← **Environment Variables** (סבי
 - **WebAuthn** (`@simplewebauthn/server` v14): `residentKey: required`, `userVerification: required`, attestation `none`, ללא חיוב `authenticatorAttachment` (רמזים: `client-device`, `hybrid` — כך שטלפון דרך QR אפשרי). כניסה עם discoverable credentials (`allowCredentials` ריק), בדיקת מונה החתימות ועדכונו.
 - **Middleware** (`middleware.ts` בשורש, Vercel Routing Middleware; הלוגיקה ב-`api/_lib/gate.ts`): מגן על `/`, `/index.html`, דף הפתיחה `/welcome` / `/welcome.html` ונתיבי SPA בלי סיומת. בלי התחברות תקפה (חתימה + סטטוס ב-Redis) ← 302 ל-`/login?next=<נתיב>`. לא נוגע ב-`/login`, `/download`, `/api/*`, `/assets/*`, `/icons/*`, `/tools/*`, `/manifest.webmanifest`, `/sw.js`. בקשות שאינן ניווט (למשל ה-Service Worker ששומר את `index.html` במטמון) עוברות — קוד האפליקציה אינו סודי; ההגנה האמיתית היא על ה-API וההורדה. כשל ב-Redis ← הפניה ל-`/login` (fail closed).
 - **PWA offline**: ה-Service Worker עשוי להגיש `index.html` מהמטמון כשאין רשת — זה מקובל (אין גישה לשרת במצב כזה ממילא).
-- **Redis** (מפתחות): `user:{email}`, `cred:{credentialId}`, `usercreds:{email}` (Set), `invite:{jti}` (TTL = `INVITE_HOURS`), `challenge:{id}` (TTL 5 דקות), `otp:{email}` (`{ hash, exp, attempts }`, TTL 10 דקות), `otpatt:{email}` (מונה ניסיונות), `otpsend:{email}` (זמני שליחה, TTL שעה).
+- **Redis** (מפתחות): `user:{email}`, `cred:{credentialId}`, `usercreds:{email}` (Set), `invite:{jti}` (TTL = `INVITE_HOURS`), `challenge:{id}` (TTL 5 דקות), `otp:{email}` (`{ hash, exp, attempts }`, TTL 10 דקות), `otpatt:{email}` (מונה ניסיונות), `otpsend:{email}` (זמני שליחה, TTL שעה), `userinvites:{email}` (ההזמנות הפתוחות של משתמש — מבוטלות כשנרשם עם Google). ברשומת `user:{email}` נשמרים גם `requestedAt` (מתי נשלחה אליכם בקשה אחרונה) ו-`googleSub` (מזהה חשבון Google, לעיון בלבד).
 - קוד: פונקציה אחת `api/router.ts` (מגבלת 12 פונקציות בתוכנית Hobby) שמפנה לנתיבים ב-`api/_routes/**` דרך המפה `ROUTES`; ספריות ב-`api/_lib/*`. בדיקות: `api/_tests/` (כולל מאמת WebAuthn תוכנתי שמייצר חתימות ES256 אמיתיות). הרצה: `npm run typecheck:api` ו-`npx vitest run`.

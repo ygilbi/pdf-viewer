@@ -6,6 +6,8 @@
 //   cred:{credentialId}   → CredentialRecord   (credentialId = base64url, as WebAuthn reports it)
 //   usercreds:{email}     → SET of credentialIds
 //   invite:{jti}          → { email }  TTL = INVITE_HOURS; deleted when used (single use)
+//   userinvites:{email}   → { jtis: string[] } TTL = INVITE_HOURS; outstanding invites of a user (so a
+//                           registration that bypasses the link, e.g. Google sign-in, can void them)
 //   challenge:{id}        → { challenge, ... } TTL = 5 min; deleted when read (single use)
 //   otp:{email}           → OtpRecord          TTL = 10 min; email login code (HMAC hash only, never the code)
 //   otpatt:{email}        → counter            TTL = 10 min; atomic count of verify attempts for the current code
@@ -27,6 +29,10 @@ export interface UserRecord {
   revokedAt?: number | null;
   /** Incremented on revoke; sessions carry the epoch they were issued in (see session.ts). */
   sessionEpoch?: number;
+  /** When the owner was last emailed an access request for this user (unix seconds). */
+  requestedAt?: number | null;
+  /** Google account id ("sub") of the last Google sign-in, for reference only. */
+  googleSub?: string;
 }
 
 export interface CredentialRecord {
@@ -114,8 +120,21 @@ export class Store {
     return ids.length;
   }
 
-  putInvite(jti: string, email: string, ttlSeconds: number): Promise<void> {
-    return this.kv.set(`invite:${jti}`, JSON.stringify({ email: normEmail(email) }), ttlSeconds);
+  async putInvite(jti: string, email: string, ttlSeconds: number): Promise<void> {
+    await this.kv.set(`invite:${jti}`, JSON.stringify({ email: normEmail(email) }), ttlSeconds);
+    const key = `userinvites:${normEmail(email)}`;
+    const prev = parse<{ jtis?: unknown }>(await this.kv.get(key));
+    const jtis = Array.isArray(prev?.jtis) ? prev.jtis.filter((j): j is string => typeof j === 'string') : [];
+    await this.kv.set(key, JSON.stringify({ jtis: [...jtis, jti].slice(-20) }), ttlSeconds);
+  }
+  /** Void every outstanding invite of a user (registration completed another way). Returns how many were removed. */
+  async consumeUserInvites(email: string): Promise<number> {
+    const key = `userinvites:${normEmail(email)}`;
+    const rec = parse<{ jtis?: unknown }>(await this.kv.get(key));
+    const jtis = Array.isArray(rec?.jtis) ? rec.jtis.filter((j): j is string => typeof j === 'string') : [];
+    const n = jtis.length ? await this.kv.del(...jtis.map((j) => `invite:${j}`)) : 0;
+    await this.kv.del(key);
+    return n;
   }
   async inviteExists(jti: string): Promise<boolean> {
     return (await this.kv.get(`invite:${jti}`)) != null;

@@ -25,6 +25,8 @@ export const ENV_KEYS = [
   'RP_ID',
   'UPSTASH_REDIS_REST_URL',
   'UPSTASH_REDIS_REST_TOKEN',
+  'GOOGLE_CLIENT_ID',
+  'GOOGLE_CLIENT_SECRET',
 ];
 
 export function setEnv(overrides: Record<string, string | undefined> = {}): void {

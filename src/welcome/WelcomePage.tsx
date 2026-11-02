@@ -13,7 +13,7 @@
 import { useEffect, useState, type ReactNode } from 'react';
 import { startRegistration } from '@simplewebauthn/browser';
 import { WordmarkLogo } from '../auth/Logo';
-import { WELCOME_PATH, getMe, loginUrl, passkeyAddOptions, passkeyAddVerify, type AuthUser } from '../auth/api';
+import { LOGIN_PATH, WELCOME_PATH, getMe, loginUrl, logout, passkeyAddOptions, passkeyAddVerify, type AuthUser } from '../auth/api';
 import { ArrowIcon, AuthButton, FingerprintIcon, Spinner, WindowsIcon, buttonCls, usePasskeySupport } from '../auth/ui';
 import { InstallButton } from '../pwa/InstallButton';
 import { useInstallPrompt } from '../pwa/installPrompt';
@@ -76,6 +76,8 @@ export default function WelcomePage() {
           )}
         </h1>
 
+        {me.user?.email && <SignedInLine email={me.user.email} />}
+
         <a href={BASE} data-testid="enter-app" className={buttonCls('primary')}>
           <span>כניסה לאפליקציה</span>
           <ArrowIcon />
@@ -86,6 +88,29 @@ export default function WelcomePage() {
         {me.user?.hasPasskey === false && <PasskeyCard />}
       </section>
     </main>
+  );
+}
+
+function SignedInLine({ email }: { email: string }) {
+  const [busy, setBusy] = useState(false);
+  const signOut = async () => {
+    setBusy(true);
+    await logout({ timeoutMs: 5000 });
+    location.replace(LOGIN_PATH);
+  };
+  return (
+    <p className="-mt-2 flex flex-wrap items-center justify-center gap-x-2 text-center text-xs text-slate-400" data-testid="welcome-signed-in">
+      <span>
+        מחובר/ת כ-
+        <bdi dir="ltr" className="text-slate-300">
+          {email}
+        </bdi>
+      </span>
+      <span aria-hidden="true">·</span>
+      <button type="button" onClick={signOut} disabled={busy} data-testid="welcome-logout" className="text-slate-400 underline decoration-slate-600 underline-offset-4 hover:text-slate-200 disabled:opacity-60">
+        {busy ? 'מתנתק…' : 'התנתק/י'}
+      </button>
+    </p>
   );
 }
 
