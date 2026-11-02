@@ -56,6 +56,21 @@ jobs:
           "version=$v" >> $env:GITHUB_OUTPUT
           Write-Host "Desktop version: $v"
 
+      # The app asks "make PDF Viewer the default?" once, in-app, on first launch.
+      # The installer must keep its registrations but never open Settings by itself again.
+      - name: Installer does not open Settings
+        shell: bash
+        run: |
+          f=desktop/build/installer.nsh
+          if grep -nEi '^[[:space:]]*(ExecShell|Exec|ExecWait|nsExec::)' "$f" || grep -ni 'ms-settings' "$f"; then
+            echo "::error file=$f::installer.nsh must not launch anything (no ms-settings / ExecShell) - the app asks once on first launch"
+            exit 1
+          fi
+          for k in 'Capabilities\FileAssociations' 'RegisteredApplications' 'OpenWithProgids' 'DefaultIcon'; do
+            grep -qF "$k" "$f" || { echo "::error file=$f::registration '$k' missing from installer.nsh"; exit 1; }
+          done
+          echo "installer.nsh: registrations present, no shell-execute"
+
       - name: Build web app into desktop/web-dist
         run: npm --prefix desktop run build:web
 
@@ -77,7 +92,8 @@ jobs:
           -Pdf "public/demo-facade.pdf"
           -OutDir "desktop/test/out"
 
-      - name: Upload smoke test screenshot
+      # app-screenshot.png (launch with a PDF) + first-run-default-dialog.png(.json): the one-time question
+      - name: Upload smoke test screenshots
         if: always()
         uses: actions/upload-artifact@v4
         with:
@@ -120,7 +136,8 @@ jobs:
 
             ### הגדרה כתוכנת ברירת מחדל ל-PDF
             - המתקין רושם את PDF Viewer כתוכנה שיודעת לפתוח קובצי PDF, ומגדיר לקובצי ה-PDF את הסמל שלה.
-            - Windows לא מאפשרת לאף תוכנה להפוך את עצמה לברירת המחדל לבד. לכן בסוף ההתקנה נפתח עמוד **הגדרות ← אפליקציות ← אפליקציות ברירת מחדל** של PDF Viewer: בוחרים בו את PDF Viewer עבור `.pdf` — פעם אחת בלבד.
+            - בהפעלה הראשונה התוכנה שואלת **פעם אחת בלבד**: "להפוך את PDF Viewer לתוכנת ברירת המחדל לקובצי PDF?" — **כן, הגדר** פותח את עמוד ההגדרות של PDF Viewer (בוחרים PDF Viewer עבור `.pdf` ← **הגדר ברירת מחדל**); **לא, תודה** — לא נשאל שוב. (Windows לא מאפשרת לאף תוכנה להפוך את עצמה לברירת המחדל לבד.)
+            - אפשר תמיד לחזור לזה מהתפריט העליון ← **הגדר כברירת מחדל ל‑PDF**.
             - דרך חלופית: לחיצה ימנית על קובץ PDF ← **פתח באמצעות** ← **בחר אפליקציה אחרת** ← **PDF Viewer** ← **תמיד**.
 
             ### הסרה
