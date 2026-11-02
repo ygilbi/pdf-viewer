@@ -264,14 +264,48 @@ def draw_pdf_label(img: Image.Image, x0, y0, x1, y1) -> None:
     img.alpha_composite(big.resize(img.size, Image.LANCZOS))
 
 
+def _largest_component(mask: np.ndarray) -> np.ndarray:
+    """Boolean mask of the largest 8-connected component (pure numpy/BFS, no scipy)."""
+    from collections import deque
+    h, w = mask.shape
+    lab = np.zeros((h, w), np.int32)
+    best, best_n, n = None, 0, 0
+    for y, x in zip(*np.nonzero(mask)):
+        if lab[y, x]:
+            continue
+        n += 1
+        lab[y, x] = n
+        q, count = deque([(y, x)]), 0
+        while q:
+            cy, cx = q.popleft()
+            count += 1
+            for dy in (-1, 0, 1):
+                for dx in (-1, 0, 1):
+                    ny, nx = cy + dy, cx + dx
+                    if 0 <= ny < h and 0 <= nx < w and mask[ny, nx] and not lab[ny, nx]:
+                        lab[ny, nx] = n
+                        q.append((ny, nx))
+        if count > best_n:
+            best, best_n = n, count
+    return lab == best
+
+
 def crop_mark_only(src: Path, dst: Path) -> None:
-    """Cut the tagline (last text row, below the widest blank row gap) off a wordmark PNG."""
-    im = Image.open(src)
-    rows = np.where(np.array(im)[:, :, 3].max(1) > 40)[0]
-    gaps = [(rows[i], rows[i + 1]) for i in range(len(rows) - 1) if rows[i + 1] - rows[i] > 3]
-    cut = int(max(gaps, key=lambda g: g[1] - g[0])[0]) + 2
-    box = im.getbbox()
-    im.crop((box[0], 0, box[2], cut)).save(dst, optimize=True)
+    """Keep only the line-art mark: drop the tagline row and the separate "PDF" letters
+    under it (everything except the largest connected shape), then crop tight."""
+    im = Image.open(src).convert("RGBA")
+    arr = np.array(im)
+    keep = _largest_component(arr[:, :, 3] > 30)
+    # Grow by 2px so the anti-aliased edge of the mark survives.
+    h, w = keep.shape
+    padded = np.pad(keep, 2)
+    grown = np.zeros_like(keep)
+    for dy in range(5):
+        for dx in range(5):
+            grown |= padded[dy:dy + h, dx:dx + w]
+    arr[:, :, 3] = np.where(grown, arr[:, :, 3], 0)
+    out = Image.fromarray(arr)
+    out.crop(out.getbbox()).save(dst, optimize=True)
 
 
 def wordmark_white(w_alpha: np.ndarray, width: int) -> Image.Image:

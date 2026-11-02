@@ -23,7 +23,7 @@ body:has(.download-page) { overflow: hidden; }
 }
 
 /* Takes all free height; the logo is the largest size that fits both axes.
-   Logo = mark (560x388) + two tagline lines; its total height ≈ 0.95 × its width. */
+   Logo = mark (560x363) + two tagline lines; its total height ≈ 0.86 × its width. */
 .logo-stage {
   flex: 1 1 auto;
   min-height: 0;
@@ -33,7 +33,7 @@ body:has(.download-page) { overflow: hidden; }
   justify-content: center;
   container-type: size;
 }
-.logo-fit { width: min(100cqw, 100cqh * 1.05); }
+.logo-fit { width: min(100cqw, 100cqh * 1.16); }
 
 /* Brand logo (src/auth/Logo.tsx) */
 .brand-logo {
@@ -61,7 +61,7 @@ body:has(.download-page) { overflow: hidden; }
 
 .login-page { height: auto; min-height: 100vh; min-height: 100dvh; }
 /* The page may grow (form open), so the logo gets an explicit size instead of filling the stage. */
-.login-logo .logo-fit { width: min(86vw, 40vh * 1.05, 680px); width: min(86vw, 40dvh * 1.05, 680px); }
+.login-logo .logo-fit { width: min(86vw, 40vh * 1.16, 680px); width: min(86vw, 40dvh * 1.16, 680px); }
 .login-logo { container-type: normal; flex: none; }
 
 /* /welcome: smaller logo, the cards below it are the content. */
