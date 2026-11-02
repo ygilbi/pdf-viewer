@@ -82,7 +82,7 @@ export function looksLikeCredentialJson(v: unknown): v is { id: string; rawId: s
 /** Error codes of the api/auth/* endpoints → HTTP status + Hebrew message for display. */
 export const AUTH_ERRORS = {
   bad_request: [400, 'הבקשה אינה תקינה.'],
-  invite_invalid: [400, 'קישור ההרשמה אינו תקין (ייתכן שהועתק חלקית).'],
+  invite_invalid: [410, 'קישור ההרשמה אינו תקין (ייתכן שהועתק חלקית).'],
   invite_expired: [410, 'תוקף קישור ההרשמה פג. אפשר לבקש גישה מחדש.'],
   invite_used: [410, 'קישור ההרשמה כבר נוצל. אם כבר נרשמתם — התחברו עם מפתח הגישה; אחרת בקשו גישה מחדש.'],
   not_approved: [403, 'הבקשה אינה מאושרת כרגע. אפשר לבקש גישה מחדש.'],
