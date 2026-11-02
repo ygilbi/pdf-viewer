@@ -11,6 +11,8 @@ import {
   loginUrl,
   passkeyAddOptions,
   passkeyAddVerify,
+  passkeyStatus,
+  googleStartUrlViaLogin,
   registerEmail,
   requestAccess,
   safeNext,
@@ -125,6 +127,21 @@ describe('e-mail code endpoints', () => {
     expect(lastCall(fetchImpl)).toEqual({ url: '/api/auth/register/email', method: 'POST', body: { invite: 'tok' } });
     const gone = vi.fn(async () => jsonResponse(410, { ok: false, code: 'invite_expired', error: 'פג' }));
     expect(await registerEmail('tok', { fetchImpl: gone })).toMatchObject({ ok: false, code: 'invite_expired', status: 410 });
+  });
+});
+
+describe('device passkey endpoints', () => {
+  it('login/options sends the remembered credential ids (none → {})', async () => {
+    const fetchImpl = vi.fn(async () => jsonResponse(200, { ok: true, options: { challenge: 'c' } }));
+    await loginOptions(['a', 'b'], { fetchImpl });
+    expect(lastCall(fetchImpl)).toEqual({ url: '/api/auth/login/options', method: 'POST', body: { credentialIds: ['a', 'b'] } });
+    await loginOptions([], { fetchImpl });
+    expect(lastCall(fetchImpl)).toEqual({ url: '/api/auth/login/options', method: 'POST', body: {} });
+  });
+  it('passkey/status returns the known ids', async () => {
+    const fetchImpl = vi.fn(async () => jsonResponse(200, { ok: true, known: ['a'] }));
+    expect(await passkeyStatus(['a', 'b'], { fetchImpl })).toEqual({ ok: true, known: ['a'] });
+    expect(lastCall(fetchImpl)).toEqual({ url: '/api/auth/passkey/status', method: 'POST', body: { credentialIds: ['a', 'b'] } });
   });
 });
 
@@ -252,6 +269,15 @@ describe('inviteStatus', () => {
   it('passes invite errors through', async () => {
     const fetchImpl = vi.fn(async () => jsonResponse(410, { ok: false, code: 'invite_expired', error: 'פג תוקף' }));
     expect(await inviteStatus('t', { fetchImpl })).toEqual({ ok: false, code: 'invite_expired', error: 'פג תוקף', status: 410 });
+  });
+});
+
+describe('googleStartUrlViaLogin', () => {
+  it('returns through /login?after=google with the guarded next', () => {
+    const u = new URL(googleStartUrlViaLogin('/download?x=1'), 'https://h.test');
+    expect(u.pathname).toBe('/api/auth/google/start');
+    expect(u.searchParams.get('next')).toBe('/login?after=google&next=%2Fdownload%3Fx%3D1');
+    expect(new URL(googleStartUrlViaLogin('//evil.com'), 'https://h.test').searchParams.get('next')).toBe('/login?after=google&next=%2F');
   });
 });
 

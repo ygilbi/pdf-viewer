@@ -6,21 +6,22 @@
  *    install dialog where `beforeinstallprompt` exists, short per-browser steps elsewhere; after
  *    `appinstalled` → "set as the default PDF app" steps for Windows / macOS
  *  - Windows browser (not the desktop app): "download the Windows software (recommended)" → /api/download
- *  - account without a passkey on a device with a built-in authenticator: optional "add quick sign-in"
+ *  - device with a built-in authenticator that remembers no passkey (deviceKeys.ts), unless dismissed in the
+ *    last 30 days: prominent "enable quick sign-in with Face ID / fingerprint on this device" (QuickLoginCard)
  *
  * The server middleware gates /welcome; the client also checks auth/me (401 → /login?next=/welcome).
  */
 import { useEffect, useState, type ReactNode } from 'react';
-import { startRegistration } from '@simplewebauthn/browser';
 import { WordmarkLogo } from '../auth/Logo';
-import { LOGIN_PATH, WELCOME_PATH, getMe, loginUrl, logout, passkeyAddOptions, passkeyAddVerify, type AuthUser } from '../auth/api';
-import { ArrowIcon, AuthButton, FingerprintIcon, Spinner, WindowsIcon, buttonCls, usePasskeySupport } from '../auth/ui';
+import { LOGIN_PATH, WELCOME_PATH, getMe, loginUrl, logout, type AuthUser } from '../auth/api';
+import { loadDeviceKeys } from '../auth/deviceKeys';
+import { QuickLoginCard, useQuickLoginOffer } from '../auth/QuickLogin';
+import { ArrowIcon, Spinner, WindowsIcon, buttonCls } from '../auth/ui';
 import { InstallButton } from '../pwa/InstallButton';
 import { useInstallPrompt } from '../pwa/installPrompt';
 import { WINDOWS_DEFAULT_APPS_URI, detectOs, isStandalone } from '../pwa/defaultApp';
 import { WINDOWS_DOWNLOAD_URL } from '../pwa/desktopDownload';
 import { isDesktopApp } from '../desktop/bridge';
-import { fromApi, fromWebAuthn } from '../login/messages';
 import { INSTALL_STEPS, defaultAppSteps, detectBrowser } from './installHelp';
 
 const BASE = import.meta.env.BASE_URL;
@@ -33,6 +34,9 @@ const DESKTOP_APP = isDesktopApp();
 
 export default function WelcomePage() {
   const [me, setMe] = useState<{ loading: boolean; user: AuthUser | null }>({ loading: true, user: null });
+  const [deviceKeyCount] = useState(() => loadDeviceKeys().length);
+  const offerQuick = useQuickLoginOffer(deviceKeyCount);
+  const [quickClosed, setQuickClosed] = useState(false);
 
   useEffect(() => {
     let live = true;
@@ -83,9 +87,9 @@ export default function WelcomePage() {
           <ArrowIcon />
         </a>
 
+        {offerQuick && me.user && !quickClosed && <QuickLoginCard user={me.user} onSkip={() => setQuickClosed(true)} />}
         {!standalone && !DESKTOP_APP && <InstallCard />}
         {OS === 'windows' && !DESKTOP_APP && <WindowsCard />}
-        {me.user?.hasPasskey === false && <PasskeyCard />}
       </section>
     </main>
   );
@@ -187,58 +191,6 @@ function WindowsCard() {
       <p className="text-xs text-slate-400">
         אם מופיעה אזהרת SmartScreen: לחץ/י <bdi dir="ltr">"More info"</bdi> ← <bdi dir="ltr">"Run anyway"</bdi>.
       </p>
-    </Card>
-  );
-}
-
-function PasskeyCard() {
-  const { supported, platform } = usePasskeySupport();
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [added, setAdded] = useState(false);
-  if (!supported || platform !== true) return null;
-
-  const add = async () => {
-    setError(null);
-    setBusy(true);
-    try {
-      const o = await passkeyAddOptions();
-      if (!o.ok) return setError(fromApi(o, 'register').message);
-      let response;
-      try {
-        response = await startRegistration({ optionsJSON: o.options });
-      } catch (err) {
-        const e = fromWebAuthn(err, 'register');
-        if (e.code === 'previously_registered') return setAdded(true); // this authenticator is already on the account
-        return setError(e.code === 'cancelled' ? 'ההוספה בוטלה.' : e.message);
-      }
-      const v = await passkeyAddVerify(response);
-      if (!v.ok) return v.code === 'credential_exists' ? setAdded(true) : setError(fromApi(v, 'register').message);
-      setAdded(true);
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  return (
-    <Card title="הוסף כניסה מהירה עם טביעת אצבע / Windows Hello" badge="אופציונלי" testId="passkey-card">
-      {added ? (
-        <p className="text-emerald-300" data-testid="passkey-added">
-          ✓ נוסף. מעכשיו אפשר להיכנס גם בלי קוד במייל.
-        </p>
-      ) : (
-        <>
-          <p className="text-slate-400">בפעם הבאה תיכנס/י בנגיעה — בלי לחכות לקוד במייל.</p>
-          <AuthButton testId="add-passkey" variant="secondary" icon={<FingerprintIcon />} busy={busy} onClick={add}>
-            הוסף טביעת אצבע / Windows Hello
-          </AuthButton>
-          {error && (
-            <p role="alert" className="text-center text-xs text-red-300" data-testid="passkey-error">
-              {error}
-            </p>
-          )}
-        </>
-      )}
     </Card>
   );
 }

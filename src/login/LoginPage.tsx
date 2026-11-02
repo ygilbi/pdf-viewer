@@ -4,11 +4,14 @@
  * Every load starts with GET auth/me (+ auth/providers in parallel):
  *  - signed in:        status card "ברוך/ה השב/ה, <name>!" → app (`next`) / welcome page / sign out.
  *                      No automatic redirect (no loops). With `?invite=` for another address: "sign out and continue".
- *  - default:          Google (when auth/providers says so), then e-mail code and passkey. Primary = passkey on
- *                      devices with a built-in authenticator, e-mail code everywhere else (most PCs).
- *                      e-mail: auth/email/start → 6-digit code → auth/email/verify → `next`
- *                      passkey: login/options → startAuthentication → login/verify → `next`
- *                      Google: full-page navigation to auth/google/start?next=…
+ *  - default:          this device remembers a passkey (deviceKeys.ts) → primary "כניסה עם Face ID / טביעת אצבע /
+ *                      Windows Hello": login/options {credentialIds} (prefetched) → startAuthentication straight
+ *                      to the built-in authenticator → login/verify → `next`. Then Google / e-mail code.
+ *                      No remembered passkey → NO biometric button (it would only show the cross-device QR
+ *                      chooser or cancel); Google / e-mail code + a note on how to enable quick sign-in.
+ *                      e-mail: auth/email/start → 6-digit code → auth/email/verify → quick-login offer → `next`
+ *                      Google: full-page navigation to auth/google/start?next=… (via /login?after=google when
+ *                      the quick-login offer applies)
  *  - "new user?":      tiny access-request form (name, email, honeypot) → auth/request, or "request with Google".
  *                      Already registered → welcome back + sign-in options with the e-mail prefilled.
  *  - `?invite=<token>`: auth/invite-status first. Already active → welcome back + sign-in options (e-mail prefilled,
@@ -16,16 +19,12 @@
  *                      "continue with e-mail code" (register/email) or Google → /welcome
  *  - `?google=pending|denied|error&reason=…&email=…`: the result of the Google round trip (URL cleaned right away).
  *
- * WebAuthn needs a user gesture on Safari, so the options are fetched ahead of the click
- * whenever possible (and refreshed when stale).
+ * iOS Safari needs navigator.credentials.* to run inside the click handler: the options are prefetched
+ * (usePrefetch: refreshed every 4 min and on focus / visibility) and the click never awaits the network
+ * before startAuthentication / startRegistration.
  */
 import { useCallback, useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react';
-import {
-  startAuthentication,
-  startRegistration,
-  type PublicKeyCredentialCreationOptionsJSON,
-  type PublicKeyCredentialRequestOptionsJSON,
-} from '@simplewebauthn/browser';
+import { startAuthentication, startRegistration } from '@simplewebauthn/browser';
 import {
   HEALTH_URL,
   WELCOME_PATH,
@@ -34,10 +33,12 @@ import {
   getMe,
   getProviders,
   googleStartUrl,
+  googleStartUrlViaLogin,
   inviteStatus,
   loginOptions,
   loginVerify,
   logout,
+  passkeyStatus,
   registerEmail,
   registerOptions,
   registerVerify,
@@ -45,20 +46,23 @@ import {
   safeNext,
   type AuthUser,
 } from '../auth/api';
+import { deviceLoginOptions, keepKnownDeviceKeys, loadDeviceKeys, platformRegistrationOptions, removeDeviceKey, saveDeviceKey, type DeviceKey } from '../auth/deviceKeys';
+import { usePrefetch } from '../auth/prefetch';
+import { QuickLoginCard, canOfferQuickLogin, useQuickLoginOffer } from '../auth/QuickLogin';
 import { CODE_LENGTH, EMAIL_MAX, NAME_MAX, isValidEmail, normalizeCode, normalizeEmail, validateRequest, type FieldErrors } from '../auth/validate';
 import { loadLastEmail, saveLastEmail } from '../auth/lastEmail';
 import { WordmarkLogo } from '../auth/Logo';
 import { ArrowIcon, AuthButton, Field, FingerprintIcon, GoogleButton, MailIcon, Note, OrDivider, Spinner, buttonCls, inputCls, usePasskeySupport } from '../auth/ui';
-import { RESEND_SECONDS, formatCountdown, fromApi, fromEmailVerify, fromGoogleError, fromWebAuthn, isInviteError, type UiError } from './messages';
+import { MSG, RESEND_SECONDS, formatCountdown, fromApi, fromEmailVerify, fromGoogleError, fromWebAuthn, isInviteError, isUnknownCredential, type UiError } from './messages';
 
 const BASE = import.meta.env.BASE_URL;
-/** Server challenges live ~5 min; refetch well before that. */
-const OPTIONS_TTL_MS = 2.5 * 60_000;
 
 const params = new URLSearchParams(location.search);
 const INVITE = params.get('invite')?.trim() || null;
 const NEXT = safeNext(params.get('next'), BASE);
 const GOOGLE_URL = googleStartUrl(NEXT);
+/** Back from Google through /login (see googleStartUrlViaLogin): offer quick sign-in, then `next`. */
+const AFTER_GOOGLE = params.get('after') === 'google';
 
 type GoogleReturn = { kind: 'pending'; email: string | null } | { kind: 'denied' } | { kind: 'error'; reason: string | null } | null;
 const GOOGLE_RETURN: GoogleReturn = (() => {
@@ -72,8 +76,9 @@ const GOOGLE_RETURN: GoogleReturn = (() => {
 /** Drop the one-shot Google result params (keep `next` / `invite`) so a reload doesn't repeat the message. */
 function cleanGoogleParams() {
   const url = new URL(location.href);
-  if (!['google', 'reason', 'email'].some((k) => url.searchParams.has(k))) return;
-  for (const k of ['google', 'reason', 'email']) url.searchParams.delete(k);
+  const keys = ['google', 'reason', 'email', 'after'];
+  if (!keys.some((k) => url.searchParams.has(k))) return;
+  for (const k of keys) url.searchParams.delete(k);
   try {
     history.replaceState(history.state, '', url.pathname + url.search + url.hash);
   } catch {
@@ -81,7 +86,7 @@ function cleanGoogleParams() {
   }
 }
 
-const PASSKEY_LABEL = 'כניסה עם טביעת אצבע / זיהוי פנים / Windows Hello';
+const PASSKEY_LABEL = 'כניסה עם Face ID / טביעת אצבע / Windows Hello';
 
 function go(path: string) {
   location.replace(path);
@@ -97,9 +102,13 @@ interface PanelProps {
   setDone(s: string | null): void;
 }
 
+type SignInMode = { kind: 'choose' } | { kind: 'email'; autoSend: boolean } | { kind: 'quick'; user: AuthUser | undefined };
+
 type View =
   | { kind: 'loading' }
   | { kind: 'signed-in'; user: AuthUser }
+  /** Just back from Google on a device that could use quick sign-in: offer it, then `next`. */
+  | { kind: 'after-google'; user: AuthUser }
   | { kind: 'login' }
   /** Already registered (active invite, or "request access" for a registered address): sign in, e-mail prefilled. */
   | { kind: 'welcome-back'; name?: string; email: string }
@@ -115,15 +124,27 @@ export default function LoginPage() {
   const [error, setError] = useState<UiError | null>(null);
   const [done, setDone] = useState<string | null>(null);
   const [showRequest, setShowRequest] = useState(false);
+  const [keys, setKeys] = useState<DeviceKey[]>(() => loadDeviceKeys());
+  const [mode, setMode] = useState<SignInMode>({ kind: 'choose' });
 
   useEffect(() => {
     cleanGoogleParams();
     let live = true;
     void getProviders().then((p) => live && setGoogle(p.google));
+    // Drop remembered passkeys the server no longer knows (deleted / revoked account).
+    const ids = loadDeviceKeys().map((k) => k.id);
+    if (ids.length)
+      void passkeyStatus(ids).then((r) => {
+        if (live && r.ok && Array.isArray(r.known)) setKeys(keepKnownDeviceKeys(r.known));
+      });
     void (async () => {
       const me = await getMe();
       if (!live) return;
       if (me.state === 'signed-in') {
+        if (AFTER_GOOGLE && !INVITE) {
+          if (await canOfferQuickLogin()) return live && setView({ kind: 'after-google', user: me.user });
+          return go(NEXT);
+        }
         setView({ kind: 'signed-in', user: me.user });
         if (INVITE) {
           const s = await inviteStatus(INVITE);
@@ -159,7 +180,13 @@ export default function LoginPage() {
   // After a failed Google round trip the error box carries its own "try again with Google" button.
   const googleRetry = GOOGLE_RETURN?.kind === 'error' && fromGoogleError(GOOGLE_RETURN.reason).retry;
   const panel = { supported, platform, google: google && !googleRetry, setError, setDone };
-  const showRequestToggle = !done && (view.kind === 'login' || view.kind === 'register' || view.kind === 'invite-error');
+  const signIn = { keys, setKeys, mode, setMode };
+  const openEmail = useCallback(() => {
+    setError(null);
+    setMode({ kind: 'email', autoSend: false });
+    setView((v) => (v.kind === 'login' || v.kind === 'welcome-back' ? v : { kind: 'login' }));
+  }, []);
+  const showRequestToggle = !done && mode.kind !== 'quick' && (view.kind === 'login' || view.kind === 'register' || view.kind === 'invite-error');
 
   return (
     <main className="page-shell login-page" dir="rtl">
@@ -171,8 +198,22 @@ export default function LoginPage() {
         {GOOGLE_RETURN && view.kind !== 'signed-in' && <GoogleResult result={GOOGLE_RETURN} />}
 
         {view.kind === 'loading' && <Spinner label="בודק את מצב הכניסה…" />}
-        {view.kind === 'signed-in' && <SignedInCard user={view.user} inviteEmail={inviteEmail} />}
-        {view.kind === 'login' && <SignInOptions {...panel} />}
+        {view.kind === 'signed-in' && <SignedInCard user={view.user} inviteEmail={inviteEmail} deviceKeyCount={keys.length} />}
+        {view.kind === 'after-google' && (
+          <>
+            <p className="text-center text-lg text-slate-100" data-testid="after-google">
+              {view.user.name ? (
+                <>
+                  שלום <bdi className="font-semibold">{view.user.name}</bdi> — נכנסת בהצלחה.
+                </>
+              ) : (
+                'נכנסת בהצלחה.'
+              )}
+            </p>
+            <QuickLoginCard user={view.user} skipLabel="דלג" onAdded={() => window.setTimeout(() => go(NEXT), 1400)} onSkip={() => go(NEXT)} />
+          </>
+        )}
+        {view.kind === 'login' && <SignInOptions {...panel} {...signIn} />}
         {view.kind === 'welcome-back' && (
           <>
             <div className="text-center" data-testid="welcome-back">
@@ -187,7 +228,7 @@ export default function LoginPage() {
               </p>
               <p className="mt-1 text-sm leading-relaxed text-slate-400">את/ה כבר רשום/ה — בחר/י איך להיכנס:</p>
             </div>
-            <SignInOptions {...panel} email={view.email} />
+            <SignInOptions {...panel} {...signIn} email={view.email} />
           </>
         )}
         {view.kind === 'register' && <RegisterPanel {...panel} />}
@@ -202,7 +243,7 @@ export default function LoginPage() {
             {done}
           </Note>
         )}
-        {error && <ErrorBox error={error} onRequest={openRequest} />}
+        {error && <ErrorBox error={error} onRequest={openRequest} onEmail={openEmail} />}
 
         {showRequestToggle && (
           <RequestAccess
@@ -225,8 +266,10 @@ export default function LoginPage() {
 
 // ---------------------------------------------------------------- signed in / Google result
 
-function SignedInCard({ user, inviteEmail }: { user: AuthUser; inviteEmail?: string }) {
+function SignedInCard({ user, inviteEmail, deviceKeyCount }: { user: AuthUser; inviteEmail?: string; deviceKeyCount: number }) {
   const [busy, setBusy] = useState(false);
+  const offer = useQuickLoginOffer(deviceKeyCount);
+  const [quickClosed, setQuickClosed] = useState(false);
   const name = user.name?.trim();
   const otherInvite = !!inviteEmail && !sameEmail(inviteEmail, user.email);
   const signOut = async () => {
@@ -276,6 +319,7 @@ function SignedInCard({ user, inviteEmail }: { user: AuthUser; inviteEmail?: str
       <LinkButton onClick={signOut} testId="logout" disabled={busy}>
         {busy ? 'מתנתק…' : 'התנתק/י'}
       </LinkButton>
+      {offer && !otherInvite && !quickClosed && <QuickLoginCard user={user} onSkip={() => setQuickClosed(true)} />}
     </div>
   );
 }
@@ -312,58 +356,91 @@ function GoogleResult({ result }: { result: NonNullable<GoogleReturn> }) {
 
 // ---------------------------------------------------------------- sign-in options
 
-/** Google / e-mail code / passkey. With `email` (a known, registered address): one-click "send me a code". */
-function SignInOptions({ supported, platform, google, setError, setDone, email }: PanelProps & { email?: string }) {
-  const pre = useRef<{ options: PublicKeyCredentialRequestOptionsJSON; at: number } | null>(null);
-  const [mode, setMode] = useState<{ kind: 'choose' } | { kind: 'email'; autoSend: boolean }>({ kind: 'choose' });
+/**
+ * This device remembers a passkey → biometric sign-in first (straight to Face ID / Touch ID / Windows Hello),
+ * then Google / e-mail code. Otherwise Google / e-mail code only, plus how to enable quick sign-in.
+ * With `email` (a known, registered address): one-click "send me a code".
+ */
+function SignInOptions({
+  supported,
+  platform,
+  google,
+  setError,
+  setDone,
+  email,
+  keys,
+  setKeys,
+  mode,
+  setMode,
+}: PanelProps & { email?: string; keys: DeviceKey[]; setKeys(k: DeviceKey[]): void; mode: SignInMode; setMode(m: SignInMode): void }) {
+  // Welcome-back for a known address: only that account's passkeys.
+  const usable = supported ? (email ? keys.filter((k) => !k.email || sameEmail(k.email, email)) : keys) : [];
+  const ids = usable.map((k) => k.id);
+  const idsKey = ids.join(',');
+  const fetcher = useCallback(() => loginOptions(idsKey.split(',')), [idsKey]);
+  const pre = usePrefetch(ids.length ? fetcher : null, idsKey);
   const [busy, setBusy] = useState(false);
-
-  const prefetch = useCallback(async () => {
-    const r = await loginOptions();
-    if (r.ok) pre.current = { options: r.options, at: Date.now() };
-    return r;
-  }, []);
-
-  useEffect(() => {
-    if (supported) void prefetch();
-  }, [supported, prefetch]);
-
-  const signIn = async () => {
-    setError(null);
-    setBusy(true);
-    try {
-      let options = pre.current && Date.now() - pre.current.at < OPTIONS_TTL_MS ? pre.current.options : null;
-      pre.current = null; // a challenge is single-use
-      if (!options) {
-        const r = await prefetch();
-        pre.current = null;
-        if (!r.ok) return setError(fromApi(r, 'login'));
-        options = r.options;
-      }
-      let response;
-      try {
-        response = await startAuthentication({ optionsJSON: options });
-      } catch (err) {
-        setError(fromWebAuthn(err, 'login'));
-        void prefetch(); // fresh challenge for the next try
-        return;
-      }
-      const v = await loginVerify(response);
-      if (!v.ok) {
-        setError(fromApi(v, 'login'));
-        void prefetch();
-        return;
-      }
-      welcomeBack(v.user);
-    } finally {
-      setBusy(false);
-    }
-  };
+  const offerQuick = useQuickLoginOffer(keys.length);
 
   const welcomeBack = (user: AuthUser | undefined) => {
     setDone(user?.name ? `שלום ${user.name} — נכנסת בהצלחה. מעביר…` : 'נכנסת בהצלחה. מעביר…');
     go(NEXT);
   };
+
+  // Click handler: synchronous up to navigator.credentials.get (iOS Safari user activation) — no awaited fetch.
+  const signIn = () => {
+    const taken = pre.take();
+    if (!taken) return; // stale: take() started a refresh, the button shows "מכין…"
+    const ceremony = startAuthentication({ optionsJSON: deviceLoginOptions(taken.options, ids) });
+    setError(null);
+    setBusy(true);
+    void (async () => {
+      try {
+        let response;
+        try {
+          response = await ceremony;
+        } catch (err) {
+          setError(fromWebAuthn(err, 'login'));
+          void pre.refresh(); // fresh challenge for the next try
+          return;
+        }
+        const v = await loginVerify(response);
+        if (!v.ok) {
+          if (isUnknownCredential(v.code)) setKeys(removeDeviceKey(response.id));
+          setError(fromApi(v, 'login'));
+          void pre.refresh();
+          return;
+        }
+        setKeys(saveDeviceKey({ id: v.credentialId || response.id, email: v.user?.email, name: v.user?.name }));
+        welcomeBack(v.user);
+      } finally {
+        setBusy(false);
+      }
+    })();
+  };
+
+  const openEmail = (autoSend: boolean) => {
+    setError(null);
+    setMode({ kind: 'email', autoSend });
+  };
+
+  if (mode.kind === 'quick')
+    return (
+      <>
+        <Note tone="ok" testId="done">
+          {mode.user?.name ? `שלום ${mode.user.name} — נכנסת בהצלחה.` : 'נכנסת בהצלחה.'}
+        </Note>
+        <QuickLoginCard
+          user={mode.user}
+          skipLabel="דלג"
+          onAdded={() => {
+            setKeys(loadDeviceKeys());
+            window.setTimeout(() => go(NEXT), 1400);
+          }}
+          onSkip={() => welcomeBack(mode.user)}
+        />
+      </>
+    );
 
   if (mode.kind === 'email')
     return (
@@ -375,58 +452,62 @@ function SignInOptions({ supported, platform, google, setError, setDone, email }
           setError(null);
           setMode({ kind: 'choose' });
         }}
-        onSuccess={welcomeBack}
+        onSuccess={(user) => {
+          // Built-in authenticator but no passkey remembered here: offer quick sign-in before leaving.
+          if (offerQuick) {
+            setError(null);
+            setMode({ kind: 'quick', user });
+          } else welcomeBack(user);
+        }}
       />
     );
 
-  // Most PCs have no fingerprint reader / camera: e-mail code first unless a built-in authenticator exists.
-  const passkeyFirst = supported && platform === true && !email;
-  const openEmail = (autoSend: boolean) => {
-    setError(null);
-    setMode({ kind: 'email', autoSend });
-  };
+  const hasKey = ids.length > 0;
+  const first = usable[0];
   const emailBtn = email ? (
-    <AuthButton key="email" testId="send-code-to" variant="primary" icon={<MailIcon />} disabled={busy} onClick={() => openEmail(true)}>
+    <AuthButton key="email" testId="send-code-to" variant={hasKey ? 'secondary' : 'primary'} icon={<MailIcon />} disabled={busy} onClick={() => openEmail(true)}>
       שלח לי קוד ל-
       <bdi dir="ltr" className="break-all">
         {email}
       </bdi>
     </AuthButton>
   ) : (
-    <AuthButton key="email" testId="login-email" variant={passkeyFirst ? 'secondary' : 'primary'} icon={<MailIcon />} disabled={busy} onClick={() => openEmail(false)}>
+    <AuthButton key="email" testId="login-email" variant={hasKey ? 'secondary' : 'primary'} icon={<MailIcon />} disabled={busy} onClick={() => openEmail(false)}>
       כניסה עם קוד למייל
     </AuthButton>
   );
-  const passkeyBtn = supported && (
-    <AuthButton key="passkey" testId="login" variant={passkeyFirst ? 'primary' : 'secondary'} icon={<FingerprintIcon />} busy={busy} onClick={signIn}>
-      {PASSKEY_LABEL}
-    </AuthButton>
-  );
+  const googleBtn = google && <GoogleButton href={offerQuick ? googleStartUrlViaLogin(NEXT) : GOOGLE_URL} />;
 
   return (
     <>
-      {google && (
-        <>
-          <GoogleButton href={GOOGLE_URL} />
-          <OrDivider />
-        </>
+      {hasKey && (
+        <div className="flex flex-col gap-1.5" data-testid="device-passkey">
+          <AuthButton testId="login" variant="primary" icon={<FingerprintIcon />} busy={busy || (!pre.ready && !pre.error)} onClick={signIn}>
+            {PASSKEY_LABEL}
+          </AuthButton>
+          {first && (first.name || first.email) && (
+            <p className="text-center text-xs text-slate-400" data-testid="device-passkey-user">
+              {first.name && <bdi className="text-slate-300">{first.name}</bdi>}
+              {first.name && first.email && ' · '}
+              {first.email && <bdi dir="ltr">{first.email}</bdi>}
+            </p>
+          )}
+        </div>
       )}
-      <div className="flex flex-col gap-3" data-testid="login-options" data-primary={passkeyFirst ? 'passkey' : 'email'}>
-        {passkeyFirst ? [passkeyBtn, emailBtn] : [emailBtn, passkeyBtn]}
+      {hasKey && <OrDivider />}
+      <div className="flex flex-col gap-3" data-testid="login-options" data-primary={hasKey ? 'passkey' : google ? 'google' : 'email'}>
+        {googleBtn}
+        {google && !hasKey && <OrDivider />}
+        {emailBtn}
       </div>
       {email && (
         <LinkButton testId="other-email" onClick={() => openEmail(false)}>
           כניסה עם כתובת אחרת
         </LinkButton>
       )}
-      {!supported && (
-        <p className="text-center text-xs leading-relaxed text-slate-400" data-testid="unsupported">
-          הדפדפן הזה אינו תומך בכניסה עם טביעת אצבע / זיהוי פנים — היכנס/י עם קוד למייל.
-        </p>
-      )}
-      {supported && platform === false && (
-        <p className="text-center text-xs leading-relaxed text-slate-400" data-testid="no-platform">
-          אין במחשב טביעת אצבע / Windows Hello? היכנס/י עם קוד למייל — או עם הטלפון הרשום: בחלון הכניסה בחר/י "טלפון או טאבלט" וסרוק/י את קוד ה-QR.
+      {!hasKey && supported && platform === true && (
+        <p className="text-center text-xs leading-relaxed text-slate-400" data-testid="no-device-passkey">
+          {MSG.noDeviceKeyNote}
         </p>
       )}
     </>
@@ -704,60 +785,56 @@ function LinkButton({ onClick, testId, disabled, children }: { onClick(): void; 
 // ---------------------------------------------------------------- registration (invite link)
 
 function RegisterPanel({ supported, platform, google, setError, setDone }: PanelProps) {
-  const [info, setInfo] = useState<{ options: PublicKeyCredentialCreationOptionsJSON; user: AuthUser; at: number } | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [failed, setFailed] = useState(false);
+  // Also without WebAuthn: the answer carries the invitee's name (and validates the invite) for the e-mail option.
+  // Kept fresh (iOS: startRegistration must run inside the click, without an awaited fetch) only when the
+  // passkey option is shown.
+  const offerPasskey = supported && platform === true;
+  const fetcher = useCallback(() => registerOptions(INVITE!), []);
+  const pre = usePrefetch(fetcher, 'register', offerPasskey);
+  const info = pre.value;
+  const loading = !info && !pre.error;
+  const failed = !info && !!pre.error;
   const [busy, setBusy] = useState<'passkey' | 'email' | null>(null);
 
-  const load = useCallback(async () => {
-    const r = await registerOptions(INVITE!);
-    if (r.ok) {
-      setInfo({ options: r.options, user: r.user, at: Date.now() });
-      return r;
-    }
-    setFailed(true);
-    setError(fromApi(r, 'register'));
-    return r;
-  }, [setError]);
-
   useEffect(() => {
-    // Also without WebAuthn: the answer carries the invitee's name (and validates the invite) for the e-mail option.
-    void load().finally(() => setLoading(false));
-  }, [load]);
+    if (pre.error && !pre.value) setError(fromApi(pre.error, 'register'));
+  }, [pre.error, pre.value, setError]);
 
   const finish = () => {
     setDone('הרישום הושלם! מעביר…');
     go(WELCOME_PATH);
   };
 
-  const registerPasskey = async () => {
-    if (!info) return;
+  // Click handler: synchronous up to navigator.credentials.create.
+  const registerPasskey = () => {
+    const taken = pre.take();
+    if (!taken) return;
+    const ceremony = startRegistration({ optionsJSON: platformRegistrationOptions(taken.options) });
     setError(null);
     setBusy('passkey');
-    try {
-      let options = info.options;
-      if (Date.now() - info.at > OPTIONS_TTL_MS) {
-        const r = await load();
-        if (!r.ok) return;
-        options = r.options;
-      }
-      let response;
+    void (async () => {
       try {
-        response = await startRegistration({ optionsJSON: options });
-      } catch (err) {
-        setError(fromWebAuthn(err, 'register'));
-        void load();
-        return;
+        let response;
+        try {
+          response = await ceremony;
+        } catch (err) {
+          setError(fromWebAuthn(err, 'register'));
+          void pre.refresh();
+          return;
+        }
+        const v = await registerVerify(INVITE!, response);
+        if (!v.ok) {
+          setError(fromApi(v, 'register')); // e.g. not_platform: the server's Hebrew text
+          void pre.refresh();
+          return;
+        }
+        saveDeviceKey({ id: v.credentialId || response.id, email: v.user?.email ?? taken.user.email, name: v.user?.name ?? taken.user.name });
+        if (v.user?.email) saveLastEmail(normalizeEmail(v.user.email));
+        finish();
+      } finally {
+        setBusy(null);
       }
-      const v = await registerVerify(INVITE!, response);
-      if (!v.ok) {
-        setError(fromApi(v, 'register'));
-        return;
-      }
-      finish();
-    } finally {
-      setBusy(null);
-    }
+    })();
   };
 
   const registerWithEmail = async () => {
@@ -775,18 +852,19 @@ function RegisterPanel({ supported, platform, google, setError, setDone }: Panel
 
   if (loading) return <Spinner label="טוען את פרטי ההזמנה…" />;
   if (failed || !info) return null;
-  const passkeyFirst = supported && platform === true;
-  const passkeyBtn = supported && (
+  // Only on devices with a built-in authenticator (registrations are platform-only).
+  const passkeyFirst = offerPasskey;
+  const passkeyBtn = offerPasskey && (
     <AuthButton
       key="passkey"
       testId="register"
-      variant={passkeyFirst ? 'primary' : 'secondary'}
+      variant="primary"
       icon={<FingerprintIcon />}
-      busy={busy === 'passkey'}
+      busy={busy === 'passkey' || (!pre.ready && !pre.error)}
       disabled={busy !== null}
       onClick={registerPasskey}
     >
-      רשום טביעת אצבע / זיהוי פנים / Windows Hello
+      רשום Face ID / טביעת אצבע
     </AuthButton>
   );
   const emailBtn = (
@@ -819,7 +897,7 @@ function RegisterPanel({ supported, platform, google, setError, setDone }: Panel
         <bdi dir="ltr" className="text-slate-300">
           {info.user.email}
         </bdi>
-        . אפשר להוסיף טביעת אצבע גם אחר כך.
+        .{offerPasskey ? ' אפשר להפעיל Face ID / טביעת אצבע גם אחר כך.' : ''}
       </p>
     </>
   );
@@ -950,7 +1028,7 @@ function RequestAccess({
 
 // ---------------------------------------------------------------- bits
 
-function ErrorBox({ error, onRequest }: { error: UiError; onRequest(): void }) {
+function ErrorBox({ error, onRequest, onEmail }: { error: UiError; onRequest(): void; onEmail?(): void }) {
   const hints = error.hints ?? [];
   return (
     <div role="alert" data-testid="error" data-code={error.code} className="rounded-lg border border-red-800/70 bg-red-950/40 px-3 py-2 text-center text-sm leading-relaxed text-red-200">
@@ -961,6 +1039,11 @@ function ErrorBox({ error, onRequest }: { error: UiError; onRequest(): void }) {
           {hints.includes('request') && !INVITE && (
             <button type="button" onClick={onRequest} className="text-sky-300 underline underline-offset-2 hover:text-sky-200" data-testid="hint-request">
               בקש גישה
+            </button>
+          )}
+          {hints.includes('email') && onEmail && (
+            <button type="button" onClick={onEmail} className="mt-1 rounded-lg bg-sky-500 px-4 py-2 text-sm font-semibold text-slate-950 hover:bg-sky-400" data-testid="hint-email">
+              כניסה עם קוד למייל
             </button>
           )}
           {hints.includes('health') && (

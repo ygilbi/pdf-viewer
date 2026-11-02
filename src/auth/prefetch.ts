@@ -19,7 +19,7 @@ export function isFresh(at: number | null | undefined, now: number, maxAge = PRE
   return typeof at === 'number' && now - at >= 0 && now - at < maxAge;
 }
 
-export interface Prefetched<R> {
+export interface Prefetched<R extends object> {
   /** Fresh options are waiting (the button can start the ceremony right away). */
   ready: boolean;
   /** Last fetch failed (kept until the next successful one). */
