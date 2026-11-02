@@ -302,8 +302,6 @@ export function TopMenu({ onOpenFile }: { onOpenFile(file: File): void }) {
           {showWindowsDownload() && (
             <a
               href={WINDOWS_DOWNLOAD_URL}
-              target="_blank"
-              rel="noopener noreferrer"
               data-testid="menu-download-windows"
               title="מתקין לשולחן העבודה של Windows"
               className="flex h-8 items-center gap-1.5 whitespace-nowrap rounded px-2 text-xs text-sky-300 hover:bg-slate-700 hover:text-white focus:outline-none focus-visible:ring-1 focus-visible:ring-sky-400"

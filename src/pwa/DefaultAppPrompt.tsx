@@ -261,7 +261,7 @@ function DefaultAppDialog() {
               {showWindowsDownload() && (
                 <Alt>
                   <b>מעדיפים תוכנה רגילה?</b>{' '}
-                  <a href={WINDOWS_DOWNLOAD_URL} target="_blank" rel="noopener noreferrer" data-testid="download-windows" className="font-semibold text-sky-300 underline hover:text-sky-200">
+                  <a href={WINDOWS_DOWNLOAD_URL} data-testid="download-windows" className="font-semibold text-sky-300 underline hover:text-sky-200">
                     הורד גרסת Windows
                   </a>{' '}
                   — מתקין שמגדיר את סמל קובצי ה‑PDF ורושם את התוכנה ברשימת ברירות המחדל.

@@ -3,6 +3,10 @@
   "framework": "vite",
   "buildCommand": "npm run build",
   "outputDirectory": "dist",
+  "cleanUrls": true,
+  "functions": {
+    "api/*.ts": { "maxDuration": 20 }
+  },
   "headers": [
     {
       "source": "/assets/(.*)",

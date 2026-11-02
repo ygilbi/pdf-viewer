@@ -7,6 +7,8 @@
  *
  * Strategy:
  *  - navigation: network-first, fallback to cached index.html (offline / flaky network)
+ *  - /download(.html) and api/*: never intercepted (always straight to the network;
+ *    the download request page must not be replaced by the app shell)
  *  - assets/*  : cache-first (hashed => immutable); misses (lazy CMaps/fonts) cached on demand
  *  - other precached files (icons, manifest): network-first, cache fallback
  *  - everything else: untouched (e.g. user PDFs, cross-origin)
@@ -24,6 +26,8 @@ const INDEX_URL = abs('index.html');
 const PRECACHE_URLS = new Set(PRECACHE_FILES.map(abs));
 const ASSET_URLS = new Set(ALL_ASSETS.map(abs));
 const ASSETS_PREFIX = abs('assets/');
+const API_PREFIX = abs('api/');
+const BYPASS_URLS = new Set([abs('download'), abs('download/'), abs('download.html')]);
 
 self.addEventListener('install', (event) => {
   event.waitUntil((async () => {
@@ -96,6 +100,8 @@ self.addEventListener('fetch', (event) => {
   if (req.method !== 'GET') return;
   const url = new URL(req.url);
   if (url.origin !== self.location.origin || !req.url.startsWith(BASE)) return;
+  const path = url.origin + url.pathname;
+  if (path.startsWith(API_PREFIX) || BYPASS_URLS.has(path)) return;
   if (req.mode === 'navigate') {
     event.respondWith(navigate(event));
   } else if (req.url.startsWith(ASSETS_PREFIX) && !req.headers.has('range')) {
