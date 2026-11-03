@@ -224,7 +224,8 @@ export interface WorkspaceClient extends PdfClient {
 // objects with one of these kinds, plus optional `text` / `strokeWidth`.
 // They are NOT takeoff quantities: summaries, CSV totals and category
 // subtotals must ignore them (use `isMarkupKind`).
-export type MarkupKind = 'note' | 'text' | 'rect' | 'cloud' | 'arrow' | 'pen' | 'highlight';
+/** 'ellipse' / 'triangle' / 'diamond' = shapes inscribed in the two-corner box; 'line' = [start, end]. */
+export type MarkupKind = 'note' | 'text' | 'rect' | 'ellipse' | 'triangle' | 'diamond' | 'line' | 'cloud' | 'arrow' | 'pen' | 'highlight';
 
 // ---------------------------------------------------------------------------
 // Page text (contract — worker 'text' request, pdfClient.getPageText)

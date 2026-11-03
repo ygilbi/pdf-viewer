@@ -13,8 +13,12 @@ import {
   IconHighlight,
   IconLength,
   IconNote,
-  IconPen,
+  IconDiamond,
+  IconDraw,
+  IconEllipse,
+  IconLine,
   IconRect,
+  IconTriangle,
   IconRuler,
   IconText,
 } from './ui/icons';
@@ -36,30 +40,35 @@ export interface ToolDef {
   group: ToolGroup;
   /** Extra tooltip line. */
   hint?: string;
-  /** Shown inside the expandable "חישוב שטח" menu of the palette. */
-  areaMenu?: boolean;
+  /** Shown inside an expandable menu of the palette ("חישוב שטח" / "צורות"). */
+  menu?: ToolMenuId;
 }
 
-/** Title of the palette's expandable area menu. */
-export const AREA_MENU_LABEL = 'חישוב שטח';
+export type ToolMenuId = 'area' | 'shapes';
+/** Titles of the palette's expandable menus. */
+export const TOOL_MENU_LABELS: Record<ToolMenuId, string> = { area: 'חישוב שטח', shapes: 'צורות' };
 
 export const TOOL_GROUP_LABELS: Record<ToolGroup, string> = { measure: 'מדידה', markup: 'סימון והערות' };
 
 export const TOOLS: ToolDef[] = [
   { id: 'pan', label: 'יד / הזזה', short: 'יד / הזזה', shortcut: 'V / H', icon: <IconHand />, group: 'measure', hint: 'גרירת סימון מזיזה אותו' },
   { id: 'calibrate', label: 'כיול ידני', short: 'כיול ידני', shortcut: 'C', icon: <IconRuler />, group: 'measure' },
-  { id: 'area', label: 'הוספת שטח ידנית', short: 'הוספה ידנית', shortcut: 'A', icon: <IconAreaManual />, group: 'measure', areaMenu: true, hint: 'לחיצה על כל פינה · Enter / לחיצה על הנקודה הראשונה לסגירה' },
-  { id: 'rectArea', label: 'הוספת שטח מהירה', short: 'הוספה מהירה', shortcut: 'B', icon: <IconAreaQuick />, group: 'measure', areaMenu: true, hint: 'שתי לחיצות בפינות נגדיות או גרירה' },
-  { id: 'deduct', label: 'הפחתת שטח ידנית', short: 'הפחתה ידנית', shortcut: 'D', icon: <IconDeductManual />, group: 'measure', areaMenu: true, hint: 'לחיצה על כל פינה של הפתח' },
-  { id: 'rectDeduct', label: 'הפחתת שטח מהירה', short: 'הפחתה מהירה', shortcut: 'O', icon: <IconDeductQuick />, group: 'measure', areaMenu: true, hint: 'שתי לחיצות בפינות נגדיות או גרירה' },
+  { id: 'area', label: 'הוספת שטח ידנית', short: 'הוספה ידנית', shortcut: 'A', icon: <IconAreaManual />, group: 'measure', menu: 'area', hint: 'לחיצה על כל פינה · Enter / לחיצה על הנקודה הראשונה לסגירה' },
+  { id: 'rectArea', label: 'הוספת שטח מהירה', short: 'הוספה מהירה', shortcut: 'B', icon: <IconAreaQuick />, group: 'measure', menu: 'area', hint: 'שתי לחיצות בפינות נגדיות או גרירה' },
+  { id: 'deduct', label: 'הפחתת שטח ידנית', short: 'הפחתה ידנית', shortcut: 'D', icon: <IconDeductManual />, group: 'measure', menu: 'area', hint: 'לחיצה על כל פינה של הפתח' },
+  { id: 'rectDeduct', label: 'הפחתת שטח מהירה', short: 'הפחתה מהירה', shortcut: 'O', icon: <IconDeductQuick />, group: 'measure', menu: 'area', hint: 'שתי לחיצות בפינות נגדיות או גרירה' },
   { id: 'length', label: 'חישוב אורך', short: 'חישוב אורך', shortcut: 'L', icon: <IconLength />, group: 'measure' },
   { id: 'count', label: 'ספירת פריטים', short: 'ספירה', shortcut: 'N', icon: <IconCount />, group: 'measure' },
   { id: 'note', label: 'הערה', short: 'הערה', shortcut: 'K', icon: <IconNote />, group: 'markup', hint: 'לחץ למיקום סיכה והקלד הערה' },
   { id: 'text', label: 'טקסט על השרטוט', short: 'טקסט', shortcut: 'X', icon: <IconText />, group: 'markup' },
-  { id: 'rect', label: 'מלבן', short: 'מלבן', shortcut: 'R', icon: <IconRect />, group: 'markup', hint: 'גרור לציור' },
-  { id: 'cloud', label: 'ענן תיקון', short: 'ענן תיקון', shortcut: 'U', icon: <IconCloud />, group: 'markup', hint: 'גרור מלבן' },
+  { id: 'rect', label: 'מלבן', short: 'מלבן', shortcut: 'R', icon: <IconRect />, group: 'markup', menu: 'shapes', hint: 'גרור לציור' },
+  { id: 'ellipse', label: 'אליפסה / עיגול', short: 'אליפסה', shortcut: 'I', icon: <IconEllipse />, group: 'markup', menu: 'shapes', hint: 'גרור לציור · Shift: עיגול' },
+  { id: 'triangle', label: 'משולש', short: 'משולש', shortcut: 'J', icon: <IconTriangle />, group: 'markup', menu: 'shapes', hint: 'גרור לציור · Shift: שווה צלעות בערך' },
+  { id: 'diamond', label: 'מעוין', short: 'מעוין', shortcut: 'Y', icon: <IconDiamond />, group: 'markup', menu: 'shapes', hint: 'גרור לציור · Shift: ריבועי' },
+  { id: 'line', label: 'קו ישר', short: 'קו ישר', shortcut: 'Z', icon: <IconLine />, group: 'markup', menu: 'shapes', hint: 'גרור מנקודה לנקודה · Shift: נעילה כל 30°' },
   { id: 'arrow', label: 'חץ', short: 'חץ', shortcut: 'W', icon: <IconArrow />, group: 'markup', hint: 'גרור מהזנב לראש' },
-  { id: 'pen', label: 'עט חופשי', short: 'עט חופשי', shortcut: 'P', icon: <IconPen />, group: 'markup' },
+  { id: 'cloud', label: 'ענן', short: 'ענן', shortcut: 'U', icon: <IconCloud />, group: 'markup', hint: 'גרור מלבן' },
+  { id: 'pen', label: 'כלי שרטוט', short: 'כלי שרטוט', shortcut: 'P', icon: <IconDraw />, group: 'markup', hint: 'גרור לציור חופשי · Shift לחוץ: קו ישר עם נעילה כל 30°' },
   { id: 'highlight', label: 'מרקר (הדגשה)', short: 'מרקר', shortcut: 'G', icon: <IconHighlight />, group: 'markup', hint: 'גרור מלבן שקוף' },
 ];
 
@@ -77,6 +86,10 @@ const TOOL_KEYS: Record<string, ToolId> = {
   KeyK: 'note',
   KeyX: 'text',
   KeyR: 'rect',
+  KeyI: 'ellipse',
+  KeyJ: 'triangle',
+  KeyY: 'diamond',
+  KeyZ: 'line',
   KeyU: 'cloud',
   KeyW: 'arrow',
   KeyP: 'pen',

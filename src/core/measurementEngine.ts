@@ -242,7 +242,7 @@ export function parseLengthInput(s: string): number | null {
 /** Every kind stored in the `measurements` array: takeoff kinds + markup / annotation kinds. */
 export type AnyKind = MeasurementKind | MarkupKind;
 
-export const MARKUP_KINDS: readonly MarkupKind[] = ['note', 'text', 'rect', 'cloud', 'arrow', 'pen', 'highlight'];
+export const MARKUP_KINDS: readonly MarkupKind[] = ['note', 'text', 'rect', 'ellipse', 'triangle', 'diamond', 'line', 'cloud', 'arrow', 'pen', 'highlight'];
 
 /** True for annotation kinds (not takeoff quantities — excluded from every sum / CSV total). */
 export function isMarkupKind(kind: unknown): kind is MarkupKind {
@@ -280,9 +280,13 @@ export const KIND_LABELS: Record<AnyKind, string> = {
   note: 'הערה',
   text: 'טקסט',
   rect: 'מלבן',
-  cloud: 'ענן תיקון',
+  ellipse: 'אליפסה',
+  triangle: 'משולש',
+  diamond: 'מעוין',
+  line: 'קו ישר',
+  cloud: 'ענן',
   arrow: 'חץ',
-  pen: 'עט',
+  pen: 'שרטוט',
   highlight: 'מרקר',
 };
 
@@ -295,9 +299,13 @@ export const KIND_LABEL_PREFIX: Record<AnyKind, string> = {
   note: 'הערה',
   text: 'טקסט',
   rect: 'מלבן',
+  ellipse: 'אליפסה',
+  triangle: 'משולש',
+  diamond: 'מעוין',
+  line: 'קו',
   cloud: 'ענן',
   arrow: 'חץ',
-  pen: 'עט',
+  pen: 'שרטוט',
   highlight: 'מרקר',
 };
 
@@ -798,4 +806,22 @@ export function newId(): string {
   if (c && typeof c.randomUUID === 'function') return c.randomUUID();
   idCounter = (idCounter + 1) % 1e9;
   return `m_${Date.now().toString(36)}_${idCounter.toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
+}
+
+/**
+ * Text inside each marker circle of a count group: the item number only — its schedule code
+ * (e.g. "W1") when set, otherwise the number at the end of its label ("פריט 3" → "3"), otherwise
+ * the label itself. Quantities (×n) are shown in the summaries, not on the drawing.
+ */
+export function countBadge(m: { label: string; item?: { code?: unknown } }): string {
+  const code = typeof m.item?.code === 'string' ? m.item.code.trim() : '';
+  if (code) return code;
+  const n = /(\d+)\s*$/.exec(m.label)?.[1];
+  return n ?? (m.label.trim() || '•');
+}
+
+/** Font size factor so a badge fits its circle (1 = up to two characters). */
+export function badgeFontScale(text: string): number {
+  const n = [...text].length;
+  return n <= 2 ? 1 : n === 3 ? 0.78 : n === 4 ? 0.62 : 0.52;
 }

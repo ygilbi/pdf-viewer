@@ -1,20 +1,33 @@
-import { Fragment, useEffect, useRef, useState } from 'react';
+import { Fragment, useEffect, useRef, useState, type ReactElement } from 'react';
 import { useViewer } from '../../state/store';
 import { useUi } from '../../state/uiStore';
 import { useMarkup } from '../../state/markupStore';
 import { ToolButton } from '../ui/ToolButton';
-import { IconAreaManual, IconChevronDown, IconCollapse, IconLabels } from '../ui/icons';
-import { AREA_MENU_LABEL, TOOLS, TOOL_GROUP_LABELS, type ToolDef, type ToolGroup } from '../toolActions';
+import { IconAreaManual, IconChevronDown, IconCollapse, IconLabels, IconShapes } from '../ui/icons';
+import { TOOLS, TOOL_GROUP_LABELS, TOOL_MENU_LABELS, type ToolDef, type ToolGroup, type ToolMenuId } from '../toolActions';
 import { STROKE_WIDTHS } from '../../core/markupGeometry';
 import { isMarkupKind, kindOf } from '../../core/measurementEngine';
 
 /** Thumbnail drawer width (ThumbnailSidebar is 184px) + gap, so the palette slides clear of it. */
 const THUMBS_OFFSET = 184 + 8;
 const LABELS_KEY = 'aluminum-palette-labels-v1';
-const AREA_MENU_KEY = 'aluminum-palette-area-open-v1';
+const MENU_KEY = (m: ToolMenuId) => `aluminum-palette-${m}-open-v1`;
+/** Header icon of each expandable menu (when no tool of it is active). */
+const MENU_ICON: Record<ToolMenuId, ReactElement> = { area: <IconAreaManual />, shapes: <IconShapes /> };
+/** Each menu sits right after this tool. */
+const MENU_AFTER: Record<string, ToolMenuId> = { calibrate: 'area', text: 'shapes' };
 
 /** Colours offered for markup (null = follow the active category). */
-export const MARKUP_SWATCHES = ['#dc2626', '#ea580c', '#facc15', '#16a34a', '#2563eb', '#9333ea', '#0f172a'];
+export const MARKUP_SWATCH_NAMES: Record<string, string> = {
+  '#111827': 'שחור',
+  '#2563eb': 'כחול',
+  '#dc2626': 'אדום',
+  '#ca8a04': 'חרדל',
+  '#9333ea': 'סגול',
+  '#16a34a': 'ירוק',
+};
+/** The six basic line colours offered for markup and drawing. */
+export const MARKUP_SWATCHES = Object.keys(MARKUP_SWATCH_NAMES);
 
 function loadLabels(): boolean {
   try {
@@ -25,12 +38,16 @@ function loadLabels(): boolean {
   }
 }
 
-function loadAreaOpen(): boolean {
-  try {
-    return localStorage.getItem(AREA_MENU_KEY) !== '0';
-  } catch {
-    return true;
-  }
+function loadMenuOpen(): Record<ToolMenuId, boolean> {
+  const get = (m: ToolMenuId, def: boolean) => {
+    try {
+      const v = localStorage.getItem(MENU_KEY(m));
+      return v === null ? def : v === '1';
+    } catch {
+      return def;
+    }
+  };
+  return { area: get('area', true), shapes: get('shapes', false) };
 }
 
 const GROUPS: ToolGroup[] = ['measure', 'markup'];
@@ -50,18 +67,19 @@ export function ToolPalette() {
   const thumbsOpen = useUi((s) => s.thumbsOpen);
   const [labels, setLabelsState] = useState(loadLabels);
   const [styleOpen, setStyleOpen] = useState(false);
-  const [areaOpen, setAreaOpenState] = useState(loadAreaOpen);
+  const [menuOpen, setMenuOpenState] = useState(loadMenuOpen);
   const active = TOOLS.find((t) => t.id === tool) ?? TOOLS[0];
 
-  // Picking an area tool by keyboard opens the menu so the active tool is visible.
+  // Picking a menu tool by keyboard opens its menu so the active tool is visible.
   useEffect(() => {
-    if (TOOLS.find((t) => t.id === tool)?.areaMenu) setAreaOpenState(true);
+    const m = TOOLS.find((t) => t.id === tool)?.menu;
+    if (m) setMenuOpenState((o) => (o[m] ? o : { ...o, [m]: true }));
   }, [tool]);
 
-  const setAreaOpen = (v: boolean) => {
-    setAreaOpenState(v);
+  const setMenuOpen = (m: ToolMenuId, v: boolean) => {
+    setMenuOpenState((o) => ({ ...o, [m]: v }));
     try {
-      localStorage.setItem(AREA_MENU_KEY, v ? '1' : '0');
+      localStorage.setItem(MENU_KEY(m), v ? '1' : '0');
     } catch {
       /* ignore */
     }
@@ -109,7 +127,7 @@ export function ToolPalette() {
             aria-label="כלים"
             aria-orientation="vertical"
             className={
-              'flex min-h-0 flex-col gap-0.5 overflow-y-auto overscroll-contain ' + (labels ? 'w-[10rem]' : 'items-center')
+              'flex min-h-0 flex-col gap-0.5 overflow-y-auto overflow-x-hidden overscroll-contain ' + (labels ? 'w-[10rem]' : 'items-center')
             }
             style={{ scrollbarWidth: 'thin' }}
           >
@@ -125,22 +143,26 @@ export function ToolPalette() {
                 ) : (
                   gi > 0 && <span className="my-1 h-px w-6 shrink-0 bg-slate-600" aria-hidden="true" />
                 )}
-                {TOOLS.filter((t) => t.group === g && !t.areaMenu).map((t) => (
-                  <Fragment key={t.id}>
-                    <PaletteTool t={t} labels={labels} active={tool === t.id} onPick={() => setTool(t.id)} className={btnCls} />
-                    {/* Expandable "חישוב שטח" menu right after the calibrate tool. */}
-                    {t.id === 'calibrate' && (
-                      <AreaMenu
-                        labels={labels}
-                        open={areaOpen}
-                        onToggle={() => setAreaOpen(!areaOpen)}
-                        tool={tool}
-                        onPick={setTool}
-                        className={btnCls}
-                      />
-                    )}
-                  </Fragment>
-                ))}
+                {TOOLS.filter((t) => t.group === g && !t.menu).map((t) => {
+                  const m = MENU_AFTER[t.id];
+                  return (
+                    <Fragment key={t.id}>
+                      <PaletteTool t={t} labels={labels} active={tool === t.id} onPick={() => setTool(t.id)} className={btnCls} />
+                      {/* Expandable menus ("חישוב שטח" after calibrate, "צורות" after text). */}
+                      {m && (
+                        <ToolMenu
+                          menu={m}
+                          labels={labels}
+                          open={menuOpen[m]}
+                          onToggle={() => setMenuOpen(m, !menuOpen[m])}
+                          tool={tool}
+                          onPick={setTool}
+                          className={btnCls}
+                        />
+                      )}
+                    </Fragment>
+                  );
+                })}
                 {g === 'markup' && (
                   <StyleButton labels={labels} open={styleOpen} onToggle={() => setStyleOpen((v) => !v)} className={btnCls} />
                 )}
@@ -196,11 +218,11 @@ function PaletteTool({ t, labels, active, onPick, className, indent }: { t: Tool
 }
 
 /**
- * "חישוב שטח": a header with a chevron that expands the four area tools (manual / quick add,
- * manual / quick deduct). Collapsed, the header shows the active area tool's icon and is
- * highlighted while one of them is in use; it opens by itself when an area tool is picked by key.
+ * Expandable tool menu ("חישוב שטח" / "צורות"): a header with a chevron that shows its tools.
+ * Collapsed, the header shows the active tool's icon and is highlighted while one of them is in use.
  */
-function AreaMenu({ labels, open, onToggle, tool, onPick, className }: {
+function ToolMenu({ menu, labels, open, onToggle, tool, onPick, className }: {
+  menu: ToolMenuId;
   labels: boolean;
   open: boolean;
   onToggle(): void;
@@ -208,26 +230,27 @@ function AreaMenu({ labels, open, onToggle, tool, onPick, className }: {
   onPick(id: ToolDef['id']): void;
   className: string;
 }) {
-  const items = TOOLS.filter((t) => t.areaMenu);
+  const items = TOOLS.filter((t) => t.menu === menu);
   const current = items.find((t) => t.id === tool);
+  const title = TOOL_MENU_LABELS[menu];
   return (
-    <div role="group" aria-label={AREA_MENU_LABEL} data-testid="area-menu" data-open={open ? 'true' : 'false'} className="flex shrink-0 flex-col gap-0.5">
+    <div role="group" aria-label={title} data-testid={`${menu}-menu`} data-open={open ? 'true' : 'false'} className="flex shrink-0 flex-col gap-0.5">
       <ToolButton
-        label={AREA_MENU_LABEL}
-        hint={open ? 'לחץ לסגירת האפשרויות' : 'לחץ לפתיחת 4 אפשרויות'}
+        label={title}
+        hint={open ? 'לחץ לסגירת האפשרויות' : `לחץ לפתיחת ${items.length} אפשרויות`}
         active={!open && !!current}
         tooltipSide="left"
         onClick={onToggle}
         className={className + ' shrink-0'}
       >
-        <span className="shrink-0">{!open && current ? current.icon : <IconAreaManual />}</span>
-        {labels && <span className="min-w-0 flex-1 truncate text-start text-[12px] font-semibold">{AREA_MENU_LABEL}</span>}
-        <IconChevronDown size={labels ? 12 : 10} className={`shrink-0 opacity-70 transition-transform ${open ? 'rotate-180' : ''} ${labels ? '' : 'absolute bottom-0.5 left-0.5'}`} />
+        <span className="shrink-0">{!open && current ? current.icon : MENU_ICON[menu]}</span>
+        {labels && <span className="min-w-0 flex-1 truncate text-start text-[12px] font-semibold">{title}</span>}
+        <IconChevronDown size={labels ? 12 : 10} className={`shrink-0 opacity-70 ${open ? 'rotate-180' : ''} ${labels ? '' : 'absolute bottom-0.5 left-0.5'}`} />
       </ToolButton>
       {open && (
-        <div className={labels ? 'flex flex-col gap-0.5 border-s-2 border-slate-700 ms-2' : 'flex flex-col items-center gap-0.5 rounded-md bg-slate-800/60 py-0.5'}>
+        <div className={labels ? 'ms-2 flex min-w-0 flex-col gap-0.5 border-s-2 border-slate-700' : 'flex flex-col items-center gap-0.5 rounded-md bg-slate-800/60 py-0.5'}>
           {items.map((t) => (
-            <PaletteTool key={t.id} t={t} labels={labels} active={tool === t.id} onPick={() => onPick(t.id)} className={labels ? className.replace('w-full', 'w-[calc(100%-0.25rem)]') : className} indent />
+            <PaletteTool key={t.id} t={t} labels={labels} active={tool === t.id} onPick={() => onPick(t.id)} className={className} indent />
           ))}
         </div>
       )}
@@ -298,21 +321,13 @@ function StylePopover({ onClose }: { onClose(): void }) {
       className="absolute right-full top-1/2 me-2 w-44 -translate-y-1/2 rounded-lg border border-slate-600 bg-slate-900/95 p-2 text-[11px] text-slate-300 shadow-xl"
     >
       <div className="mb-1 font-semibold text-slate-200">צבע</div>
-      <div className="mb-2 flex flex-wrap gap-1.5">
-        <button
-          type="button"
-          title="לפי קטגוריה"
-          aria-label="צבע לפי קטגוריה"
-          aria-pressed={color === null}
-          onClick={() => pickColor(null)}
-          className={`h-5 w-5 rounded-full border ${color === null ? 'ring-2 ring-sky-400 ring-offset-1 ring-offset-slate-900' : 'border-slate-500'}`}
-          style={{ background: 'conic-gradient(#dc2626, #facc15, #16a34a, #2563eb, #9333ea, #dc2626)' }}
-        />
+      <div className="mb-2 grid grid-cols-6 gap-1.5" data-testid="markup-swatches">
         {MARKUP_SWATCHES.map((c) => (
           <button
             key={c}
             type="button"
-            aria-label={`צבע ${c}`}
+            title={MARKUP_SWATCH_NAMES[c]}
+            aria-label={`צבע ${MARKUP_SWATCH_NAMES[c]}`}
             aria-pressed={color === c}
             onClick={() => pickColor(c)}
             className={`h-5 w-5 rounded-full border border-slate-500 ${color === c ? 'ring-2 ring-sky-400 ring-offset-1 ring-offset-slate-900' : ''}`}

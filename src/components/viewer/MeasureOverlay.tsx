@@ -6,6 +6,8 @@ import {
   NOTE_PIN,
   arrowHeadSize,
   cloudPath,
+  isBoxShape,
+  shapePath,
   markupBounds,
   notePinPath,
   rectOfPoints,
@@ -23,6 +25,8 @@ import {
   polygonAreaM2,
   polylineLengthMeters,
   polylineMidpoint,
+  badgeFontScale,
+  countBadge,
 } from '../../core/measurementEngine';
 
 /**
@@ -67,7 +71,11 @@ const KIND_ORDER = {
   // markup paints above the takeoff: fills first, then lines, then text / pins
   highlight: 4,
   rect: 5,
+  ellipse: 5,
+  triangle: 5,
+  diamond: 5,
   cloud: 5,
+  line: 6,
   pen: 6,
   arrow: 6,
   text: 7,
@@ -177,7 +185,9 @@ function MeasureOverlayImpl({ width, height, measurements, selectedId, calibrati
         if (isMarkupKind(kind)) return <MarkupShape key={m.id} m={m} selected={selected} />;
         if (kind === 'count') {
           if (points.length === 0) return null;
-          const first = points[0];
+          // Circles show the item number only; the quantity (×n) lives in the summaries.
+          const badge = countBadge(m);
+          const fs = 10 * badgeFontScale(badge);
           return (
             <g key={m.id} data-measurement-id={m.id} data-kind="count" data-count={points.length}>
               {points.map((p, i) => (
@@ -200,16 +210,12 @@ function MeasureOverlayImpl({ width, height, measurements, selectedId, calibrati
                     textAnchor="middle"
                     fill="#fff"
                     fontWeight={700}
-                    style={{ fontSize: px(i >= 99 ? 7.5 : 10), fontFamily: 'system-ui, Arial, sans-serif' }}
+                    style={{ fontSize: px(fs), fontFamily: 'system-ui, Arial, sans-serif', direction: 'ltr', unicodeBidi: 'plaintext' }}
                   >
-                    {i + 1}
+                    {badge}
                   </text>
                 </g>
               ))}
-              <text x={first.x} y={first.y} dy="-1.45em" textAnchor="middle" fill="#111827" style={labelStyle(12)}>
-                <tspan fontWeight={600}>{m.label}</tspan>
-                <tspan> {ltr(`×${points.length}`)}</tspan>
-              </text>
             </g>
           );
         }
@@ -373,7 +379,7 @@ const MarkupShape = memo(function MarkupShape({ m, selected }: { m: AreaMeasurem
   const stroke = { strokeWidth: px(sw) };
   const handles =
     selected &&
-    (kind === 'rect' || kind === 'cloud' || kind === 'highlight' || kind === 'arrow') &&
+    (kind === 'rect' || kind === 'cloud' || kind === 'highlight' || kind === 'arrow' || kind === 'line' || isBoxShape(kind)) &&
     pts.map((p, i) => (
       <circle key={i} cx={p.x} cy={p.y} fill="#fff" stroke={SELECT_COLOR} style={{ r: px(5), strokeWidth: px(2) }} />
     ));
@@ -450,6 +456,22 @@ const MarkupShape = memo(function MarkupShape({ m, selected }: { m: AreaMeasurem
           style={stroke}
         />,
       );
+    }
+    case 'ellipse':
+    case 'triangle':
+    case 'diamond': {
+      const r = rectOfPoints(pts);
+      return g(
+        <>
+          <path d={shapePath(kind, r)} fill={m.color} fillOpacity={selected ? 0.08 : 0} stroke={m.color} strokeLinejoin="round" style={stroke} />
+          {selected && <SelectBox r={r} />}
+        </>,
+      );
+    }
+    case 'line': {
+      const a = pts[0];
+      const b = pts[pts.length - 1];
+      return g(<line x1={a.x} y1={a.y} x2={b.x} y2={b.y} stroke={m.color} strokeLinecap="round" style={stroke} />);
     }
     case 'cloud': {
       const r = rectOfPoints(pts);

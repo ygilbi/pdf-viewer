@@ -366,3 +366,39 @@ export const IconChevronDown = (p: IconProps) => (
     <path d="m6 9 6 6 6-6" />
   </Svg>
 );
+
+export const IconEllipse = (p: IconProps) => (
+  <Svg {...p}>
+    <ellipse cx="12" cy="12" rx="9" ry="6.5" />
+  </Svg>
+);
+export const IconTriangle = (p: IconProps) => (
+  <Svg {...p}>
+    <path d="M12 4.5 20.5 19h-17Z" />
+  </Svg>
+);
+export const IconDiamond = (p: IconProps) => (
+  <Svg {...p}>
+    <path d="M12 3.5 20.5 12 12 20.5 3.5 12Z" />
+  </Svg>
+);
+export const IconLine = (p: IconProps) => (
+  <Svg {...p}>
+    <path d="M4.5 19.5 19.5 4.5" />
+  </Svg>
+);
+/** "צורות" header: a square, a circle and a triangle. */
+export const IconShapes = (p: IconProps) => (
+  <Svg {...p}>
+    <rect x="3.5" y="3.5" width="8" height="8" rx="0.5" />
+    <circle cx="16.5" cy="7.5" r="4" />
+    <path d="M12 13.5 16.5 20.5h-9Z" />
+  </Svg>
+);
+/** Drawing tool (pencil over a straight line). */
+export const IconDraw = (p: IconProps) => (
+  <Svg {...p}>
+    <path d="M3 21h8" />
+    <path d="M14.5 4.5 19.5 9.5 10 19H5v-5Z" />
+  </Svg>
+);

@@ -58,6 +58,40 @@ export function polylinePath(points: Point[]): string {
   return d;
 }
 
+/** Box shapes drawn inside the two-corner rectangle (besides 'rect' itself). */
+export type BoxShape = 'ellipse' | 'triangle' | 'diamond';
+export const isBoxShape = (k: string | undefined): k is BoxShape => k === 'ellipse' || k === 'triangle' || k === 'diamond';
+
+/** Closed outline of a box shape (ellipse sampled with `n` points) — for hit testing. */
+export function shapeOutline(kind: BoxShape, r: Rect, n = 48): Point[] {
+  const { x, y, width: w, height: h } = r;
+  if (kind === 'triangle') return [{ x: x + w / 2, y }, { x: x + w, y: y + h }, { x, y: y + h }];
+  if (kind === 'diamond') return [{ x: x + w / 2, y }, { x: x + w, y: y + h / 2 }, { x: x + w / 2, y: y + h }, { x, y: y + h / 2 }];
+  const cx = x + w / 2, cy = y + h / 2;
+  return Array.from({ length: n }, (_, i) => {
+    const t = (i / n) * Math.PI * 2;
+    return { x: cx + (w / 2) * Math.cos(t), y: cy + (h / 2) * Math.sin(t) };
+  });
+}
+
+/** SVG path (M / L / C / Z only) of a box shape; the ellipse as four cubic arcs. */
+export function shapePath(kind: BoxShape, r: Rect): string {
+  if (kind !== 'ellipse') {
+    const o = shapeOutline(kind, r);
+    return o.map((p, i) => `${i ? 'L' : 'M'}${f(p.x)} ${f(p.y)}`).join('') + 'Z';
+  }
+  const { x, y, width: w, height: h } = r;
+  const rx = w / 2, ry = h / 2, cx = x + rx, cy = y + ry;
+  const kx = 0.5523 * rx, ky = 0.5523 * ry;
+  return (
+    `M${f(cx + rx)} ${f(cy)}` +
+    `C${f(cx + rx)} ${f(cy + ky)} ${f(cx + kx)} ${f(cy + ry)} ${f(cx)} ${f(cy + ry)}` +
+    `C${f(cx - kx)} ${f(cy + ry)} ${f(cx - rx)} ${f(cy + ky)} ${f(cx - rx)} ${f(cy)}` +
+    `C${f(cx - rx)} ${f(cy - ky)} ${f(cx - kx)} ${f(cy - ry)} ${f(cx)} ${f(cy - ry)}` +
+    `C${f(cx + kx)} ${f(cy - ry)} ${f(cx + rx)} ${f(cy - ky)} ${f(cx + rx)} ${f(cy)}Z`
+  );
+}
+
 /** Default scallop chord length for a revision cloud around `r` (page units). */
 export function cloudArcSize(r: Rect): number {
   return Math.max(6, Math.min(30, Math.max(r.width, r.height) / 8));
@@ -330,6 +364,13 @@ export function hitMarkup(p: Point, m: MarkupLike, slop: number, pinScale = 1): 
       const r = rectOfPoints(pts);
       return distanceToRectEdge(p, r) <= slop + cloudBulge(r);
     }
+    case 'ellipse':
+    case 'triangle':
+    case 'diamond': {
+      const o = shapeOutline(m.kind, rectOfPoints(pts));
+      return polyDist(p, [...o, o[0]]) <= slop + ((m.strokeWidth ?? DEFAULT_STROKE_WIDTH) / 2) * pinScale;
+    }
+    case 'line':
     case 'arrow':
     case 'pen':
       return polyDist(p, pts) <= slop + ((m.strokeWidth ?? DEFAULT_STROKE_WIDTH) / 2) * pinScale;

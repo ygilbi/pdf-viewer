@@ -34,6 +34,8 @@ import {
   polygonAreaM2,
   polylineLengthMeters,
   polylineMidpoint,
+  badgeFontScale,
+  countBadge,
 } from '../core/measurementEngine';
 import {
   DEFAULT_STROKE_WIDTH,
@@ -44,6 +46,7 @@ import {
   arrowHeadSize,
   arrowShaftEnd,
   cloudPath,
+  shapePath,
   notePinPath,
   polylinePath,
   rectOfPoints,
@@ -195,13 +198,13 @@ function drawTakeoff(c: Ctx, ms: AreaMeasurement[], ppm: number | null, nets: Re
       labels.push(() => label(c, [{ t: `${m.label}: ${l}`, bold: false }], { x: mid.x, y: mid.y - 9 * s }, col));
     } else if (kind === 'count' && pts.length >= 1) {
       const r = 5.5 * s;
-      pts.forEach((p, i) => {
+      // Item number only in each circle; quantities are in the summary page.
+      const badge = countBadge(m);
+      const fs = r * 1.15 * badgeFontScale(badge);
+      pts.forEach((p) => {
         path(c, circleD(p.x, p.y, r), { fill: col, stroke: WHITE, width: 0.8 * s });
-        const n = String(i + 1);
-        const fs = n.length > 2 ? r * 0.85 : r * 1.15;
-        text(c, n, p.x, p.y + fs * 0.36, fs, { bold: true, color: WHITE, align: 'center' });
+        text(c, badge, p.x, p.y + fs * 0.36, fs, { bold: true, color: WHITE, align: 'center' });
       });
-      labels.push(() => label(c, [{ t: `${m.label} ×${pts.length}`, bold: true }], { x: pts[0].x, y: pts[0].y - r - 9 * s }, col));
     }
   }
   return labels;
@@ -229,6 +232,14 @@ function drawMarkup(c: Ctx, m: AreaMeasurement, noteNo: number | undefined) {
       break;
     case 'cloud':
       path(c, cloudPath(rectOfPoints(pts)), { stroke: col, width: sw, round: true });
+      break;
+    case 'ellipse':
+    case 'triangle':
+    case 'diamond':
+      path(c, shapePath(kind, rectOfPoints(pts)), { stroke: col, width: sw, round: true });
+      break;
+    case 'line':
+      if (pts.length >= 2) path(c, polylinePath([pts[0], pts[pts.length - 1]]), { stroke: col, width: sw, round: true });
       break;
     case 'highlight':
       path(c, rectPath(rectOfPoints(pts)), { fill: hexColor(m.color, HIGHLIGHT_COLOR), opacity: HIGHLIGHT_OPACITY, multiply: true });

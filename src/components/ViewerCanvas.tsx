@@ -42,6 +42,8 @@ import {
   arrowHeadSize,
   arrowShaftEnd,
   cloudPath,
+  isBoxShape,
+  shapePath,
   hitMarkup,
   normRect,
   polylinePath,
@@ -86,7 +88,8 @@ type Gesture =
   | { kind: 'pan'; id: number; lx: number; ly: number; sx: number; sy: number; moved: boolean; clickOnUp: boolean }
   | { kind: 'vertex'; id: number; mid: string; index: number; points: Point[] }
   /** Drag-to-draw markup (rect / cloud / arrow / pen / highlight). */
-  | { kind: 'draw'; id: number; tool: MarkupKind; pts: Point[]; sx: number; sy: number; lx: number; ly: number }
+  /** `anchor` (pen): index where the current Shift-held straight segment starts. */
+  | { kind: 'draw'; id: number; tool: MarkupKind; pts: Point[]; sx: number; sy: number; lx: number; ly: number; anchor?: number; locks?: number[] }
   /** Dragging a whole markup annotation (pan tool). */
   | { kind: 'move'; id: number; mid: string; sx: number; sy: number; orig: Point[]; points: Point[]; moved: boolean }
   | { kind: 'pinch'; a: number; b: number; dist: number; mx: number; my: number }
@@ -124,7 +127,9 @@ const rectCorners = (a: Point, b: Point): Point[] => [
 const isPolygonTool = (t: ToolId) => t === 'area' || t === 'deduct';
 /** Markup tools drawn by dragging. */
 const isDragTool = (t: ToolId): t is MarkupKind =>
-  t === 'rect' || t === 'cloud' || t === 'arrow' || t === 'pen' || t === 'highlight';
+  t === 'rect' || t === 'cloud' || t === 'arrow' || t === 'pen' || t === 'highlight' || t === 'line' || isBoxShape(t);
+/** Straight-line angle lock step (degrees) while Shift is held: pen and line 30°, arrow 45°. */
+const SHIFT_STEP: Partial<Record<MarkupKind, number>> = { pen: 30, line: 30, arrow: 45 };
 /** Markup kinds without vertex handles (moved as a whole only). */
 const noHandles = (m: AreaMeasurement) => {
   const k = kindOf(m);
@@ -565,7 +570,8 @@ export default function ViewerCanvas() {
           if (s.tool === 'note') text = 'לחץ להוספת הערה';
           else if (s.tool === 'text') text = 'לחץ להוספת טקסט';
           else if (s.tool === 'arrow') text = 'גרור מהזנב לראש החץ';
-          else if (s.tool === 'pen') text = 'גרור לציור חופשי';
+          else if (s.tool === 'pen') text = 'גרור לציור חופשי · החזק Shift לקו ישר (כל 30°)';
+          else if (s.tool === 'line') text = 'גרור מנקודה לנקודה · Shift: כל 30°';
           else if (isDragTool(s.tool)) text = 'גרור לציור';
           else if (s.tool === 'count') {
             const g = activeCount(s);
@@ -643,7 +649,8 @@ export default function ViewerCanvas() {
       const a = g.pts[0];
       const b = g.pts[g.pts.length - 1];
       let d = '';
-      if (g.tool === 'pen') d = polylinePath(g.pts);
+      if (g.tool === 'pen' || g.tool === 'line') d = polylinePath(g.tool === 'line' ? [a, b] : g.pts);
+      else if (isBoxShape(g.tool)) d = shapePath(g.tool, normRect(a, b));
       else if (g.tool === 'arrow') {
         const size = arrowHeadSize(useMarkup.getState().strokeWidth) / vp.zoom;
         const end = arrowShaftEnd(a, b, size);
@@ -805,7 +812,10 @@ export default function ViewerCanvas() {
       const b = g.pts[g.pts.length - 1];
       let points: Point[];
       if (g.tool === 'pen') {
-        points = simplifyRDP(g.pts, 0.75 / vp.zoom);
+        // Simplify the freehand runs only; Shift-drawn straight segments keep their exact ends.
+        const cuts = [...new Set([0, ...(g.locks ?? []), g.pts.length - 1])].sort((x, y) => x - y);
+        points = [g.pts[0]];
+        for (let i = 1; i < cuts.length; i++) points.push(...simplifyRDP(g.pts.slice(cuts[i - 1], cuts[i] + 1), 0.75 / vp.zoom).slice(1));
         let len = 0;
         for (let i = 1; i < g.pts.length; i++) len += distance(g.pts[i - 1], g.pts[i]);
         if (len * vp.zoom < MIN_DRAW_PX) return;
@@ -813,11 +823,11 @@ export default function ViewerCanvas() {
       } else {
         const r = normRect(a, b);
         const big =
-          g.tool === 'arrow'
+          g.tool === 'arrow' || g.tool === 'line'
             ? distance(a, b) * vp.zoom >= MIN_DRAW_PX * 2
             : r.width * vp.zoom >= MIN_DRAW_PX && r.height * vp.zoom >= MIN_DRAW_PX;
         if (!big) return;
-        points = g.tool === 'arrow' ? [a, b] : [{ x: r.x, y: r.y }, { x: r.x + r.width, y: r.y + r.height }];
+        points = g.tool === 'arrow' || g.tool === 'line' ? [a, b] : [{ x: r.x, y: r.y }, { x: r.x + r.width, y: r.y + r.height }];
       }
       const sw = useMarkup.getState().strokeWidth;
       s.addMeasurement({
@@ -1101,11 +1111,33 @@ export default function ViewerCanvas() {
           if (e.pointerId !== g.id) return;
           const p = vp.toPage(q.x, q.y);
           if (g.tool === 'pen') {
-            if (Math.hypot(q.x - g.lx, q.y - g.ly) < 1) return;
-            g.pts.push(p);
+            if (shift) {
+              // Shift held: a straight segment from where Shift went down, locked to 30° steps.
+              if (g.anchor === undefined) {
+                g.anchor = g.pts.length - 1;
+                (g.locks ??= []).push(g.anchor); // simplification must keep the segment's ends
+              }
+              const a = g.pts[g.anchor];
+              g.pts = [...g.pts.slice(0, g.anchor + 1), snapAngle(a, p, 30)];
+            } else {
+              if (g.anchor !== undefined) {
+                g.locks!.push(g.pts.length - 1); // keep the straight segment, continue freehand from its end
+                g.anchor = undefined;
+              }
+              if (Math.hypot(q.x - g.lx, q.y - g.ly) < 1) return;
+              g.pts.push(p);
+            }
           } else {
             const a = g.pts[0];
-            g.pts = [a, shift && g.tool === 'arrow' ? snapAngle(a, p, 45) : p];
+            const step = SHIFT_STEP[g.tool];
+            let b = p;
+            if (shift && step) b = snapAngle(a, p, step);
+            else if (shift && (isBoxShape(g.tool) || g.tool === 'rect')) {
+              // Shift: equal width and height (circle / square / square diamond).
+              const d = Math.max(Math.abs(p.x - a.x), Math.abs(p.y - a.y));
+              b = { x: a.x + Math.sign(p.x - a.x || 1) * d, y: a.y + Math.sign(p.y - a.y || 1) * d };
+            }
+            g.pts = [a, b];
           }
           g.lx = q.x;
           g.ly = q.y;
