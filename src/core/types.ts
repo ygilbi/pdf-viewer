@@ -97,8 +97,8 @@ export interface PdfClient {
 // Measurements
 // ---------------------------------------------------------------------------
 
-/** 'rectArea' = two-corner rectangle that creates a normal 'area' measurement. */
-export type ToolId = 'pan' | 'calibrate' | 'area' | 'rectArea' | 'deduct' | 'length' | 'count' | MarkupKind;
+/** 'rectArea' / 'rectDeduct' = two-corner rectangle that creates an 'area' / 'deduct' measurement. */
+export type ToolId = 'pan' | 'calibrate' | 'area' | 'rectArea' | 'deduct' | 'rectDeduct' | 'length' | 'count' | MarkupKind;
 
 /**
  * What a measurement represents:

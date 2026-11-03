@@ -104,11 +104,16 @@ const LINE_HIT_PX = 7; // pan-tool hit radius around a length polyline
 /** Drawing tool → kind of measurement it creates (null for pan / calibrate). */
 function toolKind(t: ToolId): MeasurementKind | null {
   if (t === 'rectArea') return 'area';
+  if (t === 'rectDeduct') return 'deduct';
   return t === 'area' || t === 'deduct' || t === 'length' ? t : null;
 }
 /** Tools whose clicks snap to the drawing's vector geometry. */
 const isSnapTool = (t: ToolId) =>
-  t === 'area' || t === 'deduct' || t === 'length' || t === 'calibrate' || t === 'rectArea' || t === 'count';
+  t === 'area' || t === 'deduct' || t === 'length' || t === 'calibrate' || t === 'rectArea' || t === 'rectDeduct' || t === 'count';
+/** Two-corner rectangle tools (quick add / quick deduct). */
+const isRectTool = (t: ToolId) => t === 'rectArea' || t === 'rectDeduct';
+/** Measurement kind a rectangle drawn with this tool creates. */
+const rectKind = (t: ToolId): 'area' | 'deduct' => (t === 'deduct' || t === 'rectDeduct' ? 'deduct' : 'area');
 /** Rectangle from two opposite corners (clockwise on screen). */
 const rectCorners = (a: Point, b: Point): Point[] => [
   { x: a.x, y: a.y },
@@ -164,7 +169,7 @@ function removeMarker(s: StoreState, m: AreaMeasurement, index: number) {
 function toolColor(t: ToolId, bad = false): string {
   if (bad) return OVERLAY_WARN_COLOR;
   if (t === 'calibrate') return '#7c3aed';
-  if (t === 'deduct') return DEDUCT_COLOR;
+  if (t === 'deduct' || t === 'rectDeduct') return DEDUCT_COLOR;
   if (t === 'length') return '#d97706';
   return '#2563eb';
 }
@@ -457,7 +462,7 @@ export default function ViewerCanvas() {
     const rectAnchor = (): { a: Point; mk: 'area' | 'deduct' } | null => {
       if (gesture.kind === 'rect') return gesture.moved ? { a: gesture.a, mk: gesture.mk } : null;
       const s = st();
-      if (rectMode && s.draft.length === 1 && gesture.kind === 'none') return { a: s.draft[0], mk: s.tool === 'deduct' ? 'deduct' : 'area' };
+      if (rectMode && s.draft.length === 1 && gesture.kind === 'none') return { a: s.draft[0], mk: rectKind(s.tool) };
       return null;
     };
 
@@ -546,8 +551,8 @@ export default function ViewerCanvas() {
       if (readout) {
         let text = '';
         let warn = false;
-        if ((active || ra) && p && (ra || s.tool === 'rectArea' || (rectMode && d.length === 1))) {
-          if (!ra) text = s.tool === 'deduct' ? 'פתח מלבני: לחץ על הפינה הראשונה' : 'לחץ על פינה ראשונה (או גרור)';
+        if ((active || ra) && p && (ra || isRectTool(s.tool) || (rectMode && d.length === 1))) {
+          if (!ra) text = rectKind(s.tool) === 'deduct' ? 'פתח מלבני: לחץ על הפינה הראשונה' : 'לחץ על פינה ראשונה (או גרור)';
           else if (!ppm) {
             text = 'יש לכייל קנה מידה';
             warn = true;
@@ -708,8 +713,8 @@ export default function ViewerCanvas() {
       const s = st();
       if (s.numPages === 0) return;
       const raw = vp.toPage(sx, sy);
-      if (s.tool === 'rectArea' || (s.tool === 'deduct' && ((alt && s.draft.length === 0) || (rectMode && s.draft.length === 1)))) {
-        const mk = s.tool === 'deduct' ? 'deduct' : 'area';
+      if (isRectTool(s.tool) || (s.tool === 'deduct' && ((alt && s.draft.length === 0) || (rectMode && s.draft.length === 1)))) {
+        const mk = rectKind(s.tool);
         const d0 = s.draft;
         if (d0.length === 0 || !rectMode) {
           rectMode = true;
@@ -853,10 +858,51 @@ export default function ViewerCanvas() {
       };
     };
 
+    /** Right-click delete (see onPointerDown). Returns true when something was removed. */
+    const rightClickDelete = (s: ReturnType<typeof st>, e: PointerEvent): boolean => {
+      if (s.draft.length) {
+        rectMode = false;
+        s.setDraft(s.draft.slice(0, -1));
+        updateBand();
+        return true;
+      }
+      if (activeCount(s)) return false; // count markers: handled below
+      rect = container.getBoundingClientRect();
+      const q0 = local(e);
+      const p = vp.toPage(q0.x, q0.y);
+      const shapes = s.measurements
+        .filter((m) => m.page === s.currentPage && (kindOf(m) === 'area' || kindOf(m) === 'deduct'))
+        .reverse();
+      // A vertex (selected shape first), then the topmost opening, then the topmost area.
+      const slop = VERTEX_PX / vp.zoom;
+      const ordered = [...shapes.filter((m) => m.id === s.selectedId), ...shapes.filter((m) => m.id !== s.selectedId)];
+      for (const m of ordered) {
+        const idx = nearestVertex(p, m.points, slop);
+        if (idx < 0) continue;
+        if (m.points.length > 3) s.updateMeasurement(m.id, { points: m.points.filter((_, i) => i !== idx) });
+        else s.removeMeasurement(m.id);
+        return true;
+      }
+      const inside =
+        shapes.find((m) => kindOf(m) === 'deduct' && pointInPolygon(p, m.points)) ??
+        shapes.find((m) => kindOf(m) === 'area' && pointInPolygon(p, m.points));
+      if (!inside) return false;
+      s.removeMeasurement(inside.id);
+      return true;
+    };
+
     const onPointerDown = (e: PointerEvent) => {
       if ((e.target as HTMLElement).closest?.('[data-viewer-ui]')) return;
       const s = st();
       if (s.numPages === 0) return;
+      // Right-click: while drawing, removes the last point; on an area / opening, removes the
+      // vertex under the cursor, or the whole shape when clicked inside it (both undoable).
+      if (e.pointerType === 'mouse' && e.button === 2 && pointers.size === 0 && gesture.kind === 'none') {
+        if (rightClickDelete(s, e)) {
+          e.preventDefault();
+          return;
+        }
+      }
       // Right-click or Alt+click on a marker of the selected count group removes it.
       if (e.pointerType === 'mouse' && (e.button === 2 || (e.button === 0 && e.altKey)) && pointers.size === 0) {
         const g = activeCount(s);
@@ -934,13 +980,13 @@ export default function ViewerCanvas() {
       }
       if (e.altKey !== alt) alt = e.altKey;
       if (e.ctrlKey !== ctrl) ctrl = e.ctrlKey;
-      if (!space && s.draft.length === 0 && (s.tool === 'rectArea' || (s.tool === 'deduct' && e.altKey))) {
+      if (!space && s.draft.length === 0 && (isRectTool(s.tool) || (s.tool === 'deduct' && e.altKey))) {
         const a = resolvePoint(vp.toPage(q.x, q.y), null, s.tool);
         gesture = {
           kind: 'rect',
           id: e.pointerId,
           a,
-          mk: s.tool === 'deduct' ? 'deduct' : 'area',
+          mk: rectKind(s.tool),
           sx: q.x,
           sy: q.y,
           moved: false,
@@ -1222,15 +1268,19 @@ export default function ViewerCanvas() {
           vp.zoomBy(1 / ZOOM_STEP);
           break;
         case 'Escape':
+          // Cancels whatever is in progress and always returns to the hand (pan) tool.
           if (gesture.kind === 'draw') {
             gesture = { kind: 'none' };
             updateLive(null);
           } else if (gesture.kind === 'rect') {
             gesture = { kind: 'none' };
-            updateBand();
-          } else if (s.draft.length) s.setDraft([]);
+          }
+          rectMode = false;
+          if (s.tool !== 'pan') s.setTool('pan'); // also clears the draft
+          else if (s.draft.length) s.setDraft([]);
           else if (s.selectedId) s.select(null);
-          else handled = false;
+          updateBand();
+          updateCursor();
           break;
         case 'Backspace':
           if (s.draft.length) s.setDraft(s.draft.slice(0, -1));
@@ -1285,8 +1335,9 @@ export default function ViewerCanvas() {
       updateCursor();
     };
     const onContextMenu = (e: MouseEvent) => {
-      const s = st();
-      if (s.draft.length || s.tool === 'count' || activeCount(s)) e.preventDefault();
+      // The right button belongs to the drawing (delete point / shape); no browser menu over it.
+      if ((e.target as HTMLElement).closest?.('[data-viewer-ui]')) return;
+      if (st().numPages) e.preventDefault();
     };
 
     container.addEventListener('pointerdown', onPointerDown);

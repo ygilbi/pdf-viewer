@@ -2,18 +2,19 @@ import { useEffect, useSyncExternalStore, type ReactElement } from 'react';
 import { useViewer } from '../state/store';
 import type { ToolId } from '../core/types';
 import {
-  IconAreaM2,
+  IconAreaManual,
+  IconAreaQuick,
   IconArrow,
   IconCloud,
   IconCount,
-  IconDeduct,
+  IconDeductManual,
+  IconDeductQuick,
   IconHand,
   IconHighlight,
   IconLength,
   IconNote,
   IconPen,
   IconRect,
-  IconRectArea,
   IconRuler,
   IconText,
 } from './ui/icons';
@@ -35,17 +36,23 @@ export interface ToolDef {
   group: ToolGroup;
   /** Extra tooltip line. */
   hint?: string;
+  /** Shown inside the expandable "חישוב שטח" menu of the palette. */
+  areaMenu?: boolean;
 }
+
+/** Title of the palette's expandable area menu. */
+export const AREA_MENU_LABEL = 'חישוב שטח';
 
 export const TOOL_GROUP_LABELS: Record<ToolGroup, string> = { measure: 'מדידה', markup: 'סימון והערות' };
 
 export const TOOLS: ToolDef[] = [
   { id: 'pan', label: 'יד / הזזה', short: 'יד / הזזה', shortcut: 'V / H', icon: <IconHand />, group: 'measure', hint: 'גרירת סימון מזיזה אותו' },
-  { id: 'calibrate', label: 'כיול קנה מידה', short: 'כיול', shortcut: 'C', icon: <IconRuler />, group: 'measure' },
-  { id: 'area', label: 'מדידת שטח חזית', short: 'שטח חזית', shortcut: 'A', icon: <IconAreaM2 />, group: 'measure' },
-  { id: 'rectArea', label: 'מלבן שטח', short: 'מלבן שטח', shortcut: 'B', icon: <IconRectArea />, group: 'measure', hint: 'שתי לחיצות בפינות נגדיות או גרירה' },
-  { id: 'deduct', label: 'פתח לניכוי', short: 'פתח לניכוי', shortcut: 'D', icon: <IconDeduct />, group: 'measure', hint: 'Alt + לחיצה / גרירה: פתח מלבני' },
-  { id: 'length', label: 'מדידת אורך', short: 'אורך', shortcut: 'L', icon: <IconLength />, group: 'measure' },
+  { id: 'calibrate', label: 'כיול ידני', short: 'כיול ידני', shortcut: 'C', icon: <IconRuler />, group: 'measure' },
+  { id: 'area', label: 'הוספת שטח ידנית', short: 'הוספה ידנית', shortcut: 'A', icon: <IconAreaManual />, group: 'measure', areaMenu: true, hint: 'לחיצה על כל פינה · Enter / לחיצה על הנקודה הראשונה לסגירה' },
+  { id: 'rectArea', label: 'הוספת שטח מהירה', short: 'הוספה מהירה', shortcut: 'B', icon: <IconAreaQuick />, group: 'measure', areaMenu: true, hint: 'שתי לחיצות בפינות נגדיות או גרירה' },
+  { id: 'deduct', label: 'הפחתת שטח ידנית', short: 'הפחתה ידנית', shortcut: 'D', icon: <IconDeductManual />, group: 'measure', areaMenu: true, hint: 'לחיצה על כל פינה של הפתח' },
+  { id: 'rectDeduct', label: 'הפחתת שטח מהירה', short: 'הפחתה מהירה', shortcut: 'O', icon: <IconDeductQuick />, group: 'measure', areaMenu: true, hint: 'שתי לחיצות בפינות נגדיות או גרירה' },
+  { id: 'length', label: 'חישוב אורך', short: 'חישוב אורך', shortcut: 'L', icon: <IconLength />, group: 'measure' },
   { id: 'count', label: 'ספירת פריטים', short: 'ספירה', shortcut: 'N', icon: <IconCount />, group: 'measure' },
   { id: 'note', label: 'הערה', short: 'הערה', shortcut: 'K', icon: <IconNote />, group: 'markup', hint: 'לחץ למיקום סיכה והקלד הערה' },
   { id: 'text', label: 'טקסט על השרטוט', short: 'טקסט', shortcut: 'X', icon: <IconText />, group: 'markup' },
@@ -64,6 +71,7 @@ const TOOL_KEYS: Record<string, ToolId> = {
   KeyA: 'area',
   KeyB: 'rectArea',
   KeyD: 'deduct',
+  KeyO: 'rectDeduct',
   KeyL: 'length',
   KeyN: 'count',
   KeyK: 'note',

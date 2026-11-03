@@ -49,7 +49,7 @@ const CALIB = '#7c3aed';
 const LENGTH_DRAFT = '#d97706';
 const HATCH_ID = 'deduct-hatch';
 
-const draftColor = (t: ToolId) => (t === 'calibrate' ? CALIB : t === 'deduct' ? DEDUCT_COLOR : t === 'length' ? LENGTH_DRAFT : DRAFT);
+const draftColor = (t: ToolId) => (t === 'calibrate' ? CALIB : t === 'deduct' || t === 'rectDeduct' ? DEDUCT_COLOR : t === 'length' ? LENGTH_DRAFT : DRAFT);
 
 /** Screen-constant marker radius (px) for count items — keep in sync with ViewerCanvas VERTEX_PX. */
 const MARKER_R = 9;

@@ -338,3 +338,31 @@ export const IconCalculator = (p: IconProps) => (
     <path d="M8 7h8M8.5 11h.01M12 11h.01M15.5 11h.01M8.5 14.5h.01M12 14.5h.01M15.5 14.5v3M8.5 17.5h.01M12 17.5h.01" />
   </Svg>
 );
+
+/** Irregular pentagon with two edges drawn bold in `color` (manual area / manual deduct). */
+const ManualAreaIcon = ({ color, ...p }: IconProps & { color: string }) => (
+  <Svg {...p}>
+    <path d="M5 8.5 11.5 3.5 20 7.5 18 19.5 6.5 20.5Z" strokeWidth={1.3} />
+    <path d="M5 8.5 11.5 3.5 20 7.5" stroke={color} strokeWidth={2.8} />
+  </Svg>
+);
+/** Rectangle with bold dots on two opposite corners in `color` (quick area / quick deduct). */
+const QuickAreaIcon = ({ color, ...p }: IconProps & { color: string }) => (
+  <Svg {...p}>
+    <rect x="4" y="6" width="16" height="12" strokeWidth={1.3} />
+    <circle cx="4" cy="6" r="2.4" fill={color} stroke="none" />
+    <circle cx="20" cy="18" r="2.4" fill={color} stroke="none" />
+  </Svg>
+);
+export const AREA_BLUE = '#3b82f6';
+export const AREA_RED = '#ef4444';
+export const IconAreaManual = (p: IconProps) => <ManualAreaIcon color={AREA_BLUE} {...p} />;
+export const IconAreaQuick = (p: IconProps) => <QuickAreaIcon color={AREA_BLUE} {...p} />;
+export const IconDeductManual = (p: IconProps) => <ManualAreaIcon color={AREA_RED} {...p} />;
+export const IconDeductQuick = (p: IconProps) => <QuickAreaIcon color={AREA_RED} {...p} />;
+/** Small disclosure chevron (points down when open). */
+export const IconChevronDown = (p: IconProps) => (
+  <Svg {...p}>
+    <path d="m6 9 6 6 6-6" />
+  </Svg>
+);
