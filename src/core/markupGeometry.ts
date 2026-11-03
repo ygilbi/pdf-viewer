@@ -357,6 +357,7 @@ export function hitMarkup(p: Point, m: MarkupLike, slop: number, pinScale = 1): 
     case 'text':
       return inRect(p, markupBounds(m), slop);
     case 'highlight':
+    case 'link':
       return inRect(p, rectOfPoints(pts), slop);
     case 'rect':
       return distanceToRectEdge(p, rectOfPoints(pts)) <= slop;

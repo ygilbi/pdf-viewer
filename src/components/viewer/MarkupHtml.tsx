@@ -1,4 +1,4 @@
-import { memo, useEffect, useRef } from 'react';
+import { memo, useEffect, useRef, useState } from 'react';
 import type { AreaMeasurement } from '../../core/types';
 import { NOTE_PIN } from '../../core/markupGeometry';
 import { useViewer } from '../../state/store';
@@ -63,8 +63,138 @@ function NoteBubblesImpl({
 
 export const NoteBubbles = memo(NoteBubblesImpl);
 
-/** Floating textarea that edits an annotation's text live (Enter = done, Shift+Enter = new line, Esc = cancel). */
+/** In-place editor for the annotation being edited: target page for links, text otherwise. */
 export function MarkupEditor({ m }: { m: AreaMeasurement }) {
+  return m.kind === 'link' ? <LinkEditor m={m} /> : <TextEditor m={m} />;
+}
+
+/**
+ * Target-page picker of a link area (Enter = save, Esc = cancel; cancelling a new link removes it).
+ * Pages are the workspace's global pages, shown with their file name when several files are open.
+ */
+function LinkEditor({ m }: { m: AreaMeasurement }) {
+  const numPages = useViewer((s) => s.numPages);
+  const docs = useViewer((s) => s.docs);
+  const ref = useRef<HTMLInputElement>(null);
+  const isNew = useRef(useMarkup.getState().editingIsNew);
+  const [value, setValue] = useState(String(m.targetPage ?? Math.min(numPages, m.page + 1)));
+  const done = useRef(false);
+  const id = m.id;
+
+  useEffect(() => {
+    ref.current?.focus({ preventScroll: true });
+    ref.current?.select();
+  }, []);
+
+  const n = Math.round(Number(value));
+  const valid = Number.isFinite(n) && n >= 1 && n <= numPages;
+  const fileOf = (page: number): string | null => {
+    if (docs.length < 2) return null;
+    const d = docs.find((x) => page > x.pageOffset && page <= x.pageOffset + x.numPages);
+    return d ? `${d.name} · עמוד ${page - d.pageOffset}` : null;
+  };
+
+  const close = () => {
+    if (useMarkup.getState().editingId === id) useMarkup.getState().stopEditing();
+  };
+  const save = () => {
+    if (!valid || done.current) return;
+    done.current = true;
+    useViewer.getState().updateMeasurement(id, { targetPage: n });
+    close();
+  };
+  const cancel = () => {
+    if (done.current) return;
+    done.current = true;
+    if (isNew.current) useViewer.getState().removeMeasurement(id);
+    close();
+  };
+  const remove = () => {
+    done.current = true;
+    useViewer.getState().removeMeasurement(id);
+    close();
+  };
+
+  const p = m.points[0];
+  if (!p) return null;
+  return (
+    <div
+      data-viewer-ui
+      className="absolute"
+      style={{
+        left: p.x,
+        top: p.y,
+        transformOrigin: '0 0',
+        transform: 'scale(var(--inv-zoom, 1)) translate(0, calc(-100% - 22px))',
+        pointerEvents: 'auto',
+        zIndex: 45,
+      }}
+      onPointerDown={(e) => e.stopPropagation()}      onBlur={(e) => {
+        // Focus left the editor (click on the drawing…): keep a valid page, otherwise drop it.
+        if (!e.currentTarget.contains(e.relatedTarget as Node | null)) {
+          if (valid) save();
+          else cancel();
+        }
+      }}
+    >
+      <div dir="rtl" className="w-56 rounded-lg bg-white p-2 shadow-xl ring-1 ring-black/20" style={{ borderTop: '3px solid #0284c7' }}>
+        <label className="mb-1 block text-[11px] font-semibold text-slate-600" htmlFor={`link-${id}`}>
+          קישור לעמוד
+        </label>
+        <div className="flex items-center gap-1.5">
+          <input
+            id={`link-${id}`}
+            ref={ref}
+            type="number"
+            inputMode="numeric"
+            min={1}
+            max={numPages}
+            value={value}
+            data-testid="link-target"
+            onChange={(e) => setValue(e.target.value)}
+            onKeyDown={(e) => {
+              e.stopPropagation();
+              if (e.key === 'Enter') {
+                e.preventDefault();
+                save();
+              } else if (e.key === 'Escape') {
+                e.preventDefault();
+                cancel();
+              }
+            }}
+            className={`w-20 rounded border px-1.5 py-1 text-[13px] text-slate-800 outline-none focus:ring-2 ${valid ? 'border-slate-300 focus:border-sky-500 focus:ring-sky-200' : 'border-rose-400 focus:ring-rose-200'}`}
+          />
+          <span className="text-[12px] text-slate-500">מתוך {numPages}</span>
+        </div>
+        <div className="mt-1 min-h-[14px] text-[10.5px] text-slate-500">
+          {valid ? fileOf(n) : <span className="text-rose-600">מספר עמוד בין 1 ל-{numPages}</span>}
+        </div>
+        <div className="mt-1.5 flex gap-1">
+          <button
+            type="button"
+            disabled={!valid}
+            onClick={save}
+            data-testid="link-save"
+            className="rounded bg-sky-600 px-2 py-0.5 text-[12px] font-medium text-white hover:bg-sky-700 disabled:opacity-40"
+          >
+            שמור
+          </button>
+          <button type="button" onClick={cancel} className="rounded px-2 py-0.5 text-[12px] text-slate-600 hover:bg-slate-100">
+            ביטול
+          </button>
+          {!isNew.current && (
+            <button type="button" onClick={remove} className="ms-auto rounded px-2 py-0.5 text-[12px] text-rose-600 hover:bg-rose-50">
+              מחק קישור
+            </button>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/** Floating textarea that edits an annotation's text live (Enter = done, Shift+Enter = new line, Esc = cancel). */
+function TextEditor({ m }: { m: AreaMeasurement }) {
   const ref = useRef<HTMLTextAreaElement>(null);
   const original = useRef(m.text ?? '');
   const isNew = useRef(useMarkup.getState().editingIsNew);

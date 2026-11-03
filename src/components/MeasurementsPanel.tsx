@@ -31,6 +31,7 @@ import {
   IconDraw,
   IconEllipse,
   IconLine,
+  IconLink,
   IconTriangle,
   IconEdit,
   IconHighlight,
@@ -510,6 +511,7 @@ const MARKUP_ICON: Record<MarkupKind, typeof IconPolygon> = {
   arrow: IconArrow,
   pen: IconDraw,
   highlight: IconHighlight,
+  link: IconLink,
 };
 
 /** "הערות וסימונים": annotations (not quantities) with jump-to, edit and delete. */

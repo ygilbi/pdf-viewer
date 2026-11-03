@@ -17,6 +17,7 @@ import {
   IconDraw,
   IconEllipse,
   IconLine,
+  IconLink,
   IconRect,
   IconTriangle,
   IconRuler,
@@ -70,6 +71,7 @@ export const TOOLS: ToolDef[] = [
   { id: 'cloud', label: 'ענן', short: 'ענן', shortcut: 'U', icon: <IconCloud />, group: 'markup', hint: 'גרור מלבן' },
   { id: 'pen', label: 'כלי שרטוט', short: 'כלי שרטוט', shortcut: 'P', icon: <IconDraw />, group: 'markup', hint: 'גרור לציור חופשי · Shift לחוץ: קו ישר עם נעילה כל 30°' },
   { id: 'highlight', label: 'מרקר (הדגשה)', short: 'מרקר', shortcut: 'G', icon: <IconHighlight />, group: 'markup', hint: 'גרור מלבן שקוף' },
+  { id: 'link', label: 'קישור לעמוד', short: 'קישור לעמוד', shortcut: '', icon: <IconLink />, group: 'markup', hint: 'גרור אזור ובחר עמוד יעד · לחיצה עם יד / הזזה עוברת לעמוד' },
 ];
 
 /** e.code → tool (e.code so shortcuts work on a Hebrew keyboard layout too). */
@@ -121,6 +123,15 @@ export function useToolShortcuts() {
           break;
         case 'PageDown':
           s.setPage(s.currentPage + 1);
+          break;
+        // RTL reading order: ← next page, → previous page.
+        case 'ArrowLeft':
+          if (e.shiftKey) return;
+          s.setPage(s.currentPage + 1);
+          break;
+        case 'ArrowRight':
+          if (e.shiftKey) return;
+          s.setPage(s.currentPage - 1);
           break;
         default:
           return;

@@ -220,6 +220,22 @@ function drawCalibration(c: Ctx, cal: { p1: Point; p2: Point; meters: number }) 
     label(c, [{ t: `כיול: ${formatLength(cal.meters)}`, bold: true }], { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 - 9 * c.s }, col);
 }
 
+/** A /Link annotation over the link area that jumps to output page `target` (fit page). */
+function addLinkAnnotation(out: PDFDocument, c: Ctx, m: AreaMeasurement, target: number | undefined, outPages: PDFPage[]) {
+  if (target === undefined || m.points.length < 2) return;
+  const r = rectOfPoints(m.points.map((p) => P(c, p)));
+  const a = viewportToPdf(c.g, { x: r.x, y: r.y });
+  const b = viewportToPdf(c.g, { x: r.x + r.width, y: r.y + r.height });
+  const annot = out.context.obj({
+    Type: 'Annot',
+    Subtype: 'Link',
+    Rect: [Math.min(a.x, b.x), Math.min(a.y, b.y), Math.max(a.x, b.x), Math.max(a.y, b.y)],
+    Border: [0, 0, 0],
+    Dest: [outPages[target].ref, 'Fit'],
+  });
+  c.page.node.addAnnot(out.context.register(annot));
+}
+
 function drawMarkup(c: Ctx, m: AreaMeasurement, noteNo: number | undefined) {
   const kind = m.kind;
   const pts = m.points.map((p) => P(c, p));
@@ -243,6 +259,9 @@ function drawMarkup(c: Ctx, m: AreaMeasurement, noteNo: number | undefined) {
       break;
     case 'highlight':
       path(c, rectPath(rectOfPoints(pts)), { fill: hexColor(m.color, HIGHLIGHT_COLOR), opacity: HIGHLIGHT_OPACITY, multiply: true });
+      break;
+    case 'link':
+      path(c, rectPath(rectOfPoints(pts)), { stroke: col, width: 0.8 * c.s, dash: [4 * c.s, 2 * c.s], strokeOpacity: 0.8 });
       break;
     case 'pen':
       path(c, polylinePath(pts), { stroke: col, width: sw, round: true });
@@ -383,6 +402,7 @@ export async function buildExportPdf(
     }
   }
 
+  const pageIndex = new Map(pages.map((p, i) => [p.globalPage, i]));
   // 2) Overlay per page.
   for (let i = 0; i < pages.length; i++) {
     check();
@@ -408,6 +428,8 @@ export async function buildExportPdf(
     if (o.measurements) labels.push(...drawTakeoff(c, takeoff, ppm, nets));
     if (o.calibration && cal) labels.push(drawCalibration(c, cal));
     if (o.markup) for (const m of ms) if (isMarkupKind(m.kind)) drawMarkup(c, m, notes.get(m.id));
+    // Link areas become real PDF links when their target page is part of this export.
+    if (o.markup) for (const m of ms) if (m.kind === 'link') addLinkAnnotation(out, c, m, pageIndex.get(m.targetPage ?? -1), outPages);
     for (const l of labels) l();
     if (o.legend && o.measurements) drawLegend(c, takeoff, input.categories);
     onProgress('pages', pages.length * 0.5 + (i + 1) * 0.5, pages.length);

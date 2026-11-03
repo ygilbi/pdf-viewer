@@ -211,6 +211,32 @@ describe('buildExportPdf', () => {
     await expect(buildExportPdf(input, undefined, () => true)).rejects.toThrow('בוטל');
   });
 
+  it('turns link areas into PDF /Link annotations to the exported target page', async () => {
+    const link: AreaMeasurement = { id: 'L1', page: 1, kind: 'link', label: 'קישור 1', color: '#0284c7', points: [{ x: 50, y: 40 }, { x: 150, y: 100 }], targetPage: 2 };
+    const dangling: AreaMeasurement = { ...link, id: 'L2', targetPage: 9 };
+    const input: PdfBuildInput = {
+      docs: [{ id: 'doc1', name: 'x.pdf' }],
+      bytes: {},
+      pages: [{ globalPage: 1, docId: 'doc1', localPage: 1 }, { globalPage: 2, docId: 'doc1', localPage: 2 }],
+      pageSizes: { 1: { width: 500, height: 300 }, 2: { width: 500, height: 300 } },
+      measurements: [link, dangling],
+      calibrations: {},
+      categories: DEFAULT_CATEGORIES,
+      options: { ...DEFAULT_PDF_OPTIONS, drawings: false, summary: false },
+      fonts: await fonts(),
+      title: 'x',
+    };
+    const doc = await PDFDocument.load(await buildExportPdf(input));
+    const annots = doc.getPage(0).node.Annots();
+    expect(annots?.size()).toBe(1); // the link to page 9 (not exported) is skipped
+    const a = doc.context.lookup(annots!.get(0)) as unknown as { get(k: unknown): unknown };
+    const { PDFName, PDFArray } = await import('pdf-lib');
+    const rect = (a.get(PDFName.of('Rect')) as InstanceType<typeof PDFArray>).asRectangle();
+    expect(rect).toEqual({ x: 50, y: 200, width: 100, height: 60 }); // y flipped: 300 - 100
+    const dest = a.get(PDFName.of('Dest')) as InstanceType<typeof PDFArray>;
+    expect(dest.get(0)).toBe(doc.getPage(1).ref);
+  });
+
   it('appends a priced BOQ page (Hebrew, ₪) when options.boq', async () => {
     const boq = buildBoq({
       measurements: ms,

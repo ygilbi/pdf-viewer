@@ -29,7 +29,7 @@ import {
 } from '../core/measurementEngine';
 import { ViewportController } from './viewer/Viewport';
 import { PageLayers } from './viewer/TileLayer';
-import { MeasureOverlay, OVERLAY_WARN_COLOR } from './viewer/MeasureOverlay';
+import { LINK_COLOR, MeasureOverlay, OVERLAY_WARN_COLOR } from './viewer/MeasureOverlay';
 import { emitZoom, registerViewer, takePendingFocus } from './viewer/commands';
 import { TextHighlights } from './text/TextHighlights';
 import { MarkupEditor, NoteBubbles } from './viewer/MarkupHtml';
@@ -127,7 +127,7 @@ const rectCorners = (a: Point, b: Point): Point[] => [
 const isPolygonTool = (t: ToolId) => t === 'area' || t === 'deduct';
 /** Markup tools drawn by dragging. */
 const isDragTool = (t: ToolId): t is MarkupKind =>
-  t === 'rect' || t === 'cloud' || t === 'arrow' || t === 'pen' || t === 'highlight' || t === 'line' || isBoxShape(t);
+  t === 'rect' || t === 'cloud' || t === 'arrow' || t === 'pen' || t === 'highlight' || t === 'line' || t === 'link' || isBoxShape(t);
 /** Straight-line angle lock step (degrees) while Shift is held: pen and line 30°, arrow 45°. */
 const SHIFT_STEP: Partial<Record<MarkupKind, number>> = { pen: 30, line: 30, arrow: 45 };
 /** Markup kinds without vertex handles (moved as a whole only). */
@@ -571,6 +571,7 @@ export default function ViewerCanvas() {
           else if (s.tool === 'text') text = 'לחץ להוספת טקסט';
           else if (s.tool === 'arrow') text = 'גרור מהזנב לראש החץ';
           else if (s.tool === 'pen') text = 'גרור לציור חופשי · החזק Shift לקו ישר (כל 30°)';
+          else if (s.tool === 'link') text = 'גרור אזור לחיץ · לחיצה על קישור קיים לעריכה';
           else if (s.tool === 'line') text = 'גרור מנקודה לנקודה · Shift: כל 30°';
           else if (isDragTool(s.tool)) text = 'גרור לציור';
           else if (s.tool === 'count') {
@@ -668,8 +669,8 @@ export default function ViewerCanvas() {
       else if (gesture.kind === 'draw' || gesture.kind === 'rect') c = 'crosshair';
       else if (space) c = 'grab';
       else if (hoverVertex()) c = 'move';
-      else if (tl === 'pan' && hoverId) c = 'move';
-      else if ((tl === 'note' || tl === 'text') && hoverId) c = 'pointer';
+      else if (tl === 'pan' && hoverId) c = st().measurements.find((x) => x.id === hoverId)?.kind === 'link' ? 'pointer' : 'move';
+      else if ((tl === 'note' || tl === 'text' || tl === 'link') && hoverId) c = 'pointer';
       else c = tl === 'pan' ? 'grab' : 'crosshair';
       if (container.style.cursor !== c) container.style.cursor = c;
     };
@@ -826,10 +827,34 @@ export default function ViewerCanvas() {
           g.tool === 'arrow' || g.tool === 'line'
             ? distance(a, b) * vp.zoom >= MIN_DRAW_PX * 2
             : r.width * vp.zoom >= MIN_DRAW_PX && r.height * vp.zoom >= MIN_DRAW_PX;
-        if (!big) return;
+        if (!big) {
+          // Link tool: a plain click on an existing link edits its target page.
+          if (g.tool === 'link') {
+            const hit = hitMarkupAt(a, s.measurements, s.currentPage, vp.zoom, ['link']);
+            if (hit) {
+              s.select(hit.id);
+              useMarkup.getState().startEditing(hit.id);
+            }
+          }
+          return;
+        }
         points = g.tool === 'arrow' || g.tool === 'line' ? [a, b] : [{ x: r.x, y: r.y }, { x: r.x + r.width, y: r.y + r.height }];
       }
       const sw = useMarkup.getState().strokeWidth;
+      if (g.tool === 'link') {
+        const id = newId();
+        s.addMeasurement({
+          id,
+          page: s.currentPage,
+          kind: 'link',
+          label: `${KIND_LABEL_PREFIX.link} ${nextLabelNumber(s.measurements, 'link')}`,
+          points,
+          targetPage: Math.min(s.numPages, s.currentPage + 1),
+          color: LINK_COLOR,
+        });
+        useMarkup.getState().startEditing(id, true); // ask for the target page
+        return;
+      }
       s.addMeasurement({
         id: newId(),
         page: s.currentPage,
@@ -1015,7 +1040,7 @@ export default function ViewerCanvas() {
           const ms = useMarkup.getState();
           const color = newMeasurementStyle(s, s.tool).color;
           const hl = s.tool === 'highlight';
-          el.setAttribute('stroke', hl ? 'none' : color);
+          el.setAttribute('stroke', hl ? 'none' : s.tool === 'link' ? LINK_COLOR : color);
           el.setAttribute('fill', hl ? color : s.tool === 'arrow' ? color : 'none');
           el.setAttribute('fill-opacity', hl ? '0.35' : '1');
           el.style.strokeWidth = `calc(${ms.strokeWidth}px * var(--inv-zoom, 1))`;
@@ -1194,6 +1219,12 @@ export default function ViewerCanvas() {
           // Plain click on a markup: double click edits note / text.
           const now = performance.now();
           const m = st().measurements.find((x) => x.id === g.mid);
+          if (m?.kind === 'link' && m.targetPage && st().tool === 'pan') {
+            // Follow the link (hand tool). Edit it with the link tool.
+            lastMarkupClick = null;
+            st().setPage(m.targetPage);
+            return;
+          }
           if (lastMarkupClick && lastMarkupClick.id === g.mid && now - lastMarkupClick.t < DBL_MS && (m?.kind === 'note' || m?.kind === 'text')) {
             lastMarkupClick = null;
             useMarkup.getState().startEditing(g.mid);

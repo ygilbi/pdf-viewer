@@ -242,7 +242,7 @@ export function parseLengthInput(s: string): number | null {
 /** Every kind stored in the `measurements` array: takeoff kinds + markup / annotation kinds. */
 export type AnyKind = MeasurementKind | MarkupKind;
 
-export const MARKUP_KINDS: readonly MarkupKind[] = ['note', 'text', 'rect', 'ellipse', 'triangle', 'diamond', 'line', 'cloud', 'arrow', 'pen', 'highlight'];
+export const MARKUP_KINDS: readonly MarkupKind[] = ['note', 'text', 'rect', 'ellipse', 'triangle', 'diamond', 'line', 'cloud', 'arrow', 'pen', 'highlight', 'link'];
 
 /** True for annotation kinds (not takeoff quantities — excluded from every sum / CSV total). */
 export function isMarkupKind(kind: unknown): kind is MarkupKind {
@@ -288,6 +288,7 @@ export const KIND_LABELS: Record<AnyKind, string> = {
   arrow: 'חץ',
   pen: 'שרטוט',
   highlight: 'מרקר',
+  link: 'קישור',
 };
 
 /** Label prefix for auto-numbered measurements of each kind ("חזית 3", "פתח 1", "קו 2"). */
@@ -307,6 +308,7 @@ export const KIND_LABEL_PREFIX: Record<AnyKind, string> = {
   arrow: 'חץ',
   pen: 'שרטוט',
   highlight: 'מרקר',
+  link: 'קישור',
 };
 
 /** Minimum number of points a finished measurement of this kind needs. */

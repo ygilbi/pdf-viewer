@@ -402,3 +402,10 @@ export const IconDraw = (p: IconProps) => (
     <path d="M14.5 4.5 19.5 9.5 10 19H5v-5Z" />
   </Svg>
 );
+/** Link (chain) — clickable area that jumps to a page. */
+export const IconLink = (p: IconProps) => (
+  <Svg {...p}>
+    <path d="M10 14a4.5 4.5 0 0 0 6.4 0l3-3a4.5 4.5 0 0 0-6.4-6.4l-1.2 1.2" />
+    <path d="M14 10a4.5 4.5 0 0 0-6.4 0l-3 3a4.5 4.5 0 0 0 6.4 6.4l1.2-1.2" />
+  </Svg>
+);

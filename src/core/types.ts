@@ -165,6 +165,8 @@ export interface AreaMeasurement {
    * Read it through `itemOf(m)` (measurementEngine) — older saves lack it.
    */
   item?: ItemDims;
+  /** Link markup only: global page number (1-based, across all open files) it jumps to. */
+  targetPage?: number;
 }
 
 /** Size of one counted item (meters) + optional item / schedule code. */
@@ -225,7 +227,8 @@ export interface WorkspaceClient extends PdfClient {
 // They are NOT takeoff quantities: summaries, CSV totals and category
 // subtotals must ignore them (use `isMarkupKind`).
 /** 'ellipse' / 'triangle' / 'diamond' = shapes inscribed in the two-corner box; 'line' = [start, end]. */
-export type MarkupKind = 'note' | 'text' | 'rect' | 'ellipse' | 'triangle' | 'diamond' | 'line' | 'cloud' | 'arrow' | 'pen' | 'highlight';
+/** 'link' = clickable box ([corner, opposite corner]) that jumps to `targetPage`. */
+export type MarkupKind = 'note' | 'text' | 'rect' | 'ellipse' | 'triangle' | 'diamond' | 'line' | 'cloud' | 'arrow' | 'pen' | 'highlight' | 'link';
 
 // ---------------------------------------------------------------------------
 // Page text (contract — worker 'text' request, pdfClient.getPageText)

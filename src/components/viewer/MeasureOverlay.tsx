@@ -70,6 +70,7 @@ const KIND_ORDER = {
   count: 3,
   // markup paints above the takeoff: fills first, then lines, then text / pins
   highlight: 4,
+  link: 4,
   rect: 5,
   ellipse: 5,
   triangle: 5,
@@ -379,7 +380,7 @@ const MarkupShape = memo(function MarkupShape({ m, selected }: { m: AreaMeasurem
   const stroke = { strokeWidth: px(sw) };
   const handles =
     selected &&
-    (kind === 'rect' || kind === 'cloud' || kind === 'highlight' || kind === 'arrow' || kind === 'line' || isBoxShape(kind)) &&
+    (kind === 'rect' || kind === 'cloud' || kind === 'highlight' || kind === 'arrow' || kind === 'line' || kind === 'link' || isBoxShape(kind)) &&
     pts.map((p, i) => (
       <circle key={i} cx={p.x} cy={p.y} fill="#fff" stroke={SELECT_COLOR} style={{ r: px(5), strokeWidth: px(2) }} />
     ));
@@ -482,6 +483,34 @@ const MarkupShape = memo(function MarkupShape({ m, selected }: { m: AreaMeasurem
         </>,
       );
     }
+    case 'link': {
+      // Clickable area → page: dashed box + a screen-sized "עמ׳ N" badge on its top-right corner.
+      const r = rectOfPoints(pts);
+      const t = m.targetPage;
+      const tag = t ? `עמ׳ ${t}` : 'ללא יעד';
+      const col = t ? LINK_COLOR : WARN;
+      return g(
+        <>
+          <rect
+            x={r.x}
+            y={r.y}
+            width={r.width}
+            height={r.height}
+            fill={col}
+            fillOpacity={selected ? 0.14 : 0.07}
+            stroke={col}
+            style={{ strokeWidth: px(1.5), strokeDasharray: `${px(6)} ${px(3)}` }}
+          />
+          <g style={{ transform: `translate(${r.x + r.width}px, ${r.y}px) scale(var(--inv-zoom, 1))` }} data-testid="link-badge">
+            <rect x={-(tag.length * 6.2 + 22)} y={-17} width={tag.length * 6.2 + 22} height={17} rx={4} fill={col} />
+            <path d="M-13 -11.5l5 0 0 5M-8 -11.5l-5.5 5.5" stroke="#fff" strokeWidth={1.4} fill="none" strokeLinecap="round" />
+            <text x={-17} y={-4.5} textAnchor="start" fill="#fff" fontSize={11} fontWeight={700} style={{ direction: 'rtl', fontFamily: FONT }}>
+              {tag}
+            </text>
+          </g>
+        </>,
+      );
+    }
     case 'highlight': {
       const r = rectOfPoints(pts);
       return g(
@@ -526,3 +555,5 @@ const MarkupShape = memo(function MarkupShape({ m, selected }: { m: AreaMeasurem
   }
 });
 export const OVERLAY_WARN_COLOR = WARN;
+/** Colour of link areas. */
+export const LINK_COLOR = '#0284c7';
