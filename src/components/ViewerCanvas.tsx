@@ -491,6 +491,8 @@ export default function ViewerCanvas() {
         !useMarkup.getState().editingId;
       const d = s.draft;
       const ppm = s.calibrations[s.currentPage]?.pixelsPerMeter;
+      // Prefetch the page's snap geometry as soon as a snapping tool is active (not on the first click).
+      if (drawing && snapWanted(s.tool)) ensureSnapIndex();
       const ra = drawing && p ? rectAnchor() : null;
       updateMarker((active || gesture.kind === 'rect') && p !== null);
       if (gesture.kind !== 'draw') {
