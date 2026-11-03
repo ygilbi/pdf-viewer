@@ -194,10 +194,11 @@ export function calibrationFromScale(d: DetectedScale, pageSize?: PageSize): Cal
   const r = d.rects[0] ?? { x: 0, y: 0, width: 0, height: 0 };
   const len = d.pixelsPerMeter;
   let x = r.x;
-  let y = r.y + r.height + Math.max(4, r.height * 0.6);
+  // Far enough below that the overlay's "1.00 מ׳" label (drawn above the line) clears the text.
+  let y = r.y + r.height * 3.2 + 6;
   if (pageSize) {
     x = Math.min(Math.max(0, x), Math.max(0, pageSize.width - len));
-    if (y > pageSize.height) y = Math.max(0, r.y - 4);
+    if (y > pageSize.height) y = Math.max(0, r.y - r.height * 2);
   }
   const p1: Point = { x, y };
   const p2: Point = { x: x + len, y };

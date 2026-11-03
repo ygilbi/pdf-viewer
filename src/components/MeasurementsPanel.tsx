@@ -10,8 +10,11 @@ import {
   computeNetAreas,
   computePageSummary,
   formatArea,
+  formatItemDims,
   formatLength,
   isMarkupKind,
+  itemOf,
+  itemQuantities,
   kindOf,
   polygonAreaM2,
   polygonPerimeterMeters,
@@ -143,12 +146,15 @@ const Row = memo(function Row({ m, calibration, netM2, parentLabel, selected, sh
       </div>
       <div className="mt-0.5 flex flex-wrap items-center gap-x-3 ps-1 font-mono tabular-nums text-slate-400">
         {kind === 'count' ? (
-          <span title="כמות">
-            <span className="font-sans text-slate-500">כמות </span>
-            <span className="text-slate-100" dir="ltr" data-testid="row-count">
-              ×{m.points.length}
+          <>
+            <span title="כמות">
+              <span className="font-sans text-slate-500">כמות </span>
+              <span className="text-slate-100" dir="ltr" data-testid="row-count">
+                ×{m.points.length}
+              </span>
             </span>
-          </span>
+            <ItemDimsButton m={m} />
+          </>
         ) : kind === 'length' ? (
           <span title="אורך">
             <span className="font-sans text-slate-500">אורך </span>
@@ -178,6 +184,7 @@ const Row = memo(function Row({ m, calibration, netM2, parentLabel, selected, sh
           <MeasurementCategorySelect id={m.id} value={categoryKey(m)} />
         </span>
       </div>
+      {kind === 'count' && <ItemDimsEditor m={m} />}
       {kind === 'area' && netM2 !== undefined && (
         <div className="ps-1 font-mono tabular-nums text-slate-400" data-testid="row-net">
           <span className="font-sans text-slate-500">נטו: </span>
@@ -451,6 +458,8 @@ function SummaryBlock({
       {row('נטו', v(formatArea(s.netM2)), 'net', strong ? 'font-semibold text-sky-300' : 'font-semibold text-emerald-300')}
       {row('סה״כ אורך', v(formatLength(s.lengthM)), 'length', 'text-amber-300')}
       {s.count > 0 && row('סה״כ כמות', `×${s.count}`, 'count', 'text-violet-300')}
+      {s.itemAreaM2 > 0 && row('שטח פריטים', formatArea(s.itemAreaM2), 'item-area', 'text-violet-300')}
+      {s.itemPerimeterM > 0 && row('היקף פרופיל', formatLength(s.itemPerimeterM), 'item-perim', 'text-violet-300')}
     </div>
   );
 }
@@ -463,6 +472,7 @@ function CategoryHeader({ g, color, count }: { g: CategorySummary; color: string
   if (t.openingsM2 > 0) parts.push(`פתחים ${formatArea(t.openingsM2)}`);
   if (t.lengthM > 0) parts.push(formatLength(t.lengthM));
   if (t.count > 0) parts.push(`\u2066×${t.count}\u2069`);
+  if (t.itemAreaM2 > 0) parts.push(`פריטים ${formatArea(t.itemAreaM2)}`);
   return (
     <li
       className="sticky top-0 z-10 border-b border-slate-700 bg-slate-900/95 px-2 py-1 text-[11px]"
@@ -586,5 +596,163 @@ function MarkupList({
         })}
       </ul>
     </section>
+  );
+}
+
+// ---- item dimensions (count groups) -----------------------------------------
+
+/** Which count row has its "מידות פריט" editor open (one at a time). */
+let openItemEditor: string | null = null;
+const itemEditorListeners = new Set<() => void>();
+function setOpenItemEditor(id: string | null) {
+  openItemEditor = id;
+  itemEditorListeners.forEach((l) => l());
+}
+function useItemEditorOpen(id: string): boolean {
+  const [, force] = useState(0);
+  useEffect(() => {
+    const l = () => force((n) => n + 1);
+    itemEditorListeners.add(l);
+    return () => void itemEditorListeners.delete(l);
+  }, []);
+  return openItemEditor === id;
+}
+
+/** Compact chip on a count row: "W1 150×140" or "+ מידות פריט". */
+function ItemDimsButton({ m }: { m: AreaMeasurement }) {
+  const it = itemOf(m);
+  const open = useItemEditorOpen(m.id);
+  return (
+    <button
+      type="button"
+      data-testid="item-dims-toggle"
+      aria-expanded={open}
+      title="מידות פריט — רוחב × גובה (לחישוב שטח זיגוג והיקף פרופיל)"
+      onClick={(e) => {
+        e.stopPropagation();
+        setOpenItemEditor(open ? null : m.id);
+      }}
+      className={
+        'rounded border px-1 font-sans text-[10px] ' +
+        (it ? 'border-violet-700/70 bg-violet-900/30 text-violet-200' : 'border-dashed border-slate-600 text-slate-400 hover:text-slate-200')
+      }
+    >
+      {it ? <span dir="ltr">{formatItemDims(it)}</span> : '+ מידות פריט'}
+    </button>
+  );
+}
+
+/** cm input (plain number = centimetres; "1.5 מ" / "1500 mm" also accepted) → meters. */
+function parseCm(t: string): number | undefined {
+  const s = t.trim().replace(',', '.');
+  if (!s) return undefined;
+  const m = /^([0-9]*\.?[0-9]+)\s*(.*)$/.exec(s);
+  if (!m) return undefined;
+  const v = Number(m[1]);
+  if (!(v > 0)) return undefined;
+  const u = m[2].trim().toLowerCase();
+  if (!u || /^(cm|ס["״]?מ)$/.test(u)) return v / 100;
+  if (/^(mm|מ["״]?מ)$/.test(u)) return v / 1000;
+  if (/^(m|מ|מ['׳]|מטר)$/.test(u)) return v;
+  return undefined;
+}
+
+const cmText = (meters: number | undefined) => (meters ? String(Math.round(meters * 1000) / 10) : '');
+
+function ItemDimsEditor({ m }: { m: AreaMeasurement }) {
+  const open = useItemEditorOpen(m.id);
+  const it = itemOf(m);
+  const [w, setW] = useState(cmText(it?.width));
+  const [h, setH] = useState(cmText(it?.height));
+  const [code, setCode] = useState(it?.code ?? '');
+  useEffect(() => {
+    if (!open) return;
+    setW(cmText(it?.width));
+    setH(cmText(it?.height));
+    setCode(it?.code ?? '');
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open]);
+  if (!open) {
+    const q = itemQuantities(m);
+    return q ? (
+      <div className="ps-1 font-mono tabular-nums text-[10px] text-violet-300" data-testid="row-item-qty">
+        <span className="font-sans text-slate-500">זיגוג </span>
+        <span dir="ltr">{formatArea(q.areaM2)}</span>
+        <span className="font-sans text-slate-500"> · פרופיל </span>
+        <span dir="ltr">{formatLength(q.perimeterM)}</span>
+      </div>
+    ) : null;
+  }
+  const pw = parseCm(w);
+  const ph = parseCm(h);
+  const bad = (w.trim() !== '' && pw === undefined) || (h.trim() !== '' && ph === undefined);
+  const save = () => {
+    const update = useViewer.getState().updateMeasurement;
+    if (pw && ph) update(m.id, { item: { width: pw, height: ph, ...(code.trim() ? { code: code.trim() } : {}) } });
+    else if (!w.trim() && !h.trim()) update(m.id, { item: undefined });
+    else return;
+    setOpenItemEditor(null);
+  };
+  const input = (value: string, set: (v: string) => void, label: string, testId: string, cls = 'w-14') => (
+    <label className="flex flex-col gap-0.5 text-[10px] text-slate-400">
+      {label}
+      <input
+        value={value}
+        dir="ltr"
+        inputMode={testId === 'item-code' ? 'text' : 'decimal'}
+        aria-label={label}
+        data-testid={testId}
+        onChange={(e) => set(e.target.value)}
+        onKeyDown={(e) => {
+          e.stopPropagation();
+          if (e.key === 'Enter') save();
+          else if (e.key === 'Escape') setOpenItemEditor(null);
+        }}
+        className={'h-6 rounded border border-slate-600 bg-slate-900 px-1 text-center font-mono text-xs text-slate-100 focus:border-sky-500 focus:outline-none ' + cls}
+      />
+    </label>
+  );
+  const preview = pw && ph ? itemQuantities({ ...m, item: { width: pw, height: ph } }) : null;
+  return (
+    <div
+      className="mt-1 rounded border border-violet-800/60 bg-slate-900/70 p-1.5"
+      data-testid="item-dims-editor"
+      onClick={(e) => e.stopPropagation()}
+    >
+      <div className="flex flex-wrap items-end gap-1.5">
+        {input(w, setW, 'רוחב (ס״מ)', 'item-width')}
+        <span className="pb-1 text-slate-500">×</span>
+        {input(h, setH, 'גובה (ס״מ)', 'item-height')}
+        {input(code, setCode, 'קוד', 'item-code', 'w-14')}
+        <button
+          type="button"
+          onClick={save}
+          disabled={bad}
+          data-testid="item-dims-save"
+          className="h-6 rounded bg-violet-700 px-2 text-[11px] text-white hover:bg-violet-600 disabled:opacity-40"
+        >
+          שמור
+        </button>
+        {it && (
+          <button
+            type="button"
+            onClick={() => {
+              useViewer.getState().updateMeasurement(m.id, { item: undefined });
+              setOpenItemEditor(null);
+            }}
+            className="h-6 rounded px-1.5 text-[11px] text-slate-400 hover:bg-slate-700 hover:text-white"
+          >
+            הסר
+          </button>
+        )}
+      </div>
+      <div className="mt-1 text-[10px] text-slate-500">
+        {bad
+          ? 'מידה לא תקינה — מספר בס״מ (או עם יחידה: 1.5 מ, 1500 מ״מ)'
+          : preview
+            ? `×${m.points.length}: זיגוג ${formatArea(preview.areaM2)} · פרופיל ${formatLength(preview.perimeterM)}`
+            : 'מידות פריט אחד; השטח וההיקף מוכפלים בכמות'}
+      </div>
+    </div>
   );
 }

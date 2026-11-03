@@ -68,6 +68,14 @@ describe('decideGate', () => {
     });
   });
 
+  it('gates the Google Drive Open URL and keeps its state query in next', async () => {
+    const state = encodeURIComponent(JSON.stringify({ ids: ['1AbC_d-9'], action: 'open', userId: '1234' }));
+    const d = await decideGate(nav(`/drive/open?state=${state}`), { secret: SECRET, loadUser: active });
+    expect(d).toMatchObject({ action: 'redirect', reason: 'no_session' });
+    const next = new URL((d as { location: string }).location, 'https://h.test').searchParams.get('next');
+    expect(next).toBe(`/drive/open?state=${state}`);
+  });
+
   it('lets an active session through', async () => {
     const cookie = `pv_session=${await signSession('dana@example.test', 30, SECRET)}`;
     const loadUser = vi.fn(active);

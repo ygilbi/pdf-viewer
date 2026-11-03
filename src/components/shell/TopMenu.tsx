@@ -12,6 +12,7 @@ import {
   IconFolderOpen,
   IconFullscreen,
   IconFullscreenExit,
+  IconCalculator,
   IconList,
   IconPages,
   IconX,
@@ -25,6 +26,11 @@ import { fullscreenSupported, toggleFullscreen, useIsFullscreen } from '../toolA
 import { InstallButton, currentOs, openDefaultAppDialog } from '../../pwa';
 import { WINDOWS_DOWNLOAD_URL, showWindowsDownload } from '../../pwa/desktopDownload';
 import { signOut, useAuthUser } from '../../auth/session';
+import { toggleLeftTab } from '../../pricing/LeftDrawer';
+import { usePricingUi } from '../../pricing/pricingUi';
+import { DriveOpenButton } from '../../drive/DriveUi';
+import { formatPaper } from '../../text/scaleDetect';
+import { IconSearch, openSearch } from '../text/SearchPanel';
 
 function Group({ children, label }: { children: React.ReactNode; label: string }) {
   return (
@@ -45,6 +51,7 @@ export function TopMenu({ onOpenFile }: { onOpenFile(file: File): void }) {
   const thumbsOpen = useUi((s) => s.thumbsOpen);
   const measOpen = useUi((s) => s.measurementsOpen);
   const toggleDrawer = useUi((s) => s.toggleDrawer);
+  const leftTab = usePricingUi((s) => s.tab);
 
   const fileName = useViewer((s) => s.fileName);
   const numPages = useViewer((s) => s.numPages);
@@ -57,6 +64,7 @@ export function TopMenu({ onOpenFile }: { onOpenFile(file: File): void }) {
   const isFs = useIsFullscreen();
   const authUser = useAuthUser((s) => s.user);
   const hasDoc = numPages > 0;
+  const paperLabel = formatPaper(useViewer((s) => s.pageSizes[s.currentPage - 1]));
 
   const ref = useRef<HTMLElement>(null);
   const fileInput = useRef<HTMLInputElement>(null);
@@ -133,6 +141,7 @@ export function TopMenu({ onOpenFile }: { onOpenFile(file: File): void }) {
           <ToolButton label="פתח קובץ (החלף)" onClick={() => fileInput.current?.click()} showLabel>
             <IconFolderOpen />
           </ToolButton>
+          <DriveOpenButton variant="menu" onBeforeOpen={() => setMenuOpen(false)} />
           {fileName && (
             <div className="flex max-w-[14rem] items-center gap-1 truncate px-1 text-xs text-slate-400" title={fileName}>
               <IconFilePdf size={14} className="shrink-0 text-red-400" />
@@ -179,6 +188,11 @@ export function TopMenu({ onOpenFile }: { onOpenFile(file: File): void }) {
               className="h-6 w-12 rounded border border-slate-600 bg-slate-900 text-center font-mono text-xs text-slate-100 focus:border-sky-500 focus:outline-none disabled:opacity-40"
             />
             <span className="whitespace-nowrap">מתוך {hasDoc ? numPages : '—'}</span>
+            {hasDoc && paperLabel && (
+              <span className="whitespace-nowrap text-[11px] text-slate-500" title="גודל הגיליון לפי מידות הדף" data-testid="menu-paper">
+                · {paperLabel}
+              </span>
+            )}
           </div>
           <ToolButton
             label="הדף הבא"
@@ -216,10 +230,21 @@ export function TopMenu({ onOpenFile }: { onOpenFile(file: File): void }) {
             (calibration ? (
               <div
                 className="flex h-6 items-center gap-1 whitespace-nowrap rounded-full border border-emerald-700/70 bg-emerald-900/40 px-2 text-[11px] text-emerald-300"
-                title={`כויל לפי ${calibration.meters} מ׳ בדף ${currentPage}`}
+                title={
+                  calibration.auto
+                    ? `כיול אוטומטי לפי ${calibration.source ?? 'קנ״מ שבשרטוט'} (הדפסה ב‑100%) בדף ${currentPage} — מומלץ לאמת מול מידה ידועה`
+                    : `כויל לפי ${calibration.meters} מ׳ בדף ${currentPage}`
+                }
+                data-testid="menu-calibration"
               >
                 <span className="h-1.5 w-1.5 rounded-full bg-emerald-400" />
-                קנ״מ: 1 מ׳ = {calibration.pixelsPerMeter.toFixed(2)} יח׳
+                {calibration.auto && calibration.source ? (
+                  <>
+                    קנ״מ <span dir="ltr">{calibration.source}</span> (אוטומטי)
+                  </>
+                ) : (
+                  <>קנ״מ: 1 מ׳ = {calibration.pixelsPerMeter.toFixed(2)} יח׳</>
+                )}
               </div>
             ) : (
               <button
@@ -237,6 +262,25 @@ export function TopMenu({ onOpenFile }: { onOpenFile(file: File): void }) {
             ))}
           <span className="w-1" />
           {hasDoc && <ActiveCategorySelect />}
+        </Group>
+
+        <ToolbarDivider />
+
+        {/* text search */}
+        <Group label="חיפוש">
+          <ToolButton
+            label="חיפוש וספירה"
+            shortcut="F3"
+            hint="חיפוש בטקסט השרטוט וספירת תגיות (W1, D2…)"
+            disabled={!hasDoc}
+            onClick={() => {
+              setMenuOpen(false);
+              openSearch();
+            }}
+            showLabel
+          >
+            <IconSearch />
+          </ToolButton>
         </Group>
 
         <ToolbarDivider />
@@ -275,11 +319,21 @@ export function TopMenu({ onOpenFile }: { onOpenFile(file: File): void }) {
           <ToolButton
             label="רשימת מדידות"
             shortcut="M"
-            active={measOpen}
+            active={measOpen && leftTab === 'measurements'}
             disabled={!hasDoc}
-            onClick={() => toggleDrawer('measurements')}
+            onClick={() => toggleLeftTab('measurements')}
           >
             <IconList />
+          </ToolButton>
+          <ToolButton
+            label="תמחור / כתב כמויות"
+            shortcut="Q"
+            hint="מחירון, פחת, הנחה ומע״מ — סה״כ חי"
+            active={measOpen && leftTab === 'pricing'}
+            disabled={!hasDoc}
+            onClick={() => toggleLeftTab('pricing')}
+          >
+            <IconCalculator />
           </ToolButton>
           {fullscreenSupported() && (
             <ToolButton label={isFs ? 'צא ממסך מלא' : 'מסך מלא'} shortcut="Shift+F" active={isFs} onClick={toggleFullscreen}>

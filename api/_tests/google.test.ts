@@ -147,8 +147,38 @@ const user = (status: UserRecord['status'], extra: Partial<UserRecord> = {}): Us
 const loc = (res: Response) => res.headers.get('location');
 
 describe('GET /api/auth/providers', () => {
-  it('reports google: true when configured', async () => {
-    expect(await (await providers()).json()).toEqual({ ok: true, google: true, passkey: true, emailCode: true });
+  it('reports google: true + the public client id when configured (never the secret)', async () => {
+    const body = await (await providers()).json();
+    expect(body).toEqual({ ok: true, google: true, passkey: true, emailCode: true, googleClientId: CLIENT_ID });
+    expect(JSON.stringify(body)).not.toContain(CLIENT_SECRET);
+  });
+  it('exposes the Drive Picker config only with GOOGLE_API_KEY + a numeric GOOGLE_PROJECT_NUMBER', async () => {
+    const base = { GOOGLE_CLIENT_ID: CLIENT_ID, GOOGLE_CLIENT_SECRET: CLIENT_SECRET };
+    setEnv({ ...base, GOOGLE_API_KEY: 'AIza-test', GOOGLE_PROJECT_NUMBER: '123456789012' });
+    expect(await (await providers()).json()).toEqual({
+      ok: true,
+      google: true,
+      passkey: true,
+      emailCode: true,
+      googleClientId: CLIENT_ID,
+      googlePickerApiKey: 'AIza-test',
+      googleAppId: '123456789012',
+    });
+    setEnv({ ...base, GOOGLE_API_KEY: 'AIza-test' });
+    expect(await (await providers()).json()).not.toHaveProperty('googlePickerApiKey');
+    setEnv({ ...base, GOOGLE_API_KEY: 'AIza-test', GOOGLE_PROJECT_NUMBER: 'my-project' });
+    expect(await (await providers()).json()).not.toHaveProperty('googleAppId');
+    // No Google client → no Drive config at all.
+    setEnv({ GOOGLE_API_KEY: 'AIza-test', GOOGLE_PROJECT_NUMBER: '123456789012' });
+    const body = await (await providers()).json();
+    expect(body).toEqual({ ok: true, google: false, passkey: true, emailCode: true });
+  });
+  it('safeNext keeps a Google Drive launch path with its state query', () => {
+    const state = JSON.stringify({ ids: ['1AbCdEfGhIjKlMnOpQrStUvWxYz012345', '1ZyXwVuTsRqPoNmLkJiHgFeDcBa543210'], action: 'open', userId: '112233445566778899000', resourceKeys: { '1AbCdEfGhIjKlMnOpQrStUvWxYz012345': '0-AbCdEfGhIjKlMnOp' } });
+    const next = `/drive/open?state=${encodeURIComponent(state)}`;
+    expect(safeNext(next)).toBe(next);
+    const viaLogin = `/login?after=google&next=${encodeURIComponent(next)}`;
+    expect(safeNext(viaLogin)).toBe(viaLogin);
   });
   it('reports google: false without GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET', async () => {
     setEnv({ GOOGLE_CLIENT_ID: CLIENT_ID });

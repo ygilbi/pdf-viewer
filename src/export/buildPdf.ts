@@ -53,7 +53,7 @@ import {
 import { hatchSegments } from './hatch';
 import { pageGeometry, placement, viewportSize, viewportToPdf, type PageGeometry } from './pageTransform';
 import { BLACK, WHITE, hexColor, shape, svgNum as f, type FontPair } from './pdfCommon';
-import { writeSummary } from './pdfSummary';
+import { writeBoq, writeSummary } from './pdfSummary';
 import type { PdfBuildInput, ProgressFn } from './types';
 
 export class ExportCancelled extends Error {
@@ -409,6 +409,10 @@ export async function buildExportPdf(
     onProgress('summary', 0, 1);
     writeSummary(out, fonts, input, selected, notes);
     onProgress('summary', 1, 1);
+  }
+  if (o.boq && input.boq) {
+    check();
+    writeBoq(out, fonts, input, input.boq);
   }
 
   check();

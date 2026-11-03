@@ -33,7 +33,7 @@ describe('GET /api/health', () => {
     const body = (await res.json()) as J;
     expect(body).toEqual({
       ok: true,
-      env: { OWNER_EMAIL: true, SMTP_USER: true, SMTP_PASS: true, SIGNING_SECRET: true, GITHUB_TOKEN: true, KV: true, google: false },
+      env: { OWNER_EMAIL: true, SMTP_USER: true, SMTP_PASS: true, SIGNING_SECRET: true, GITHUB_TOKEN: true, KV: true, google: false, GOOGLE_API_KEY: false, GOOGLE_PROJECT_NUMBER: false },
       smtp: 'ok',
       redis: 'ok',
       github: 'ok',
@@ -52,7 +52,7 @@ describe('GET /api/health', () => {
     setStoreForTests(null);
     const body = (await (await health(get('/api/health'))).json()) as J;
     expect(body.ok).toBe(false);
-    expect(body.env).toEqual({ OWNER_EMAIL: false, SMTP_USER: true, SMTP_PASS: false, SIGNING_SECRET: false, GITHUB_TOKEN: false, KV: false, google: false });
+    expect(body.env).toEqual({ OWNER_EMAIL: false, SMTP_USER: true, SMTP_PASS: false, SIGNING_SECRET: false, GITHUB_TOKEN: false, KV: false, google: false, GOOGLE_API_KEY: false, GOOGLE_PROJECT_NUMBER: false });
     expect(body.smtp).toBe('skipped');
     expect(body.redis).toBe('missing');
     expect(body.github).toBe('missing');
@@ -78,6 +78,16 @@ describe('GET /api/health', () => {
     expect(body.ok).toBe(true);
     expect(JSON.stringify(body)).not.toContain('GOCSPX-secret-value');
     expect(JSON.stringify(body)).not.toContain('cid.apps');
+  });
+
+  it('reports the Drive Picker env vars as booleans only', async () => {
+    mockGitHub();
+    setEnv({ GOOGLE_API_KEY: 'AIzaSyPublicPickerKey', GOOGLE_PROJECT_NUMBER: '123456789012' });
+    const body = (await (await health(get('/api/health'))).json()) as J;
+    expect(body.env.GOOGLE_API_KEY).toBe(true);
+    expect(body.env.GOOGLE_PROJECT_NUMBER).toBe(true);
+    expect(JSON.stringify(body)).not.toContain('AIzaSyPublicPickerKey');
+    expect(JSON.stringify(body)).not.toContain('123456789012');
   });
 
   it('describeSmtpError maps common nodemailer errors', () => {

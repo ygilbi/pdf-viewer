@@ -1,5 +1,6 @@
 import { useRef, useState } from 'react';
 import { IconFilePdf } from './ui/icons';
+import { DriveOpenButton } from '../drive/DriveUi';
 
 interface Props {
   /** Several files: the first is opened, the rest are added to the workspace. */
@@ -75,6 +76,7 @@ export default function DropZone({ onFiles }: Props) {
         >
           {demoLoading ? 'טוען קובץ דוגמה…' : 'נסה עם קובץ לדוגמה'}
         </button>
+        <DriveOpenButton />
         <div className="text-xs text-slate-500">בקובץ הדוגמה: קו המידה 10.00 מתאים לכיול</div>
         {demoError && <div className="text-xs text-red-400">{demoError}</div>}
       </div>

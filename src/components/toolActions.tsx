@@ -13,10 +13,12 @@ import {
   IconNote,
   IconPen,
   IconRect,
+  IconRectArea,
   IconRuler,
   IconText,
 } from './ui/icons';
 import { isTypingTarget } from './ui/util';
+import { useSnap } from '../state/snapStore';
 
 export const DOWNLOAD_HINT = "אם ההורדה חסומה, השתמש ב'העתק טבלה'";
 
@@ -41,7 +43,8 @@ export const TOOLS: ToolDef[] = [
   { id: 'pan', label: 'יד / הזזה', short: 'יד / הזזה', shortcut: 'V / H', icon: <IconHand />, group: 'measure', hint: 'גרירת סימון מזיזה אותו' },
   { id: 'calibrate', label: 'כיול קנה מידה', short: 'כיול', shortcut: 'C', icon: <IconRuler />, group: 'measure' },
   { id: 'area', label: 'מדידת שטח חזית', short: 'שטח חזית', shortcut: 'A', icon: <IconAreaM2 />, group: 'measure' },
-  { id: 'deduct', label: 'פתח לניכוי', short: 'פתח לניכוי', shortcut: 'D', icon: <IconDeduct />, group: 'measure' },
+  { id: 'rectArea', label: 'מלבן שטח', short: 'מלבן שטח', shortcut: 'B', icon: <IconRectArea />, group: 'measure', hint: 'שתי לחיצות בפינות נגדיות או גרירה' },
+  { id: 'deduct', label: 'פתח לניכוי', short: 'פתח לניכוי', shortcut: 'D', icon: <IconDeduct />, group: 'measure', hint: 'Alt + לחיצה / גרירה: פתח מלבני' },
   { id: 'length', label: 'מדידת אורך', short: 'אורך', shortcut: 'L', icon: <IconLength />, group: 'measure' },
   { id: 'count', label: 'ספירת פריטים', short: 'ספירה', shortcut: 'N', icon: <IconCount />, group: 'measure' },
   { id: 'note', label: 'הערה', short: 'הערה', shortcut: 'K', icon: <IconNote />, group: 'markup', hint: 'לחץ למיקום סיכה והקלד הערה' },
@@ -59,6 +62,7 @@ const TOOL_KEYS: Record<string, ToolId> = {
   KeyH: 'pan',
   KeyC: 'calibrate',
   KeyA: 'area',
+  KeyB: 'rectArea',
   KeyD: 'deduct',
   KeyL: 'length',
   KeyN: 'count',
@@ -79,6 +83,11 @@ export function useToolShortcuts() {
       if (isTypingTarget(e.target)) return;
       const s = useViewer.getState();
       if (s.numPages === 0) return;
+      if (e.code === 'KeyS' && !e.shiftKey) {
+        useSnap.getState().toggle();
+        e.preventDefault();
+        return;
+      }
       const t = TOOL_KEYS[e.code];
       if (t) {
         s.setTool(t);
@@ -97,9 +106,34 @@ export function useToolShortcuts() {
       }
       e.preventDefault();
     };
+    // Undo / redo: Ctrl+Z, Ctrl+Shift+Z, Ctrl+Y (Cmd on Mac). e.code → any keyboard layout.
+    const onUndoKey = (e: KeyboardEvent) => {
+      if (e.defaultPrevented || !(e.ctrlKey || e.metaKey) || e.altKey) return;
+      if (e.code !== 'KeyZ' && e.code !== 'KeyY') return;
+      if (isTypingTarget(e.target)) return; // native text undo in inputs
+      if (useViewer.getState().numPages === 0) return;
+      e.preventDefault();
+      if (e.code === 'KeyY' || e.shiftKey) redoAction();
+      else undoAction();
+    };
     window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
+    window.addEventListener('keydown', onUndoKey);
+    return () => {
+      window.removeEventListener('keydown', onKey);
+      window.removeEventListener('keydown', onUndoKey);
+    };
   }, []);
+}
+
+/** Undo: while a shape is being drawn, removes its last point; otherwise the last change. */
+export function undoAction() {
+  const s = useViewer.getState();
+  if (s.draft.length) s.setDraft(s.draft.slice(0, -1));
+  else s.undo();
+}
+
+export function redoAction() {
+  useViewer.getState().redo();
 }
 
 // ---- fullscreen -------------------------------------------------------------

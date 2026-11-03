@@ -18,6 +18,7 @@
  * All calls are safe no-ops while no viewer is mounted.
  */
 import { useSyncExternalStore } from 'react';
+import type { Rect } from '../../core/types';
 
 export interface ViewerZoomInfo {
   /** Zoom in percent: 100 = 1 CSS px per PDF page unit (point). */
@@ -37,6 +38,8 @@ export interface ViewerImpl {
   zoomOut(): void;
   /** Raw scale (CSS px per page unit), anchored at viewport centre. */
   zoomToScale(scale: number): void;
+  /** Zoom/pan to a rect of the current page (page units). Optional: added for text search. */
+  zoomToRect?(rect: Rect): void;
 }
 
 let impl: ViewerImpl | null = null;
@@ -86,4 +89,26 @@ export function emitZoom(scale: number, fitScale: number, minScale: number, maxS
   }
   info = { percent: scale * 100, scale, fitScale, minScale, maxScale };
   for (const cb of subscribers) cb(info.percent, info);
+}
+
+// ---- focus a rect (text search results) -----------------------------------
+
+let pendingFocus: { page: number; rect: Rect } | null = null;
+
+/** Zoom to `rect` on the current page now. */
+export function zoomToRect(rect: Rect): void {
+  impl?.zoomToRect?.(rect);
+}
+
+/** Remember a rect to zoom to once `page` has been laid out (used across a page change). */
+export function setPendingFocus(page: number, rect: Rect): void {
+  pendingFocus = { page, rect };
+}
+
+/** Called by ViewerCanvas after it fitted a newly shown page. */
+export function takePendingFocus(page: number): Rect | null {
+  if (!pendingFocus || pendingFocus.page !== page) return null;
+  const r = pendingFocus.rect;
+  pendingFocus = null;
+  return r;
 }

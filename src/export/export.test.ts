@@ -9,6 +9,7 @@ import { buildExportCsv } from './csvExport';
 import { forPdfLib } from './pdfCommon';
 import fontkit from '@pdf-lib/fontkit';
 import { DEFAULT_CATEGORIES } from '../core/measurementEngine';
+import { buildBoq, emptyPriceBook, resolvePricing } from '../pricing/boq';
 import { DEFAULT_CSV_OPTIONS, DEFAULT_PDF_OPTIONS, type PdfBuildInput } from './types';
 import type { AreaMeasurement, Calibration } from '../core/types';
 
@@ -208,6 +209,35 @@ describe('buildExportPdf', () => {
     expect(doc.getPageCount()).toBe(1);
     expect(doc.getPage(0).getSize()).toEqual({ width: 500, height: 300 });
     await expect(buildExportPdf(input, undefined, () => true)).rejects.toThrow('בוטל');
+  });
+
+  it('appends a priced BOQ page (Hebrew, ₪) when options.boq', async () => {
+    const boq = buildBoq({
+      measurements: ms,
+      calibrations: { 1: cal },
+      categories: DEFAULT_CATEGORIES,
+      pricing: resolvePricing(emptyPriceBook(), { categories: { windows: { price: 1000, wastePct: 5 } }, settings: { discountPct: 10, projectName: 'פרויקט בדיקה' } }),
+      pages: [1],
+    });
+    const input: PdfBuildInput = {
+      docs: [{ id: 'doc1', name: 'x.pdf' }],
+      bytes: {},
+      pages: [{ globalPage: 1, docId: 'doc1', localPage: 1 }],
+      pageSizes: { 1: { width: 595, height: 842 } },
+      measurements: ms,
+      calibrations: { 1: cal },
+      categories: DEFAULT_CATEGORIES,
+      options: { ...DEFAULT_PDF_OPTIONS, drawings: false, summary: false, boq: true },
+      fonts: await fonts(),
+      title: 'x',
+      boq,
+    };
+    const out = await buildExportPdf(input);
+    expect((await PDFDocument.load(out)).getPageCount()).toBe(2);
+    const pd = await (await pdfjs()).getDocument({ data: out }).promise;
+    const text = (await (await pd.getPage(2)).getTextContent()).items.map((i: { str: string }) => i.str).join(' ');
+    expect(text).toContain('₪');
+    await pd.destroy();
   });
 
   it('numbers notes in page order', () => {

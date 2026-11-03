@@ -1,6 +1,7 @@
 import type { AreaMeasurement, Calibration, Category, PageSize } from '../core/types';
+import type { Boq } from '../pricing/boq';
 
-export type ExportFormat = 'pdf' | 'csv';
+export type ExportFormat = 'pdf' | 'csv' | 'xlsx';
 
 export interface PdfContentOptions {
   /** Copy the original drawing pages (vector, via pdf-lib copyPages). Off → blank pages of the same size. */
@@ -15,6 +16,8 @@ export interface PdfContentOptions {
   summary: boolean;
   /** Category legend (on every drawing page and in the summary). */
   legend: boolean;
+  /** Priced bill of quantities page (כתב כמויות עם מחירים) at the end. */
+  boq: boolean;
 }
 
 export const DEFAULT_PDF_OPTIONS: PdfContentOptions = {
@@ -24,6 +27,7 @@ export const DEFAULT_PDF_OPTIONS: PdfContentOptions = {
   calibration: true,
   summary: true,
   legend: false,
+  boq: false,
 };
 
 /** One output page: a global page of the workspace and where it lives. */
@@ -55,6 +59,8 @@ export interface PdfBuildInput {
   title: string;
   /** Preformatted export date for the summary header. */
   dateText?: string;
+  /** Priced BOQ for the selected pages (drawn when options.boq). */
+  boq?: Boq;
 }
 
 export type ProgressStage = 'load' | 'pages' | 'summary' | 'save';
