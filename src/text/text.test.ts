@@ -236,3 +236,13 @@ describe('search', () => {
     ]);
   });
 });
+
+describe('result context', () => {
+  it('adds the following run on the same line (legend tag + description)', () => {
+    const vt = viewportTransform([0, 0, 600, 400], 0);
+    const items = toTextItems(vt, [run('W1', 10, 300, 8, 10), run('Aluminium window', 24, 300, 8, 60), run('D1', 10, 290, 8, 10)]);
+    const m = findInItems(items, 1, buildMatcher('W1', DEFAULT_SEARCH_OPTIONS)!);
+    expect(m[0].after).toBe('Aluminium window');
+    expect(findInItems(items, 1, buildMatcher('D1', DEFAULT_SEARCH_OPTIONS)!)[0].after).toBeUndefined();
+  });
+});

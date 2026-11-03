@@ -70,12 +70,13 @@ function Highlighted({ m }: { m: TextMatch }) {
   const a = Math.max(0, m.start - 30);
   const b = Math.min(ctx.length, m.end + 30);
   return (
-    <span dir="auto" className="truncate">
+    <span dir="auto" className="min-w-0 flex-1 truncate">
       {a > 0 && '…'}
       {ctx.slice(a, m.start)}
       <mark className="rounded-sm bg-yellow-400/80 px-0.5 text-slate-900">{ctx.slice(m.start, m.end)}</mark>
       {ctx.slice(m.end, b)}
       {b < ctx.length && '…'}
+      {m.after && <span className="text-slate-500"> {m.after}</span>}
     </span>
   );
 }

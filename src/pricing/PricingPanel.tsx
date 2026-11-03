@@ -146,7 +146,7 @@ function LineCard({ l, currency }: { l: BoqLine; currency: string }) {
         <span>
           <span className="font-sans text-slate-500">כמות </span>
           <span className="text-slate-100" dir="ltr" data-testid="boq-qty">
-            {money(l.quantity)}
+            {l.unit === 'unit' && Number.isInteger(l.quantity) ? l.quantity : money(l.quantity)}
           </span>{' '}
           <span className="font-sans">{unitLabel}</span>
         </span>

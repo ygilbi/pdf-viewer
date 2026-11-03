@@ -32,7 +32,7 @@ describe('buildXlsx', () => {
     expect(wb.worksheets.map((w) => w.name)).toEqual(['כתב כמויות', 'מדידות', 'הערות']);
     const ws = wb.getWorksheet('כתב כמויות')!;
     expect(ws.views[0].rightToLeft).toBe(true);
-    expect(ws.getCell('B2').value).toBe('פרויקט');
+    expect(ws.getCell('C2').value).toBe('פרויקט');
     const r = BOQ_FIRST_ROW;
     // windows first (category order), unit = units (count-only category)
     expect(ws.getCell(`B${r}`).value).toBe('חלונות');

@@ -72,10 +72,13 @@ function boqSheet(wb: Workbook, input: XlsxInput) {
   ];
   meta.forEach(([k, v], i) => {
     const r = ws.getRow(2 + i);
+    ws.mergeCells(2 + i, 1, 2 + i, 2);
     r.getCell(1).value = k;
     r.getCell(1).font = { bold: true };
-    ws.mergeCells(2 + i, 2, 2 + i, 6);
-    r.getCell(2).value = v;
+    r.getCell(1).alignment = { horizontal: 'right' };
+    ws.mergeCells(2 + i, 3, 2 + i, 6);
+    r.getCell(3).value = v;
+    r.getCell(3).alignment = { horizontal: 'right' };
   });
 
   const head = ws.getRow(BOQ_FIRST_ROW - 1);

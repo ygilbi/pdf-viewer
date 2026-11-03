@@ -26,6 +26,24 @@ export interface TextMatch {
   rect: Rect;
   /** The whole text run (for the results list). */
   context: string;
+  /** Following run(s) on the same line, e.g. a legend's description next to its tag. */
+  after?: string;
+}
+
+/** Text of the next runs that continue `items[i]` on the same line (≤ 60 chars). */
+export function lineContinuation(items: readonly TextItem[], i: number): string | undefined {
+  let out = '';
+  let prev = items[i];
+  for (let k = i + 1; k < items.length && out.length < 60; k++) {
+    const n = items[k];
+    const h = Math.max(prev.rect.height, n.rect.height);
+    const sameLine = Math.abs(n.rect.y + n.rect.height - (prev.rect.y + prev.rect.height)) < h * 0.5;
+    const gap = n.rect.x - (prev.rect.x + prev.rect.width);
+    if (!sameLine || gap > h * 3 || gap < -h) break;
+    out += (out ? ' ' : '') + n.str.trim();
+    prev = n;
+  }
+  return out ? out.slice(0, 60) : undefined;
 }
 
 const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -57,7 +75,8 @@ export function findInItems(items: readonly TextItem[], page: number, re: RegExp
       }
       const start = m.index;
       const end = start + m[0].length;
-      out.push({ page, itemIndex: i, start, end, text: m[0], rect: substringRect(it, start, end), context: it.str });
+      const after = lineContinuation(items, i);
+      out.push({ page, itemIndex: i, start, end, text: m[0], rect: substringRect(it, start, end), context: it.str, ...(after ? { after } : {}) });
     }
   }
   return out;
