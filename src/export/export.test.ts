@@ -230,10 +230,11 @@ describe('buildExportPdf', () => {
     const annots = doc.getPage(0).node.Annots();
     expect(annots?.size()).toBe(1); // the link to page 9 (not exported) is skipped
     const a = doc.context.lookup(annots!.get(0)) as unknown as { get(k: unknown): unknown };
-    const { PDFName, PDFArray } = await import('pdf-lib');
-    const rect = (a.get(PDFName.of('Rect')) as InstanceType<typeof PDFArray>).asRectangle();
+    const { PDFName } = await import('pdf-lib');
+    type Arr = { asRectangle(): unknown; get(i: number): unknown };
+    const rect = (a.get(PDFName.of('Rect')) as Arr).asRectangle();
     expect(rect).toEqual({ x: 50, y: 200, width: 100, height: 60 }); // y flipped: 300 - 100
-    const dest = a.get(PDFName.of('Dest')) as InstanceType<typeof PDFArray>;
+    const dest = a.get(PDFName.of('Dest')) as Arr;
     expect(dest.get(0)).toBe(doc.getPage(1).ref);
   });
 
