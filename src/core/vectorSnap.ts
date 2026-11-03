@@ -315,8 +315,85 @@ export function extractSegments(
   return { segs: segs.a, segCount: count, ends: ends.a, endCount: ends.n / 2, truncated };
 }
 
-/** Quantised point key (1/64 page unit) for de-duplication. Pages are < 2^21 units. */
-const key = (x: number, y: number) => Math.round(x * 64) * 268435456 + Math.round(y * 64);
+/**
+ * De-duplicating point set: open-addressing hash on coordinates quantised to
+ * 1/64 page unit, storing into growable typed arrays (no per-point objects).
+ */
+class PointSet {
+  xy: Float32Array;
+  kind: Uint8Array;
+  count = 0;
+  private qx: Int32Array;
+  private qy: Int32Array;
+  private table: Int32Array;
+  private mask: number;
+  constructor(
+    private readonly max: number,
+    expected: number,
+  ) {
+    const cap = Math.max(64, Math.min(max, expected));
+    this.xy = new Float32Array(cap * 2);
+    this.kind = new Uint8Array(cap);
+    this.qx = new Int32Array(cap);
+    this.qy = new Int32Array(cap);
+    let size = 1024;
+    while (size < Math.min(max, expected) * 2) size <<= 1;
+    this.table = new Int32Array(size).fill(-1);
+    this.mask = size - 1;
+  }
+  /** false when full. */
+  add(x: number, y: number, k: number): boolean {
+    if (!(x === x && y === y) || !Number.isFinite(x + y)) return true;
+    const ix = Math.round(x * 64) | 0;
+    const iy = Math.round(y * 64) | 0;
+    let h = (Math.imul(ix, 0x9e3779b1) ^ Math.imul(iy, 0x85ebca77)) & this.mask;
+    const t = this.table;
+    for (;;) {
+      const i = t[h];
+      if (i < 0) break;
+      if (this.qx[i] === ix && this.qy[i] === iy) return true;
+      h = (h + 1) & this.mask;
+    }
+    if (this.count >= this.max) return false;
+    const n = this.count++;
+    if (n >= this.kind.length) this.grow();
+    this.qx[n] = ix;
+    this.qy[n] = iy;
+    this.xy[n * 2] = x;
+    this.xy[n * 2 + 1] = y;
+    this.kind[n] = k;
+    t[h] = n;
+    if (this.count * 2 > t.length) this.rehash();
+    return true;
+  }
+  private grow() {
+    const cap = Math.min(this.max, this.kind.length * 2);
+    const xy = new Float32Array(cap * 2);
+    xy.set(this.xy);
+    const kind = new Uint8Array(cap);
+    kind.set(this.kind);
+    const qx = new Int32Array(cap);
+    qx.set(this.qx);
+    const qy = new Int32Array(cap);
+    qy.set(this.qy);
+    this.xy = xy;
+    this.kind = kind;
+    this.qx = qx;
+    this.qy = qy;
+  }
+  private rehash() {
+    const size = this.table.length * 2;
+    const t = new Int32Array(size).fill(-1);
+    const mask = size - 1;
+    for (let i = 0; i < this.count; i++) {
+      let h = (Math.imul(this.qx[i], 0x9e3779b1) ^ Math.imul(this.qy[i], 0x85ebca77)) & mask;
+      while (t[h] >= 0) h = (h + 1) & mask;
+      t[h] = i;
+    }
+    this.table = t;
+    this.mask = mask;
+  }
+}
 
 /**
  * Turn segments into de-duplicated snap points (endpoints > intersections > midpoints).
@@ -330,74 +407,46 @@ export function buildSnapPoints(
   const L = { ...DEFAULT_SNAP_LIMITS, ...limits };
   const { segs, segCount: n } = ex;
   let truncated = ex.truncated;
-  const seen = new Set<number>();
-  const xs: number[] = [];
-  const ys: number[] = [];
-  const ks: number[] = [];
-  const add = (x: number, y: number, k: SnapKind): boolean => {
-    if (!Number.isFinite(x) || !Number.isFinite(y)) return true;
-    const kk = key(x, y);
-    if (seen.has(kk)) return true;
-    if (xs.length >= L.maxPoints) return false;
-    seen.add(kk);
-    xs.push(x);
-    ys.push(y);
-    ks.push(k);
-    return true;
-  };
+  const set = new PointSet(L.maxPoints, n * 3 + ex.endCount);
+  let full = false;
 
   // 1. endpoints
-  let full = false;
   for (let i = 0; i < n && !full; i++) {
     const o = i * 4;
-    if (!add(segs[o], segs[o + 1], SNAP_ENDPOINT) || !add(segs[o + 2], segs[o + 3], SNAP_ENDPOINT)) full = true;
+    if (!set.add(segs[o], segs[o + 1], SNAP_ENDPOINT) || !set.add(segs[o + 2], segs[o + 3], SNAP_ENDPOINT)) full = true;
   }
-  for (let i = 0; i < ex.endCount && !full; i++) if (!add(ex.ends[i * 2], ex.ends[i * 2 + 1], SNAP_ENDPOINT)) full = true;
-  if (full) truncated = true;
+  for (let i = 0; i < ex.endCount && !full; i++) if (!set.add(ex.ends[i * 2], ex.ends[i * 2 + 1], SNAP_ENDPOINT)) full = true;
 
-  // 2. intersections (grid of long-enough segments; each pair tested in the cell holding the hit)
+  // 2. intersections
   const minLen2 = L.minFeatureLen * L.minFeatureLen;
   if (!full && n > 1 && L.maxIntersections > 0) {
     const r = intersections(segs, n, minLen2, L.maxIntersections, now, deadline, (x, y) => {
-      if (!add(x, y, SNAP_INTERSECTION)) {
-        full = true;
-        return false;
-      }
-      return true;
+      if (set.add(x, y, SNAP_INTERSECTION)) return true;
+      full = true;
+      return false;
     });
     if (r.truncated) truncated = true;
   }
 
   // 3. midpoints
-  if (!full) {
-    for (let i = 0; i < n; i++) {
-      if ((i & 4095) === 0 && now() > deadline) {
-        truncated = true;
-        break;
-      }
-      const o = i * 4;
-      const dx = segs[o + 2] - segs[o];
-      const dy = segs[o + 3] - segs[o + 1];
-      if (dx * dx + dy * dy < minLen2 * 4) continue;
-      if (!add((segs[o] + segs[o + 2]) / 2, (segs[o + 1] + segs[o + 3]) / 2, SNAP_MIDPOINT)) {
-        truncated = true;
-        break;
-      }
+  for (let i = 0; i < n && !full; i++) {
+    if ((i & 4095) === 0 && i && now() > deadline) {
+      truncated = true;
+      break;
     }
+    const o = i * 4;
+    const dx = segs[o + 2] - segs[o];
+    const dy = segs[o + 3] - segs[o + 1];
+    if (dx * dx + dy * dy < minLen2 * 4) continue;
+    if (!set.add((segs[o] + segs[o + 2]) / 2, (segs[o + 1] + segs[o + 3]) / 2, SNAP_MIDPOINT)) full = true;
   }
+  if (full) truncated = true;
 
-  const count = xs.length;
-  const xy = new Float32Array(count * 2);
-  const kind = new Uint8Array(count);
-  for (let i = 0; i < count; i++) {
-    xy[i * 2] = xs[i];
-    xy[i * 2 + 1] = ys[i];
-    kind[i] = ks[i];
-  }
-  return { xy, kind, count, segments: n, truncated };
+  const count = set.count;
+  return { xy: set.xy.slice(0, count * 2), kind: set.kind.slice(0, count), count, segments: n, truncated };
 }
 
-/** Proper (interior) segment intersections, bounded. `emit` returns false to stop. */
+/** Proper (interior) segment intersections via a uniform grid, bounded. `emit` returns false to stop. */
 function intersections(
   segs: Float64Array,
   n: number,
@@ -407,8 +456,8 @@ function intersections(
   deadline: number,
   emit: (x: number, y: number) => boolean,
 ): { truncated: boolean } {
-  // Long-enough segments + bounds
-  const idx: number[] = [];
+  const idx = new Int32Array(n);
+  let m = 0;
   let minX = Infinity;
   let minY = Infinity;
   let maxX = -Infinity;
@@ -418,67 +467,102 @@ function intersections(
     const dx = segs[o + 2] - segs[o];
     const dy = segs[o + 3] - segs[o + 1];
     if (dx * dx + dy * dy < minLen2) continue;
-    idx.push(i);
-    minX = Math.min(minX, segs[o], segs[o + 2]);
-    maxX = Math.max(maxX, segs[o], segs[o + 2]);
-    minY = Math.min(minY, segs[o + 1], segs[o + 3]);
-    maxY = Math.max(maxY, segs[o + 1], segs[o + 3]);
+    idx[m++] = i;
+    const ax = segs[o];
+    const bx = segs[o + 2];
+    const ay = segs[o + 1];
+    const by = segs[o + 3];
+    if (ax < minX) minX = ax;
+    if (bx < minX) minX = bx;
+    if (ax > maxX) maxX = ax;
+    if (bx > maxX) maxX = bx;
+    if (ay < minY) minY = ay;
+    if (by < minY) minY = by;
+    if (ay > maxY) maxY = ay;
+    if (by > maxY) maxY = by;
   }
-  const m = idx.length;
   if (m < 2) return { truncated: false };
   const w = Math.max(1, maxX - minX);
   const h = Math.max(1, maxY - minY);
-  // ~2 segments per cell on average, at most 512×512 cells
-  const cell = Math.max(1e-3, Math.sqrt((w * h) / Math.max(1, m / 2)));
-  const gx = Math.min(512, Math.max(1, Math.ceil(w / cell)));
-  const gy = Math.min(512, Math.max(1, Math.ceil(h / cell)));
+  // ~2 segments per cell on average, at most 1024 cells per side
+  const cell = Math.max(w / 1024, h / 1024, Math.sqrt((w * h) / Math.max(1, m / 2)));
+  const gx = Math.max(1, Math.min(1024, Math.ceil(w / cell)));
+  const gy = Math.max(1, Math.min(1024, Math.ceil(h / cell)));
   const cw = w / gx;
   const ch = h / gy;
-  // Bucket segments into every cell their bbox covers (cap per segment so huge lines don't blow up).
+  const half = Math.hypot(cw, ch) / 2;
+  const cells = gx * gy;
   const MAX_CELLS_PER_SEG = 4096;
-  const counts = new Int32Array(gx * gy + 1);
-  const cellRange = (i: number) => {
-    const o = i * 4;
-    const x0 = Math.min(gx - 1, Math.max(0, Math.floor((Math.min(segs[o], segs[o + 2]) - minX) / cw)));
-    const x1 = Math.min(gx - 1, Math.max(0, Math.floor((Math.max(segs[o], segs[o + 2]) - minX) / cw)));
-    const y0 = Math.min(gy - 1, Math.max(0, Math.floor((Math.min(segs[o + 1], segs[o + 3]) - minY) / ch)));
-    const y1 = Math.min(gy - 1, Math.max(0, Math.floor((Math.max(segs[o + 1], segs[o + 3]) - minY) / ch)));
-    return [x0, x1, y0, y1];
-  };
-  // Only cells the segment actually passes near (DDA would be exact; bbox ∩ distance test is enough).
-  const touches = (i: number, cx: number, cy: number) => {
-    const o = i * 4;
+  const range = new Int32Array(m * 4);
+  for (let k = 0; k < m; k++) {
+    const o = idx[k] * 4;
     const ax = segs[o];
     const ay = segs[o + 1];
-    const dx = segs[o + 2] - ax;
-    const dy = segs[o + 3] - ay;
-    const mx = minX + (cx + 0.5) * cw;
-    const my = minY + (cy + 0.5) * ch;
-    const len = Math.hypot(dx, dy) || 1;
-    const dist = Math.abs((mx - ax) * dy - (my - ay) * dx) / len;
-    return dist <= Math.hypot(cw, ch) / 2;
-  };
-  const forCells = (i: number, fn: (c: number) => void) => {
-    const [x0, x1, y0, y1] = cellRange(i);
-    const many = (x1 - x0 + 1) * (y1 - y0 + 1);
-    if (many > MAX_CELLS_PER_SEG) return;
-    for (let y = y0; y <= y1; y++)
-      for (let x = x0; x <= x1; x++) if (many <= 2 || touches(i, x, y)) fn(y * gx + x);
-  };
-  for (let k = 0; k < m; k++) forCells(idx[k], (c) => counts[c + 1]++);
-  for (let c = 0; c < gx * gy; c++) counts[c + 1] += counts[c];
-  const items = new Int32Array(counts[gx * gy]);
-  const fill = counts.slice(0, gx * gy);
-  for (let k = 0; k < m; k++) forCells(idx[k], (c) => (items[fill[c]++] = idx[k]));
+    const bx = segs[o + 2];
+    const by = segs[o + 3];
+    range[k * 4] = Math.min(gx - 1, Math.floor(((ax < bx ? ax : bx) - minX) / cw));
+    range[k * 4 + 1] = Math.min(gx - 1, Math.floor(((ax > bx ? ax : bx) - minX) / cw));
+    range[k * 4 + 2] = Math.min(gy - 1, Math.floor(((ay < by ? ay : by) - minY) / ch));
+    range[k * 4 + 3] = Math.min(gy - 1, Math.floor(((ay > by ? ay : by) - minY) / ch));
+  }
+  // Two passes (count, fill) over the cells each segment actually passes near.
+  const start = new Int32Array(cells + 1);
+  let items = new Int32Array(0);
+  for (let pass = 0; pass < 2; pass++) {
+    const fill = pass ? start.slice(0, cells) : null;
+    for (let k = 0; k < m; k++) {
+      const x0 = range[k * 4];
+      const x1 = range[k * 4 + 1];
+      const y0 = range[k * 4 + 2];
+      const y1 = range[k * 4 + 3];
+      const many = (x1 - x0 + 1) * (y1 - y0 + 1);
+      if (many > MAX_CELLS_PER_SEG) continue;
+      const seg = idx[k];
+      if (x0 === x1 || y0 === y1) {
+        // axis-aligned-ish strip: every cell of the bbox is touched
+        for (let y = y0; y <= y1; y++)
+          for (let x = x0; x <= x1; x++) {
+            const c = y * gx + x;
+            if (fill) items[fill[c]++] = seg;
+            else start[c + 1]++;
+          }
+        continue;
+      }
+      const o = seg * 4;
+      const ax = segs[o];
+      const ay = segs[o + 1];
+      const dx = segs[o + 2] - ax;
+      const dy = segs[o + 3] - ay;
+      const inv = 1 / Math.hypot(dx, dy);
+      const nx = -dy * inv;
+      const ny = dx * inv;
+      const c0 = nx * ax + ny * ay;
+      for (let y = y0; y <= y1; y++) {
+        const my = minY + (y + 0.5) * ch;
+        for (let x = x0; x <= x1; x++) {
+          const mx = minX + (x + 0.5) * cw;
+          if (Math.abs(nx * mx + ny * my - c0) > half) continue;
+          const c = y * gx + x;
+          if (fill) items[fill[c]++] = seg;
+          else start[c + 1]++;
+        }
+      }
+    }
+    if (!pass) {
+      for (let c = 0; c < cells; c++) start[c + 1] += start[c];
+      items = new Int32Array(start[cells]);
+    }
+  }
 
   let found = 0;
   const PAIR_CAP = 96; // a cell denser than this (hatching, text-as-paths) is skipped
   let truncated = false;
-  for (let c = 0; c < gx * gy; c++) {
-    if ((c & 255) === 0 && now() > deadline) return { truncated: true };
-    const s = counts[c];
-    const e = counts[c + 1];
+  const EPS = 1e-6;
+  for (let c = 0; c < cells; c++) {
+    const s = start[c];
+    const e = start[c + 1];
     if (e - s < 2) continue;
+    if ((c & 1023) === 0 && now() > deadline) return { truncated: true };
     if (e - s > PAIR_CAP) {
       truncated = true;
       continue;
@@ -489,6 +573,7 @@ function intersections(
       const ay = segs[i + 1];
       const rx = segs[i + 2] - ax;
       const ry = segs[i + 3] - ay;
+      const rl = Math.abs(rx) + Math.abs(ry);
       for (let q = p + 1; q < e; q++) {
         const j = items[q] * 4;
         const bx = segs[j];
@@ -496,11 +581,11 @@ function intersections(
         const sx = segs[j + 2] - bx;
         const sy = segs[j + 3] - by;
         const den = rx * sy - ry * sx;
-        if (Math.abs(den) < 1e-9 * (Math.abs(rx) + Math.abs(ry)) * (Math.abs(sx) + Math.abs(sy))) continue; // parallel
+        if (Math.abs(den) < 1e-9 * rl * (Math.abs(sx) + Math.abs(sy))) continue; // parallel
         const t = ((bx - ax) * sy - (by - ay) * sx) / den;
+        if (t <= EPS || t >= 1 - EPS) continue;
         const u = ((bx - ax) * ry - (by - ay) * rx) / den;
-        const EPS = 1e-6;
-        if (t <= EPS || t >= 1 - EPS || u <= EPS || u >= 1 - EPS) continue; // touching at an end = endpoint
+        if (u <= EPS || u >= 1 - EPS) continue; // touching at an end = endpoint
         const x = ax + t * rx;
         const y = ay + t * ry;
         // count each pair once: only in the cell that contains the hit
