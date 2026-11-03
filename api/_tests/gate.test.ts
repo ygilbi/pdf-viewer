@@ -132,6 +132,10 @@ describe('restUserLoader', () => {
 });
 
 describe('middleware.ts', () => {
+  it('keeps the privacy / terms pages public (Marketplace listing; cleanUrls serves them extension-less)', () => {
+    for (const p of ['/privacy', '/privacy.html', '/terms', '/terms.html']) expect(shouldGate(p)).toBe(false);
+    expect(shouldGate('/drive/open')).toBe(true);
+  });
   it('declares a matcher for the app HTML only', () => {
     expect(middlewareConfig.matcher).toContain('/');
     expect(middlewareConfig.matcher).toContain('/index.html');

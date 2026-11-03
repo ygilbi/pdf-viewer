@@ -3,7 +3,7 @@
 import { SESSION_COOKIE, readCookie, sessionUserValid, verifySession, type SessionUser } from './session.js';
 
 /** Paths that are always public (the login/request pages, static files, the API, PWA plumbing). */
-const PUBLIC_EXACT = new Set(['/login', '/login.html', '/download', '/download.html', '/manifest.webmanifest', '/sw.js']);
+const PUBLIC_EXACT = new Set(['/login', '/login.html', '/download', '/download.html', '/manifest.webmanifest', '/sw.js', '/privacy', '/privacy.html', '/terms', '/terms.html']);
 const PUBLIC_PREFIXES = ['/api/', '/assets/', '/icons/', '/tools/', '/login/', '/download/'];
 
 /** Gated HTML files (paths with a dot are otherwise treated as public static files). */
