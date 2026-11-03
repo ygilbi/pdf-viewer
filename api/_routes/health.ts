@@ -39,6 +39,9 @@ export async function GET(req: Request): Promise<Response> {
   };
   // Optional feature ("Sign in with Google"): reported, but does not affect `ok`.
   const google = googleFromEnv(env) !== null;
+  // Optional Google Drive Picker ("open from Google Drive" button): booleans only, never the key itself.
+  const GOOGLE_API_KEY = !!s(env.GOOGLE_API_KEY);
+  const GOOGLE_PROJECT_NUMBER = /^\d+$/.test(s(env.GOOGLE_PROJECT_NUMBER));
 
   const smtpCheck = async (): Promise<string> => {
     if (!envReport.SMTP_USER || !envReport.SMTP_PASS) return 'skipped';
@@ -93,7 +96,7 @@ export async function GET(req: Request): Promise<Response> {
   const ok = Object.values(envReport).every(Boolean) && smtp === 'ok' && redis === 'ok' && gh.status === 'ok';
   return jsonResponse({
     ok,
-    env: { ...envReport, google },
+    env: { ...envReport, google, GOOGLE_API_KEY, GOOGLE_PROJECT_NUMBER },
     smtp,
     redis,
     github: gh.status,

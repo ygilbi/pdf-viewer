@@ -14,6 +14,11 @@ import { GlobalWorkerOptions, PDFWorker, getDocument } from 'pdfjs-dist';
 import type { PDFDocumentLoadingTask, PDFDocumentProxy } from 'pdfjs-dist';
 import pdfjsWorkerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
 import type { Rect, WorkerRequest, WorkerResponse } from './types';
+import type { TextItem, TextWorkerRequest, TextWorkerResponse } from './types';
+import { toTextItems } from '../text/textGeometry';
+import { AnnotationMode, OPS } from 'pdfjs-dist';
+import type { SnapWorkerRequest, SnapWorkerResponse } from './types';
+import { snapPointsFromOperatorList, type SnapOps } from './vectorSnap';
 import {
   PageCache,
   PriorityYield,
@@ -342,3 +347,102 @@ self.onmessage = (ev: MessageEvent<WorkerRequest & { seq?: number }>) => {
       break;
   }
 };
+
+// ---------------------------------------------------------------------------
+// Page text ('text' request) — own listener so the render protocol stays untouched.
+// Items are converted to page units (rotated viewport at scale 1) and cached
+// per document + page; the cache goes away with the DocState.
+// ---------------------------------------------------------------------------
+
+const textCache = new WeakMap<DocState, Map<number, Promise<TextItem[]>>>();
+
+function pageText(d: DocState, pageNumber: number): Promise<TextItem[]> {
+  let m = textCache.get(d);
+  if (!m) textCache.set(d, (m = new Map()));
+  let p = m.get(pageNumber);
+  if (!p) {
+    p = (async () => {
+      const { doc } = await d.ready;
+      if (d.closed) throw makeCancelError();
+      // doc.getPage (not PageCache): a 40-page search must not evict the pages being rendered.
+      const page = await doc.getPage(pageNumber);
+      const vt = page.getViewport({ scale: 1 }).transform;
+      const tc = await page.getTextContent();
+      return toTextItems(vt, tc.items);
+    })();
+    const cache = m;
+    p.catch(() => cache.delete(pageNumber));
+    m.set(pageNumber, p);
+  }
+  return p;
+}
+
+self.addEventListener('message', (ev: MessageEvent<TextWorkerRequest | { type?: unknown }>) => {
+  const msg = ev.data;
+  if (!msg || msg.type !== 'text') return;
+  const { id, page, docId } = msg as TextWorkerRequest;
+  const reply = (r: TextWorkerResponse) => self.postMessage(r);
+  const d = docs.get(docId ?? DEFAULT_DOC);
+  if (!d) {
+    reply({ type: 'textError', id, message: 'No document is open' });
+    return;
+  }
+  pageText(d, page).then(
+    (items) => reply({ type: 'text', id, items }),
+    (e: unknown) => reply({ type: 'textError', id, message: e instanceof Error ? e.message : String(e) }),
+  );
+});
+
+// ---------------------------------------------------------------------------
+// Vector snap geometry ('snapGeometry' request) — own listener, like 'text'.
+// Line segments of painted paths → endpoints / midpoints / intersections in
+// page units (core/vectorSnap.ts). Cached per document + page (the cache
+// goes away with the DocState); results are copied per reply (transferable).
+// ---------------------------------------------------------------------------
+
+type SnapResult = Omit<Extract<SnapWorkerResponse, { type: 'snapGeometry' }>, 'type' | 'id'>;
+const snapCache = new WeakMap<DocState, Map<number, Promise<SnapResult>>>();
+
+function pageSnapGeometry(d: DocState, pageNumber: number): Promise<SnapResult> {
+  let m = snapCache.get(d);
+  if (!m) snapCache.set(d, (m = new Map()));
+  let p = m.get(pageNumber);
+  if (!p) {
+    p = (async () => {
+      const t0 = performance.now();
+      const { doc } = await d.ready;
+      if (d.closed) throw makeCancelError();
+      const page = await doc.getPage(pageNumber);
+      const vt = page.getViewport({ scale: 1 }).transform;
+      // Same annotation mode as rendering (annotations are not drawn).
+      const opList = await page.getOperatorList({ annotationMode: AnnotationMode.DISABLE });
+      if (d.closed) throw makeCancelError();
+      const r = snapPointsFromOperatorList(opList, OPS as unknown as SnapOps, vt);
+      return { ...r, ms: performance.now() - t0, extractMs: r.ms };
+    })();
+    const cache = m;
+    p.catch(() => cache.delete(pageNumber));
+    m.set(pageNumber, p);
+  }
+  return p;
+}
+
+self.addEventListener('message', (ev: MessageEvent<SnapWorkerRequest | { type?: unknown }>) => {
+  const msg = ev.data;
+  if (!msg || msg.type !== 'snapGeometry') return;
+  const { id, page, docId } = msg as SnapWorkerRequest;
+  const reply = (r: SnapWorkerResponse, transfer: Transferable[] = []) => self.postMessage(r, transfer);
+  const d = docs.get(docId ?? DEFAULT_DOC);
+  if (!d) {
+    reply({ type: 'snapGeometryError', id, message: 'No document is open' });
+    return;
+  }
+  pageSnapGeometry(d, page).then(
+    (r) => {
+      const xy = r.xy.slice();
+      const kind = r.kind.slice();
+      reply({ type: 'snapGeometry', id, ...r, xy, kind }, [xy.buffer, kind.buffer]);
+    },
+    (e: unknown) => reply({ type: 'snapGeometryError', id, message: e instanceof Error ? e.message : String(e) }),
+  );
+});

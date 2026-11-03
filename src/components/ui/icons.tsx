@@ -296,3 +296,45 @@ export const IconEdit = (p: IconProps) => (
     <path d="m13.5 6.5 4 4" />
   </Svg>
 );
+
+// ---- rectangle area / undo / snap -------------------------------------------
+
+/** Rectangle area tool: filled rectangle with corner dots. */
+export const IconRectArea = (p: IconProps) => (
+  <Svg {...p}>
+    <rect x="4" y="6" width="16" height="12" fill="currentColor" fillOpacity={0.28} />
+    <circle cx="4" cy="6" r="1.6" fill="currentColor" />
+    <circle cx="20" cy="18" r="1.6" fill="currentColor" />
+  </Svg>
+);
+
+export const IconUndo = (p: IconProps) => (
+  <Svg {...p}>
+    <path d="M9 14 4 9l5-5" />
+    <path d="M4 9h10.5a5.5 5.5 0 0 1 0 11H11" />
+  </Svg>
+);
+
+export const IconRedo = (p: IconProps) => (
+  <Svg {...p}>
+    <path d="m15 14 5-5-5-5" />
+    <path d="M20 9H9.5a5.5 5.5 0 0 0 0 11H13" />
+  </Svg>
+);
+
+/** Snap to drawing geometry: magnet over a corner. */
+export const IconSnap = (p: IconProps) => (
+  <Svg {...p}>
+    <path d="M3 21V12M3 21h9" strokeOpacity={0.55} />
+    <rect x="1.5" y="19.5" width="3" height="3" fill="currentColor" stroke="none" />
+    <path d="M10 4v5a4 4 0 0 0 8 0V4M10 7h3M15 7h3" />
+  </Svg>
+);
+
+/** Pricing / BOQ (calculator). */
+export const IconCalculator = (p: IconProps) => (
+  <Svg {...p}>
+    <rect x="5" y="3" width="14" height="18" rx="2" />
+    <path d="M8 7h8M8.5 11h.01M12 11h.01M15.5 11h.01M8.5 14.5h.01M12 14.5h.01M15.5 14.5v3M8.5 17.5h.01M12 17.5h.01" />
+  </Svg>
+);

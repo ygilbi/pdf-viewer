@@ -23,6 +23,12 @@ import type {
   WorkspaceClient,
   WorkspaceDoc,
 } from './types';
+import type { TextItem, TextWorkerRequest, TextWorkerResponse } from './types';
+import { toTextItems } from '../text/textGeometry';
+import type { SnapWorkerRequest, SnapWorkerResponse } from './types';
+
+/** Snap points of one page (see core/vectorSnap.ts). */
+export type SnapGeometry = Omit<Extract<SnapWorkerResponse, { type: 'snapGeometry' }>, 'type' | 'id'>;
 
 /** Must match UNSUPPORTED_PREFIX in renderQueue.ts (kept as a literal so renderQueue is only loaded lazily here). */
 const UNSUPPORTED_PREFIX = 'PDF_WORKER_UNSUPPORTED:';
@@ -179,6 +185,28 @@ class MainThreadRenderer {
   closeAll(): void {
     for (const id of [...this.docs.keys()]) this.close(id);
     for (const id of [...this.jobs.keys()]) this.cancel(id);
+  }
+
+  /** Page text in page units (main-thread fallback for the worker's 'text' request). */
+  async getText(docId: string, localPage: number): Promise<TextItem[]> {
+    const d = this.docs.get(docId);
+    if (!d) throw new Error('No document is open');
+    const { doc } = await d.ready;
+    const page = await doc.getPage(localPage);
+    const tc = await page.getTextContent();
+    return toTextItems(page.getViewport({ scale: 1 }).transform, tc.items);
+  }
+
+  /** Vector snap points of a page (main-thread fallback for the worker's 'snapGeometry' request). */
+  async getSnapGeometry(docId: string, localPage: number): Promise<SnapGeometry> {
+    const d = this.docs.get(docId);
+    if (!d) throw new Error('No document is open');
+    const [{ doc }, { pdfjs }, vs] = await Promise.all([d.ready, this.libP, import('./vectorSnap')]);
+    const t0 = performance.now();
+    const page = await doc.getPage(localPage);
+    const opList = await page.getOperatorList({ annotationMode: pdfjs.AnnotationMode.DISABLE });
+    const r = vs.snapPointsFromOperatorList(opList, pdfjs.OPS as unknown as import('./vectorSnap').SnapOps, page.getViewport({ scale: 1 }).transform);
+    return { ...r, ms: performance.now() - t0, extractMs: r.ms };
   }
 
   private scheduler() {
@@ -359,6 +387,111 @@ class PdfClientImpl implements WorkspaceClient {
 
   close(): void {
     this.closeAll();
+  }
+
+  // ---- vector snap geometry (see SnapWorkerRequest) -------------------------
+
+  /** docId:localPage → snap points. Small LRU (the worker keeps its own cache too). */
+  private snapCache = new Map<string, Promise<SnapGeometry>>();
+  private snapPending = new Map<number, { resolve(g: SnapGeometry): void; reject(e: Error): void }>();
+  private snapWorker: Worker | null = null;
+
+  /** Snap points (endpoints / midpoints / intersections) of a GLOBAL page, in page units. Cached. */
+  getSnapGeometry(globalPage: number): Promise<SnapGeometry> {
+    const loc = this.locate(globalPage);
+    if (!loc) return Promise.reject(new Error(this.entries.length ? `Page ${globalPage} is out of range` : 'No document is open'));
+    const key = `${loc.docId}:${loc.localPage}`;
+    let p = this.snapCache.get(key);
+    if (p) {
+      this.snapCache.delete(key);
+      this.snapCache.set(key, p);
+      return p;
+    }
+    p = this.fetchSnapGeometry(loc.docId, loc.localPage);
+    p.catch(() => this.snapCache.delete(key));
+    this.snapCache.set(key, p);
+    while (this.snapCache.size > 24) this.snapCache.delete(this.snapCache.keys().next().value as string);
+    return p;
+  }
+
+  private fetchSnapGeometry(docId: string, localPage: number): Promise<SnapGeometry> {
+    if (this.mode !== 'worker' || !this.worker) return this.getMain().getSnapGeometry(docId, localPage);
+    const w = this.worker;
+    if (this.snapWorker !== w) {
+      this.snapWorker = w;
+      w.addEventListener('message', (ev: MessageEvent<SnapWorkerResponse | { type?: unknown }>) => {
+        const m = ev.data as SnapWorkerResponse;
+        if (m?.type !== 'snapGeometry' && m?.type !== 'snapGeometryError') return;
+        const p = this.snapPending.get(m.id);
+        if (!p) return;
+        this.snapPending.delete(m.id);
+        if (m.type === 'snapGeometry') {
+          const { type: _t, id: _i, ...g } = m;
+          p.resolve(g);
+        } else p.reject(new Error(m.message));
+      });
+      w.addEventListener('error', () => {
+        for (const p of this.snapPending.values()) p.reject(new Error('PDF worker failed'));
+        this.snapPending.clear();
+      });
+    }
+    const id = this.nextId++;
+    return new Promise<SnapGeometry>((resolve, reject) => {
+      this.snapPending.set(id, { resolve, reject });
+      w.postMessage({ type: 'snapGeometry', id, page: localPage, docId } satisfies SnapWorkerRequest);
+    });
+  }
+
+  // ---- page text (see TextWorkerRequest) -----------------------------------
+
+  /** docId:localPage → items. Small LRU; docIds are never reused so stale keys are harmless. */
+  private textCache = new Map<string, Promise<TextItem[]>>();
+  private textPending = new Map<number, { resolve(items: TextItem[]): void; reject(e: Error): void }>();
+  private textWorker: Worker | null = null;
+
+  /** Text runs of a GLOBAL page, in page units (rotated viewport at scale 1). Cached. */
+  getPageText(globalPage: number): Promise<TextItem[]> {
+    const loc = this.locate(globalPage);
+    if (!loc) return Promise.reject(new Error(this.entries.length ? `Page ${globalPage} is out of range` : 'No document is open'));
+    const key = `${loc.docId}:${loc.localPage}`;
+    let p = this.textCache.get(key);
+    if (p) {
+      this.textCache.delete(key);
+      this.textCache.set(key, p);
+      return p;
+    }
+    p = this.fetchText(loc.docId, loc.localPage);
+    p.catch(() => this.textCache.delete(key));
+    this.textCache.set(key, p);
+    while (this.textCache.size > 400) this.textCache.delete(this.textCache.keys().next().value as string);
+    return p;
+  }
+
+  private fetchText(docId: string, localPage: number): Promise<TextItem[]> {
+    if (this.mode !== 'worker' || !this.worker) return this.getMain().getText(docId, localPage);
+    const w = this.worker;
+    if (this.textWorker !== w) {
+      this.textWorker = w;
+      w.addEventListener('message', (ev: MessageEvent<TextWorkerResponse | { type?: unknown }>) => {
+        const m = ev.data as TextWorkerResponse;
+        if (m?.type !== 'text' && m?.type !== 'textError') return;
+        const p = this.textPending.get(m.id);
+        if (!p) return;
+        this.textPending.delete(m.id);
+        if (m.type === 'text') p.resolve(m.items);
+        else p.reject(new Error(m.message));
+      });
+      // Worker died (→ main-thread fallback): fail pending requests so callers can retry.
+      w.addEventListener('error', () => {
+        for (const p of this.textPending.values()) p.reject(new Error('PDF worker failed'));
+        this.textPending.clear();
+      });
+    }
+    const id = this.nextId++;
+    return new Promise<TextItem[]>((resolve, reject) => {
+      this.textPending.set(id, { resolve, reject });
+      w.postMessage({ type: 'text', id, page: localPage, docId } satisfies TextWorkerRequest);
+    });
   }
 
   // -------------------------------------------------------------------------
@@ -545,4 +678,14 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined' && !import.
   const w = window as Window & { requestIdleCallback?: (cb: () => void, o?: { timeout: number }) => number };
   if (w.requestIdleCallback) w.requestIdleCallback(warm, { timeout: 1000 });
   else setTimeout(warm, 200);
+}
+
+/** Text runs of a GLOBAL workspace page in page units (worker-extracted, cached). */
+export function getPageText(globalPage: number): Promise<TextItem[]> {
+  return (getPdfClient() as unknown as { getPageText(p: number): Promise<TextItem[]> }).getPageText(globalPage);
+}
+
+/** Vector snap points of a GLOBAL page from the app-wide client (cached; see SnapGeometry). */
+export function getPageSnapGeometry(globalPage: number): Promise<SnapGeometry> {
+  return (getPdfClient() as PdfClientImpl).getSnapGeometry(globalPage);
 }

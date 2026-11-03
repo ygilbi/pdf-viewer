@@ -97,7 +97,8 @@ export interface PdfClient {
 // Measurements
 // ---------------------------------------------------------------------------
 
-export type ToolId = 'pan' | 'calibrate' | 'area' | 'deduct' | 'length' | 'count' | MarkupKind;
+/** 'rectArea' = two-corner rectangle that creates a normal 'area' measurement. */
+export type ToolId = 'pan' | 'calibrate' | 'area' | 'rectArea' | 'deduct' | 'length' | 'count' | MarkupKind;
 
 /**
  * What a measurement represents:
@@ -123,6 +124,10 @@ export interface Calibration {
   p1: Point;
   p2: Point;
   meters: number;
+  /** True when set by automatic scale detection from the drawing's text (not measured by the user). */
+  auto?: boolean;
+  /** Where an automatic calibration came from, e.g. '1:100' (display only). */
+  source?: string;
 }
 
 export interface AreaMeasurement {
@@ -153,6 +158,20 @@ export interface AreaMeasurement {
   strokeWidth?: number;
   /** Markup 'text' only: font size in page units (scales with the drawing, like CAD text). */
   fontSize?: number;
+  /**
+   * Count groups only: the size of ONE item (meters) + optional schedule code,
+   * e.g. W1 150×140 → { width: 1.5, height: 1.4, code: 'W1' }. Gives derived
+   * quantities: glazing area n×w×h and frame (profile) length n×2(w+h).
+   * Read it through `itemOf(m)` (measurementEngine) — older saves lack it.
+   */
+  item?: ItemDims;
+}
+
+/** Size of one counted item (meters) + optional item / schedule code. */
+export interface ItemDims {
+  width: number;
+  height: number;
+  code?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -206,3 +225,49 @@ export interface WorkspaceClient extends PdfClient {
 // They are NOT takeoff quantities: summaries, CSV totals and category
 // subtotals must ignore them (use `isMarkupKind`).
 export type MarkupKind = 'note' | 'text' | 'rect' | 'cloud' | 'arrow' | 'pen' | 'highlight';
+
+// ---------------------------------------------------------------------------
+// Page text (contract — worker 'text' request, pdfClient.getPageText)
+// ---------------------------------------------------------------------------
+
+/**
+ * One pdf.js text run in PAGE UNITS (rotated viewport at scale 1).
+ * `q` = oriented quad [ox, oy, ux, uy, vx, vy]: origin (bottom-left of the run
+ * incl. descent), baseline vector (whole advance) and "up" vector (font height),
+ * so sub-strings of rotated text can be located too. `rect` = its AABB.
+ */
+export interface TextItem {
+  str: string;
+  rect: Rect;
+  q: [number, number, number, number, number, number];
+}
+
+/** Extra worker request (handled by its own listener in pdfWorker.ts; not part of WorkerRequest). */
+export type TextWorkerRequest = { type: 'text'; id: number; page: number; docId?: string };
+export type TextWorkerResponse =
+  | { type: 'text'; id: number; items: TextItem[] }
+  | { type: 'textError'; id: number; message: string };
+
+// ---------------------------------------------------------------------------
+// Vector snap geometry (contract — worker 'snapGeometry' request, pdfClient.getSnapPoints)
+// ---------------------------------------------------------------------------
+
+/** Extra worker request (own listener in pdfWorker.ts; not part of WorkerRequest). */
+export type SnapWorkerRequest = { type: 'snapGeometry'; id: number; page: number; docId?: string };
+export type SnapWorkerResponse =
+  | {
+      type: 'snapGeometry';
+      id: number;
+      /** Page units: x0,y0,x1,y1,… */
+      xy: Float32Array;
+      /** 0 endpoint, 1 midpoint, 2 intersection (see core/vectorSnap.ts). */
+      kind: Uint8Array;
+      count: number;
+      segments: number;
+      truncated: boolean;
+      /** Worker-side time: operator list fetch + extraction (ms). */
+      ms: number;
+      /** Extraction only (ms). */
+      extractMs: number;
+    }
+  | { type: 'snapGeometryError'; id: number; message: string };

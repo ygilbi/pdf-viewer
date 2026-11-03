@@ -16,6 +16,7 @@
     "@simplewebauthn/browser": "^13.3.0",
     "@simplewebauthn/server": "^14.0.3",
     "@upstash/redis": "^1.40.0",
+    "exceljs": "^4.4.0",
     "nodemailer": "^10.3.1",
     "pdf-lib": "^1.17.1",
     "pdfjs-dist": "^4.10.38",

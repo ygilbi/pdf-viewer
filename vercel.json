@@ -37,6 +37,10 @@
     {
       "source": "/api/:route((?!router$).+)",
       "destination": "/api/router?__route=:route"
+    },
+    {
+      "source": "/drive/open",
+      "destination": "/index.html"
     }
   ]
 }

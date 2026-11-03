@@ -188,6 +188,29 @@ export class ViewportController {
     this.zoomToAnimated(base * factor);
   }
 
+  /**
+   * Animated zoom to show `r` (page units) centred — sized for a text tag:
+   * about 30 text heights tall (never below the fit zoom).
+   */
+  zoomToRect(r: Rect, animate = true): void {
+    if (!(this.cw > 0 && this.ch > 0)) return;
+    const rw = Math.max(r.width, 1);
+    const rh = Math.max(r.height, 1);
+    const z = this.clampZoom(Math.max(this.fitZoom, Math.min(this.ch / (rh * 30), this.cw / (rw * 4))));
+    const cx = r.x + r.width / 2;
+    const cy = r.y + r.height / 2;
+    const [px, py] = this.clampedPan(z, this.cw / 2 - cx * z, this.ch / 2 - cy * z);
+    this.fitted = false;
+    if (animate) this.tweenTo(z, px, py, null);
+    else {
+      this.anim = null;
+      this.zoom = z;
+      this.panX = px;
+      this.panY = py;
+      this.invalidate();
+    }
+  }
+
   zoomToAnimated(z: number): void {
     const z1 = this.clampZoom(z);
     const sx = this.cw / 2;

@@ -136,6 +136,8 @@ Vercel ← הפרויקט ← **Settings** ← **Environment Variables** (סבי
 | `MAIL_FROM`, `SMTP_HOST`, `SMTP_PORT`, `SMTP_SECURE` | לא | ברירות מחדל ל-Gmail (`smtp.gmail.com`, `465`) |
 | `GITHUB_REPO` | לא | ברירת מחדל `ygilbi/pdf-viewer` |
 | `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` | לא | מפעילים **כניסה עם Google** (ראו „כניסה עם Google” למעלה). בלעדיהם הכפתור לא מוצג |
+| `GOOGLE_API_KEY` | לא | מפתח API (ציבורי, מוגבל ל-HTTP referrer) ל-**Google Picker** — כפתור „פתח מ-Google Drive” באפליקציה. ראו [google-drive-setup.md](google-drive-setup.md) |
+| `GOOGLE_PROJECT_NUMBER` | לא | מספר הפרויקט (Project number, ספרות בלבד) ב-Google Cloud — נדרש יחד עם `GOOGLE_API_KEY` ל-Picker |
 
 סמנו את `SMTP_PASS`, `SIGNING_SECRET`, `GITHUB_TOKEN` ו-`GOOGLE_CLIENT_SECRET` כ-**Sensitive**.
 
@@ -166,6 +168,7 @@ Vercel ← הפרויקט ← **Settings** ← **Environment Variables** (סבי
 |---|---|
 | `env.X: false` | המשתנה X חסר (או `SIGNING_SECRET` קצר מ-32 תווים). הוסיפו ← Redeploy |
 | `env.google: false` | כניסה עם Google כבויה (אופציונלי — לא משפיע על `ok`). להפעלה: `GOOGLE_CLIENT_ID` + `GOOGLE_CLIENT_SECRET` ← Redeploy |
+| `env.GOOGLE_API_KEY` / `env.GOOGLE_PROJECT_NUMBER: false` | כפתור „פתח מ-Google Drive” מוסתר (אופציונלי). „פתיחה באמצעות” מתוך Drive עובד גם בלעדיהם. ראו [google-drive-setup.md](google-drive-setup.md) |
 | `smtp: "error: auth failed 535"` | Gmail דחה את ההתחברות: `SMTP_PASS` אינו סיסמת אפליקציה, הועתק עם טעות, או בוטל; או ש-`SMTP_USER` אינו אותו חשבון |
 | `smtp: "error: timeout"` / `"connection failed …"` | בעיית רשת/פורט — בדקו `SMTP_HOST`/`SMTP_PORT` |
 | `smtp: "skipped"` | `SMTP_USER` או `SMTP_PASS` חסרים |

@@ -25,7 +25,7 @@ export const redirectUri = (base: string): string => `${base}/api/auth/google/ca
 
 /** A same-origin relative path ("/x?y"), else null. Rejects "//host", "/\\host", schemes and control chars. */
 export function safeNext(v: unknown): string | null {
-  if (typeof v !== 'string' || v.length === 0 || v.length > 512) return null;
+  if (typeof v !== 'string' || v.length === 0 || v.length > 2048) return null; // room for /drive/open?state=… (Google Drive launch)
   if (!v.startsWith('/') || v.startsWith('//') || v.startsWith('/\\')) return null;
   // eslint-disable-next-line no-control-regex
   if (/[\u0000-\u001f\u007f\\]/.test(v)) return null;
@@ -60,7 +60,7 @@ export type StateCheck = { ok: true; state: GoogleState } | { ok: false; reason:
 
 export function verifyState(token: string | null, secret: string, now: number): StateCheck {
   const invalid = { ok: false, reason: 'state_invalid' } as const;
-  if (!token || token.length > 2048) return invalid;
+  if (!token || token.length > 4096) return invalid;
   const parts = token.split('.');
   if (parts.length !== 2 || !/^[\w-]+$/.test(parts[0]) || !/^[\w-]+$/.test(parts[1])) return invalid;
   const expected = stateSig(parts[0], secret);

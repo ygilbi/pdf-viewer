@@ -8,6 +8,9 @@ import { savePickerSupported, startExport, type ExportHandle } from '../export/r
 import { DEFAULT_CSV_OPTIONS, DEFAULT_PDF_OPTIONS, type CsvOptions, type ExportFormat, type PdfContentOptions } from '../export/types';
 import { baseName } from './ui/util';
 import { IconX } from './ui/icons';
+import { boqForPages } from '../export/runExport';
+import { formatMoney } from '../pricing/boq';
+import { usePricing } from '../pricing/store';
 
 const KIND_OPTIONS: { id: CsvOptions['kinds'][number]; label: string }[] = [
   { id: 'area', label: 'שטחים' },
@@ -23,6 +26,13 @@ const PDF_CONTENT: { id: keyof PdfContentOptions; label: string; hint?: string }
   { id: 'calibration', label: 'קו כיול' },
   { id: 'summary', label: 'טבלאות סיכום בסוף', hint: 'לפי עמוד ולפי קטגוריה, סה״כ, רשימת הערות' },
   { id: 'legend', label: 'מקרא קטגוריות' },
+  { id: 'boq', label: 'כתב כמויות עם מחירים', hint: 'עמוד תמחור: כמות, פחת, מחיר, הנחה ומע״מ (לפי חלונית התמחור)' },
+];
+
+const FORMATS: { id: ExportFormat; label: string; hint: string }[] = [
+  { id: 'pdf', label: 'PDF', hint: 'שרטוט + מדידות' },
+  { id: 'xlsx', label: 'Excel', hint: 'מומלץ לתמחור' },
+  { id: 'csv', label: 'CSV', hint: 'טבלה פשוטה' },
 ];
 
 const CSV_SECTIONS: { id: 'rows' | 'categoryTotals' | 'totals' | 'notes'; label: string }[] = [
@@ -105,7 +115,7 @@ function ExportDialogBody() {
   }, [measurements]);
   const pagesWithData = useMemo(() => [...perPage.keys()].sort((a, b) => a - b), [perPage]);
 
-  const [format, setFormat] = useState<ExportFormat>('pdf');
+  const [format, setFormat] = useState<ExportFormat>(() => useExportUi.getState().format ?? 'pdf');
   const [selected, setSelected] = useState<Set<number>>(
     () => new Set(pagesWithData.length ? pagesWithData : [currentPage]),
   );
@@ -238,24 +248,29 @@ function ExportDialogBody() {
           <div className="flex min-w-0 flex-col gap-5">
             <Section title="פורמט">
               <div role="radiogroup" aria-label="פורמט" className="flex gap-2">
-                {(['pdf', 'csv'] as const).map((f) => (
+                {FORMATS.map((f) => (
                   <label
-                    key={f}
+                    key={f.id}
                     className={
-                      'flex flex-1 cursor-pointer items-center justify-center gap-2 rounded-md border px-3 py-2 text-sm ' +
-                      (format === f ? 'border-sky-500 bg-sky-900/40 text-white' : 'border-slate-600 hover:bg-slate-700')
+                      'flex min-w-0 flex-1 cursor-pointer items-center justify-center gap-1.5 rounded-md border px-2 py-2 text-sm ' +
+                      (format === f.id ? 'border-sky-500 bg-sky-900/40 text-white' : 'border-slate-600 hover:bg-slate-700')
                     }
                   >
                     <input
                       type="radio"
                       name="export-format"
-                      value={f}
-                      checked={format === f}
-                      onChange={() => setFormat(f)}
-                      data-testid={`export-format-${f}`}
+                      value={f.id}
+                      checked={format === f.id}
+                      onChange={() => setFormat(f.id)}
+                      data-testid={`export-format-${f.id}`}
                       className="accent-sky-500"
                     />
-                    {f === 'pdf' ? 'PDF — שרטוט + מדידות' : 'CSV — טבלה לאקסל'}
+                    <span className="flex min-w-0 flex-col leading-tight">
+                      <span className="font-medium">{f.label}</span>
+                      <span className={'truncate text-[11px] ' + (f.id === 'xlsx' ? 'text-emerald-300' : 'text-slate-400')}>
+                        {f.id === 'xlsx' ? `(${f.hint})` : f.hint}
+                      </span>
+                    </span>
                   </label>
                 ))}
               </div>
@@ -387,7 +402,9 @@ function ExportDialogBody() {
 
           {/* right column: content + file */}
           <div className="flex min-w-0 flex-col gap-5">
-            {format === 'pdf' ? (
+            {format === 'xlsx' ? (
+              <XlsxSummary pages={selected} />
+            ) : format === 'pdf' ? (
               <Section title="תוכן ה־PDF">
                 {PDF_CONTENT.map((o) => (
                   <Check
@@ -536,5 +553,49 @@ function ExportDialogBody() {
         </footer>
       </div>
     </div>
+  );
+}
+
+/** Excel: what the workbook will contain + the live BOQ total for the selected pages. */
+function XlsxSummary({ pages }: { pages: Set<number> }) {
+  const measurements = useViewer((s) => s.measurements);
+  const calibrations = useViewer((s) => s.calibrations);
+  const categories = useViewer((s) => s.categories);
+  const docPrices = usePricing((s) => s.doc);
+  const globalPrices = usePricing((s) => s.global);
+  const boq = useMemo(
+    () => boqForPages({ measurements, calibrations, categories }, pages),
+    // boqForPages reads the (subscribed) price book itself
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [measurements, calibrations, categories, pages, docPrices, globalPrices],
+  );
+  return (
+    <Section title="תוכן קובץ ה־Excel">
+      <ul className="flex list-disc flex-col gap-1.5 ps-5 text-sm text-slate-300">
+        <li>
+          <b className="text-slate-100">כתב כמויות</b> — שורה לכל קטגוריה עם נוסחאות חיות: כמות × (1 + פחת) × מחיר, סה״כ, הנחה, מע״מ
+        </li>
+        <li>
+          <b className="text-slate-100">מדידות</b> — כל המדידות (כמו ה־CSV) כולל מידות פריטים
+        </li>
+        <li>
+          <b className="text-slate-100">הערות</b> — הערות וטקסטים מהשרטוט
+        </li>
+      </ul>
+      <div className="rounded border border-slate-700 bg-slate-900/50 p-2 text-xs" data-testid="export-xlsx-summary">
+        <div className="flex justify-between">
+          <span className="text-slate-400">{boq.lines.length} שורות בכתב הכמויות</span>
+          <span className="font-mono font-semibold text-emerald-300" dir="ltr">
+            {formatMoney(boq.total, boq.currency)}
+          </span>
+        </div>
+        {boq.warnings.map((w) => (
+          <p key={w} className="mt-1 text-amber-400">
+            {w}
+          </p>
+        ))}
+        <p className="mt-1 text-slate-500">מחירים, פחת והנחה נערכים בחלונית התמחור (Q).</p>
+      </div>
+    </Section>
   );
 }

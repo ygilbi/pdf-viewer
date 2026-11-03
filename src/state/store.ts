@@ -2,13 +2,14 @@ import { create } from 'zustand';
 import type { AreaMeasurement, Calibration, Category, PageSize, Point, ToolId, WorkspaceDoc } from '../core/types';
 import { concatPages, layoutDocs, removeDocFromWorkspace } from './workspace';
 import { DEFAULT_CATEGORIES, MEASUREMENT_COLORS, kindOf } from '../core/measurementEngine';
+import { coalesce, withHistory, type HistoryState } from './history';
 
 /**
  * Global UI state. Keep high-frequency state (pan/zoom transform, mouse
  * position) OUT of this store — ViewerCanvas holds it in refs so that panning
  * never triggers React re-renders.
  */
-export interface ViewerState {
+export interface ViewerState extends HistoryState {
   // document(s)
   /** Name of the first open file (null = nothing open). */
   fileName: string | null;
@@ -67,7 +68,8 @@ export interface ViewerState {
   setMeasurementCategory(id: string, categoryId: string | null): void;
 }
 
-export const useViewer = create<ViewerState>((set, get) => ({
+export const useViewer = create<ViewerState>()(
+  withHistory<ViewerState>((set, get) => ({
   fileName: null,
   docs: [],
   numPages: 0,
@@ -83,7 +85,7 @@ export const useViewer = create<ViewerState>((set, get) => ({
   categories: DEFAULT_CATEGORIES,
   activeCategoryId: null,
 
-  setDocument: ({ fileName, numPages, pageSizes, docId, fingerprint }) =>
+  setDocument: ({ fileName, numPages, pageSizes, docId, fingerprint }) => {
     set({
       fileName,
       docs: [{ id: docId ?? 'doc', name: fileName, fingerprint, numPages, pageOffset: 0, pageSizes }],
@@ -97,7 +99,9 @@ export const useViewer = create<ViewerState>((set, get) => ({
       selectedId: null,
       categories: DEFAULT_CATEGORIES,
       activeCategoryId: null,
-    }),
+    });
+    get().resetHistory();
+  },
   addDocument: (doc) =>
     set((s) => {
       const docs = layoutDocs([...s.docs.filter((d) => d.id !== doc.id), { ...doc }]);
@@ -108,7 +112,7 @@ export const useViewer = create<ViewerState>((set, get) => ({
       docs: s.docs.map((d) => (d.id === docId ? { ...d, ...patch } : d)),
       fileName: s.docs[0]?.id === docId && patch.name ? patch.name : s.fileName,
     })),
-  removeDocument: (docId) =>
+  removeDocument: (docId) => {
     set((s) => {
       const r = removeDocFromWorkspace(s, docId);
       if (!r) return {};
@@ -120,7 +124,10 @@ export const useViewer = create<ViewerState>((set, get) => ({
         selectedId: selectedGone ? null : s.selectedId,
         ...(r.docs.length === 0 ? { categories: DEFAULT_CATEGORIES, activeCategoryId: null } : {}),
       };
-    }),
+    });
+    // Page numbers were renumbered: older snapshots no longer line up.
+    get().resetHistory();
+  },
   setLoading: (loading) => set({ loading }),
   setError: (error) => set({ error }),
   setPage: (page) => {
@@ -133,8 +140,12 @@ export const useViewer = create<ViewerState>((set, get) => ({
   setDraft: (draft) => set({ draft }),
   setCalibration: (page, c) => set((s) => ({ calibrations: { ...s.calibrations, [page]: c } })),
   addMeasurement: (m) => set((s) => ({ measurements: [...s.measurements, m], selectedId: m.id })),
-  updateMeasurement: (id, patch) =>
-    set((s) => ({ measurements: s.measurements.map((m) => (m.id === id ? { ...m, ...patch } : m)) })),
+  updateMeasurement: (id, patch) => {
+    // Text / label / style edits in a row on one item = one undo step; geometry edits never merge.
+    const keys = Object.keys(patch).sort();
+    coalesce(keys.includes('points') ? null : `update:${id}:${keys.join(',')}`);
+    set((s) => ({ measurements: s.measurements.map((m) => (m.id === id ? { ...m, ...patch } : m)) }));
+  },
   removeMeasurement: (id) =>
     set((s) => ({
       measurements: s.measurements.filter((m) => m.id !== id),
@@ -164,4 +175,6 @@ export const useViewer = create<ViewerState>((set, get) => ({
         }),
       };
     }),
-}));
+}),
+  ),
+);

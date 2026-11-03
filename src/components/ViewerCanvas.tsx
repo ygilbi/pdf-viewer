@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useViewer } from '../state/store';
-import { getPdfClient } from '../core/pdfClient';
+import { getPdfClient, getPageSnapGeometry } from '../core/pdfClient';
+import { SNAP_INTERSECTION, SNAP_MIDPOINT, SnapIndex, nearestExtra, pickSnap, projectOnRay, type SnapHit } from '../core/snapIndex';
+import { useSnap } from '../state/snapStore';
 import type { AreaMeasurement, MarkupKind, MeasurementKind, Point, ToolId } from '../core/types';
 import {
   DEDUCT_COLOR,
@@ -28,7 +30,8 @@ import {
 import { ViewportController } from './viewer/Viewport';
 import { PageLayers } from './viewer/TileLayer';
 import { MeasureOverlay, OVERLAY_WARN_COLOR } from './viewer/MeasureOverlay';
-import { emitZoom, registerViewer } from './viewer/commands';
+import { emitZoom, registerViewer, takePendingFocus } from './viewer/commands';
+import { TextHighlights } from './text/TextHighlights';
 import { MarkupEditor, NoteBubbles } from './viewer/MarkupHtml';
 import { useMarkup } from '../state/markupStore';
 import {
@@ -73,6 +76,8 @@ const DRAG_PX_MOUSE = 4;
 const DRAG_PX_TOUCH = 9;
 const DBL_MS = 350;
 const ZOOM_STEP = 1.5;
+/** Geometry snap radius (screen px). */
+const SNAP_PX = 10;
 
 type Gesture =
   | { kind: 'none' }
@@ -84,7 +89,9 @@ type Gesture =
   | { kind: 'draw'; id: number; tool: MarkupKind; pts: Point[]; sx: number; sy: number; lx: number; ly: number }
   /** Dragging a whole markup annotation (pan tool). */
   | { kind: 'move'; id: number; mid: string; sx: number; sy: number; orig: Point[]; points: Point[]; moved: boolean }
-  | { kind: 'pinch'; a: number; b: number; dist: number; mx: number; my: number };
+  | { kind: 'pinch'; a: number; b: number; dist: number; mx: number; my: number }
+  /** Rectangle area / opening by dragging (rectArea tool, or Alt + deduct). */
+  | { kind: 'rect'; id: number; a: Point; mk: 'area' | 'deduct'; sx: number; sy: number; moved: boolean; threshold: number };
 
 function isTypingTarget(t: EventTarget | null): boolean {
   const el = t as HTMLElement | null;
@@ -96,8 +103,19 @@ const LINE_HIT_PX = 7; // pan-tool hit radius around a length polyline
 
 /** Drawing tool → kind of measurement it creates (null for pan / calibrate). */
 function toolKind(t: ToolId): MeasurementKind | null {
+  if (t === 'rectArea') return 'area';
   return t === 'area' || t === 'deduct' || t === 'length' ? t : null;
 }
+/** Tools whose clicks snap to the drawing's vector geometry. */
+const isSnapTool = (t: ToolId) =>
+  t === 'area' || t === 'deduct' || t === 'length' || t === 'calibrate' || t === 'rectArea' || t === 'count';
+/** Rectangle from two opposite corners (clockwise on screen). */
+const rectCorners = (a: Point, b: Point): Point[] => [
+  { x: a.x, y: a.y },
+  { x: b.x, y: a.y },
+  { x: b.x, y: b.y },
+  { x: a.x, y: b.y },
+];
 const isPolygonTool = (t: ToolId) => t === 'area' || t === 'deduct';
 /** Markup tools drawn by dragging. */
 const isDragTool = (t: ToolId): t is MarkupKind =>
@@ -195,6 +213,7 @@ export default function ViewerCanvas() {
   const measurements = useViewer((s) => s.measurements);
   const selectedId = useViewer((s) => s.selectedId);
   const editingId = useMarkup((s) => s.editingId);
+  const snapOn = useSnap((s) => s.enabled);
 
   const size = numPages > 0 ? pageSizes[currentPage - 1] : undefined;
   const calibration = calibrations[currentPage];
@@ -214,6 +233,7 @@ export default function ViewerCanvas() {
   const segmentRef = useRef<SVGLineElement>(null);
   const closingRef = useRef<SVGLineElement>(null);
   const markupRef = useRef<SVGPathElement>(null);
+  const snapMarkerRef = useRef<SVGSVGElement>(null);
   const layersRef = useRef<PageLayers | null>(null);
   /** Imperative hooks the main effect installs, so React effects can poke them. */
   const hooks = useRef({ updateBand: () => {}, updateCursor: () => {} });
@@ -246,6 +266,16 @@ export default function ViewerCanvas() {
     /** Markup under the mouse (pan tool cursor + note hover bubble). */
     let hoverId: string | null = null;
     let lastMarkupClick: { t: number; id: string } | null = null;
+    // ---- geometry snap state ----
+    let ctrl = false;
+    let alt = false;
+    /** The current 1-point draft is the first corner of a rectangle (rectArea, or Alt + deduct). */
+    let rectMode = false;
+    let snapHit: SnapHit | null = null;
+    let snapKey = '';
+    let snapIndex: SnapIndex | null = null;
+    let extraKey: { ms: unknown; page: number; draft: unknown; skip: string | null } | null = null;
+    let extraPts: Point[] = [];
 
     const local = (e: { clientX: number; clientY: number }) => ({ x: e.clientX - rect.left, y: e.clientY - rect.top });
     const st = () => useViewer.getState();
@@ -323,14 +353,112 @@ export default function ViewerCanvas() {
       zoomIn: () => vp.zoomBy(ZOOM_STEP),
       zoomOut: () => vp.zoomBy(1 / ZOOM_STEP),
       zoomToScale: (z) => vp.zoomToAnimated(z),
+      zoomToRect: (r) => vp.zoomToRect(r),
     });
 
     // ---- rubber band + readout (direct DOM writes) --------------------------
+    // ---- geometry snap -----------------------------------------------------
+    /** Load (once per page + layout) the page's snap points from the worker and index them. */
+    const ensureSnapIndex = () => {
+      const s = st();
+      if (s.numPages === 0) return;
+      const key = `${s.currentPage}|${s.docs.map((d) => d.id).join(',')}`;
+      if (key === snapKey) return;
+      snapKey = key;
+      snapIndex = null;
+      const t0 = performance.now();
+      getPageSnapGeometry(s.currentPage).then(
+        (g) => {
+          if (snapKey !== key) return;
+          const t1 = performance.now();
+          snapIndex = new SnapIndex(g.xy, g.kind, g.count);
+          const stats = {
+            page: s.currentPage,
+            points: g.count,
+            segments: g.segments,
+            truncated: g.truncated,
+            workerMs: Math.round(g.ms * 10) / 10,
+            extractMs: Math.round(g.extractMs * 10) / 10,
+            roundTripMs: Math.round((t1 - t0) * 10) / 10,
+            indexMs: Math.round((performance.now() - t1) * 10) / 10,
+          };
+          (window as unknown as { __snapStats?: unknown }).__snapStats = stats;
+          updateBand();
+        },
+        () => {
+          if (snapKey === key) snapKey = ''; // retry next time
+        },
+      );
+    };
+    const snapWanted = (tool: ToolId) => useSnap.getState().enabled && !ctrl && isSnapTool(tool);
+    /** Existing takeoff vertices on the page (+ the draft) as extra endpoints. */
+    const extras = (skipId: string | null): Point[] => {
+      const s = st();
+      if (!extraKey || extraKey.ms !== s.measurements || extraKey.page !== s.currentPage || extraKey.draft !== s.draft || extraKey.skip !== skipId) {
+        extraKey = { ms: s.measurements, page: s.currentPage, draft: s.draft, skip: skipId };
+        extraPts = [...s.draft];
+        for (const m of s.measurements) {
+          if (m.page !== s.currentPage || m.id === skipId || isMarkupKind(m.kind)) continue;
+          for (const q of m.points) extraPts.push(q);
+        }
+        const c = s.calibrations[s.currentPage];
+        if (c && !c.auto) extraPts.push(c.p1, c.p2);
+      }
+      return extraPts;
+    };
+    const findSnap = (p: Point, skipId: string | null = null): SnapHit | null => {
+      ensureSnapIndex();
+      const r = SNAP_PX / vp.zoom;
+      return pickSnap(snapIndex?.nearest(p, r) ?? null, nearestExtra(p, extras(skipId), r));
+    };
+    /**
+     * Raw page point → final point: Shift = 45° angle lock from the last draft
+     * point; geometry snap (unless off / Ctrl) to the nearest endpoint,
+     * intersection or midpoint within SNAP_PX. With both, the snap point is
+     * projected onto the locked direction. Sets `snapHit` (marker).
+     */
+    const resolvePoint = (raw: Point, anchor: Point | null, tool: ToolId, skipId: string | null = null): Point => {
+      const ortho = shift && anchor !== null;
+      let p = ortho ? snapAngle(anchor!, raw, 45) : raw;
+      snapHit = null;
+      if (snapWanted(tool)) {
+        const hit = findSnap(p, skipId);
+        if (hit) {
+          snapHit = hit;
+          p = ortho ? projectOnRay(anchor!, p, hit) : { x: hit.x, y: hit.y };
+        }
+      }
+      return p;
+    };
+    /** Anchor for the angle lock (none for a rectangle's 2nd corner). */
+    const drawAnchor = (): Point | null => {
+      const d = st().draft;
+      if (gesture.kind === 'rect' || (rectMode && d.length === 1)) return null;
+      return d.length > 0 ? d[d.length - 1] : null;
+    };
     const cursorPage = (): Point | null => {
       if (!cursor) return null;
-      const p = vp.toPage(cursor.x, cursor.y);
-      const d = st().draft;
-      return shift && d.length > 0 ? snapAngle(d[d.length - 1], p, 45) : p;
+      return resolvePoint(vp.toPage(cursor.x, cursor.y), drawAnchor(), st().tool);
+    };
+    const updateMarker = (on: boolean) => {
+      const el = snapMarkerRef.current;
+      if (!el) return;
+      if (!on || !snapHit) {
+        if (el.style.display !== 'none') el.style.display = 'none';
+        return;
+      }
+      const q = vp.toScreen(snapHit);
+      const kind = snapHit.kind === SNAP_MIDPOINT ? 'mid' : snapHit.kind === SNAP_INTERSECTION ? 'x' : 'end';
+      if (el.dataset.kind !== kind) el.dataset.kind = kind;
+      el.style.display = 'block';
+      el.style.transform = `translate3d(${q.x - 8}px, ${q.y - 8}px, 0)`;
+    };
+    /** Rectangle preview (rect drag or 2nd corner pending) on the live markup path. */
+    const rectAnchor = (): { a: Point; mk: 'area' | 'deduct' } | null => {
+      if (gesture.kind === 'rect') return gesture.moved ? { a: gesture.a, mk: gesture.mk } : null;
+      const s = st();
+      if (rectMode && s.draft.length === 1 && gesture.kind === 'none') return { a: s.draft[0], mk: s.tool === 'deduct' ? 'deduct' : 'area' };
+      return null;
     };
 
     const show = (el: Element | null, on: boolean) => {
@@ -363,9 +491,28 @@ export default function ViewerCanvas() {
         !useMarkup.getState().editingId;
       const d = s.draft;
       const ppm = s.calibrations[s.currentPage]?.pixelsPerMeter;
+      // Prefetch the page's snap geometry as soon as a snapping tool is active (not on the first click).
+      if (drawing && snapWanted(s.tool)) ensureSnapIndex();
+      const ra = drawing && p ? rectAnchor() : null;
+      updateMarker((active || gesture.kind === 'rect') && p !== null);
+      if (gesture.kind !== 'draw') {
+        const el = markupRef.current;
+        if (el && ra && p) {
+          const col = ra.mk === 'deduct' ? DEDUCT_COLOR : '#2563eb';
+          el.setAttribute('d', rectPath(normRect(ra.a, p)));
+          el.setAttribute('stroke', col);
+          el.setAttribute('fill', col);
+          el.setAttribute('fill-opacity', '0.12');
+          el.style.strokeWidth = 'calc(2px * var(--inv-zoom, 1))';
+          el.setAttribute('visibility', 'visible');
+        } else if (el && el.getAttribute('visibility') !== 'hidden') {
+          el.setAttribute('visibility', 'hidden');
+          el.setAttribute('d', '');
+        }
+      }
 
       if (seg) {
-        const on = active && d.length > 0;
+        const on = active && d.length > 0 && !ra && !(rectMode && d.length === 1);
         show(seg, on);
         if (on && p) {
           const a = d[d.length - 1];
@@ -378,7 +525,7 @@ export default function ViewerCanvas() {
       let bad = false;
       let nearFirst = false;
       if (poly && closing) {
-        const on = active && polyTool && d.length >= 2;
+        const on = active && polyTool && d.length >= 2 && !rectMode;
         show(poly, on);
         show(closing, on);
         if (on && p) {
@@ -399,7 +546,17 @@ export default function ViewerCanvas() {
       if (readout) {
         let text = '';
         let warn = false;
-        if (active && p) {
+        if ((active || ra) && p && (ra || s.tool === 'rectArea' || (rectMode && d.length === 1))) {
+          if (!ra) text = s.tool === 'deduct' ? 'פתח מלבני: לחץ על הפינה הראשונה' : 'לחץ על פינה ראשונה (או גרור)';
+          else if (!ppm) {
+            text = 'יש לכייל קנה מידה';
+            warn = true;
+          } else {
+            const w = Math.abs(p.x - ra.a.x) / ppm;
+            const h = Math.abs(p.y - ra.a.y) / ppm;
+            text = `\u2066${w.toFixed(2)} × ${h.toFixed(2)}\u2069 מ׳ · ${ra.mk === 'deduct' ? 'פתח: ' : ''}${formatArea(w * h)}`;
+          }
+        } else if (active && p) {
           if (s.tool === 'note') text = 'לחץ להוספת הערה';
           else if (s.tool === 'text') text = 'לחץ להוספת טקסט';
           else if (s.tool === 'arrow') text = 'גרור מהזנב לראש החץ';
@@ -439,6 +596,7 @@ export default function ViewerCanvas() {
             else text = ppm ? `${formatLength(lengthMeters(d[d.length - 1], p, ppm))} · לחץ על נקודת הסיום` : 'לחץ על נקודת הסיום';
           }
         }
+        if (snapHit && text && (active || ra)) text += snapHit.kind === SNAP_MIDPOINT ? ' · אמצע' : snapHit.kind === SNAP_INTERSECTION ? ' · חיתוך' : ' · קצה';
         if (text && cursor) {
           readout.textContent = text;
           readout.style.display = 'block';
@@ -495,7 +653,7 @@ export default function ViewerCanvas() {
       const tl = st().tool;
       if (gesture.kind === 'pan' && (gesture.moved || tl === 'pan')) c = 'grabbing';
       else if (gesture.kind === 'vertex' || gesture.kind === 'move') c = 'move';
-      else if (gesture.kind === 'draw') c = 'crosshair';
+      else if (gesture.kind === 'draw' || gesture.kind === 'rect') c = 'crosshair';
       else if (space) c = 'grab';
       else if (hoverVertex()) c = 'move';
       else if (tl === 'pan' && hoverId) c = 'move';
@@ -527,10 +685,40 @@ export default function ViewerCanvas() {
       s.setDraft([]);
     };
 
+    /** Create a rectangle area / opening from two corners (ignored when too small on screen). */
+    const finishRect = (a: Point, b: Point, mk: 'area' | 'deduct') => {
+      const s = st();
+      rectMode = false;
+      if (Math.abs(b.x - a.x) * vp.zoom < MIN_DRAW_PX || Math.abs(b.y - a.y) * vp.zoom < MIN_DRAW_PX) {
+        if (s.draft.length) s.setDraft([]);
+        return;
+      }
+      s.addMeasurement({
+        id: newId(),
+        page: s.currentPage,
+        kind: mk,
+        label: `${KIND_LABEL_PREFIX[mk]} ${nextLabelNumber(s.measurements, mk)}`,
+        points: rectCorners(a, b),
+        ...newMeasurementStyle(s, mk),
+      });
+      if (s.draft.length) s.setDraft([]);
+    };
+
     const click = (sx: number, sy: number) => {
       const s = st();
       if (s.numPages === 0) return;
       const raw = vp.toPage(sx, sy);
+      if (s.tool === 'rectArea' || (s.tool === 'deduct' && ((alt && s.draft.length === 0) || (rectMode && s.draft.length === 1)))) {
+        const mk = s.tool === 'deduct' ? 'deduct' : 'area';
+        const d0 = s.draft;
+        if (d0.length === 0 || !rectMode) {
+          rectMode = true;
+          if (s.selectedId) s.select(null);
+          s.setDraft([resolvePoint(raw, null, s.tool)]);
+        } else finishRect(d0[0], resolvePoint(raw, null, s.tool), mk);
+        return;
+      }
+      rectMode = false;
       if (s.tool === 'pan') {
         const hit = hitTest(raw, s.measurements, s.currentPage, LINE_HIT_PX / vp.zoom, VERTEX_PX / vp.zoom, vp.zoom);
         s.select(hit ? hit.id : null);
@@ -566,21 +754,22 @@ export default function ViewerCanvas() {
       if (s.tool === 'count') {
         // Add a marker to the active (selected) count group, or start a new group.
         const g = activeCount(s);
-        if (g) s.updateMeasurement(g.id, { points: [...g.points, raw] });
+        const cp = resolvePoint(raw, null, 'count');
+        if (g) s.updateMeasurement(g.id, { points: [...g.points, cp] });
         else {
           s.addMeasurement({
             id: newId(),
             page: s.currentPage,
             kind: 'count',
             label: `${KIND_LABEL_PREFIX.count} ${nextLabelNumber(s.measurements, 'count')}`,
-            points: [raw],
+            points: [cp],
             ...newMeasurementStyle(s, 'count'),
           });
         }
         return;
       }
       const d = s.draft;
-      const p = shift && d.length ? snapAngle(d[d.length - 1], raw, 45) : raw;
+      const p = resolvePoint(raw, d.length ? d[d.length - 1] : null, s.tool);
       if (s.tool === 'calibrate') {
         if (d.length >= 2) return;
         s.setDraft([...d, p]);
@@ -595,7 +784,7 @@ export default function ViewerCanvas() {
         if (d.length >= minPoints(kind)) finishDraft();
         return;
       }
-      if (kind !== 'length' && d.length >= 3 && distance(raw, d[0]) * vp.zoom <= CLOSE_PX) {
+      if (kind !== 'length' && d.length >= 3 && (distance(raw, d[0]) * vp.zoom <= CLOSE_PX || distance(p, d[0]) * vp.zoom <= 0.5)) {
         finishDraft();
         return;
       }
@@ -743,6 +932,25 @@ export default function ViewerCanvas() {
           return;
         }
       }
+      if (e.altKey !== alt) alt = e.altKey;
+      if (e.ctrlKey !== ctrl) ctrl = e.ctrlKey;
+      if (!space && s.draft.length === 0 && (s.tool === 'rectArea' || (s.tool === 'deduct' && e.altKey))) {
+        const a = resolvePoint(vp.toPage(q.x, q.y), null, s.tool);
+        gesture = {
+          kind: 'rect',
+          id: e.pointerId,
+          a,
+          mk: s.tool === 'deduct' ? 'deduct' : 'area',
+          sx: q.x,
+          sy: q.y,
+          moved: false,
+          threshold: e.pointerType === 'touch' ? DRAG_PX_TOUCH : DRAG_PX_MOUSE,
+        };
+        if (s.selectedId) s.select(null);
+        updateCursor();
+        updateBand();
+        return;
+      }
       if (!space && isDragTool(s.tool)) {
         const p0 = vp.toPage(q.x, q.y);
         gesture = { kind: 'draw', id: e.pointerId, tool: s.tool, pts: [p0, p0], sx: q.x, sy: q.y, lx: q.x, ly: q.y };
@@ -784,6 +992,8 @@ export default function ViewerCanvas() {
         ptr.y = q.y;
       }
       if (e.shiftKey !== shift) shift = e.shiftKey;
+      if (e.ctrlKey !== ctrl) ctrl = e.ctrlKey;
+      if (e.altKey !== alt) alt = e.altKey;
       const g = gesture;
       switch (g.kind) {
         case 'pinch': {
@@ -820,10 +1030,23 @@ export default function ViewerCanvas() {
             updateBand();
           }
           return;
+        case 'rect': {
+          if (e.pointerId !== g.id) return;
+          if (!g.moved && Math.hypot(q.x - g.sx, q.y - g.sy) > g.threshold) g.moved = true;
+          cursor = q;
+          updateBand();
+          return;
+        }
         case 'vertex': {
           if (e.pointerId !== g.id) return;
           const pts = g.points.slice();
-          pts[g.index] = vp.toPage(q.x, q.y);
+          const vm = st().measurements.find((x) => x.id === g.mid);
+          if (vm && !isMarkupKind(vm.kind)) {
+            const n = g.points.length;
+            const nb = kindOf(vm) === 'count' || (kindOf(vm) === 'length' && g.index === 0) ? null : g.points[(g.index - 1 + n) % n];
+            pts[g.index] = resolvePoint(vp.toPage(q.x, q.y), shift ? nb : null, kindOf(vm) as ToolId, vm.id);
+            updateMarker(true);
+          } else pts[g.index] = vp.toPage(q.x, q.y);
           g.points = pts;
           queueOverride({ id: g.mid, points: pts });
           return;
@@ -872,6 +1095,16 @@ export default function ViewerCanvas() {
         gesture = rest
           ? { kind: 'pan', id: rest[0], lx: rest[1].x, ly: rest[1].y, sx: rest[1].x, sy: rest[1].y, moved: true, clickOnUp: false }
           : { kind: 'none' };
+      } else if (g.kind === 'rect' && g.id === e.pointerId) {
+        gesture = { kind: 'none' };
+        if (!cancelled) {
+          if (g.moved) finishRect(g.a, resolvePoint(vp.toPage(q.x, q.y), null, st().tool), g.mk);
+          else {
+            // plain click: first corner placed; the next click sets the opposite corner
+            rectMode = true;
+            st().setDraft([g.a]);
+          }
+        }
       } else if (g.kind === 'draw' && g.id === e.pointerId) {
         gesture = { kind: 'none' };
         if (!cancelled) finishDraw(g);
@@ -899,7 +1132,11 @@ export default function ViewerCanvas() {
             if (m && g.points.length >= minPoints(kindOf(m))) st().updateMeasurement(g.mid, { points: g.points });
           }
         }
-        if (g.kind === 'vertex') queueOverride(null);
+        if (g.kind === 'vertex') {
+          queueOverride(null);
+          snapHit = null;
+          updateMarker(false);
+        }
       }
       if (e.pointerType !== 'touch' || !cancelled) cursor = q;
       updateCursor();
@@ -951,6 +1188,15 @@ export default function ViewerCanvas() {
         updateBand();
         return;
       }
+      if (e.key === 'Control' || e.key === 'Alt') {
+        if (e.key === 'Control') ctrl = true;
+        else {
+          alt = true;
+          if (s.tool === 'deduct') e.preventDefault(); // keep focus off the browser menu bar
+        }
+        updateBand();
+        return;
+      }
       if (e.code === 'Space') {
         e.preventDefault();
         if (!space) {
@@ -979,6 +1225,9 @@ export default function ViewerCanvas() {
           if (gesture.kind === 'draw') {
             gesture = { kind: 'none' };
             updateLive(null);
+          } else if (gesture.kind === 'rect') {
+            gesture = { kind: 'none' };
+            updateBand();
           } else if (s.draft.length) s.setDraft([]);
           else if (s.selectedId) s.select(null);
           else handled = false;
@@ -1017,6 +1266,11 @@ export default function ViewerCanvas() {
         shift = false;
         updateBand();
       }
+      if (e.key === 'Control' || e.key === 'Alt') {
+        if (e.key === 'Control') ctrl = false;
+        else alt = false;
+        updateBand();
+      }
       if (e.code === 'Space' && space) {
         space = false;
         e.preventDefault();
@@ -1026,6 +1280,8 @@ export default function ViewerCanvas() {
     const onBlur = () => {
       space = false;
       shift = false;
+      ctrl = false;
+      alt = false;
       updateCursor();
     };
     const onContextMenu = (e: MouseEvent) => {
@@ -1059,6 +1315,7 @@ export default function ViewerCanvas() {
         isSharp: () => layers.isSharp(vp.zoom, vp.visibleRect()),
         setPage: (n: number) => useViewer.getState().setPage(n),
         client: getPdfClient(),
+        store: useViewer,
       };
     }
 
@@ -1105,6 +1362,8 @@ export default function ViewerCanvas() {
     }
     vp.setPageSize(pw, ph);
     vp.fit(false);
+    const focus = takePendingFocus(currentPage); // text-search result on another page
+    if (focus) vp.zoomToRect(focus, false);
     layers.setPage(layoutKey, currentPage, { width: pw, height: ph }, pageSizesRef.current);
   }, [vp, layoutKey, currentPage, pw, ph]);
 
@@ -1117,7 +1376,7 @@ export default function ViewerCanvas() {
   useEffect(() => {
     hooks.current.updateBand();
     hooks.current.updateCursor();
-  }, [tool, draft, calibration, selectedId, measurements, editingId]);
+  }, [tool, draft, calibration, selectedId, measurements, editingId, snapOn]);
 
   const showPrompt = tool === 'calibrate' && draft.length === 2;
 
@@ -1161,6 +1420,7 @@ export default function ViewerCanvas() {
             band={band}
           />
         )}
+        {size && <TextHighlights page={currentPage} />}
         {size && <NoteBubbles notes={pageNotes} selectedId={selectedId} editingId={editingId} />}
         {editing && <MarkupEditor key={editing.id} m={editing} />}
         {showPrompt && <CalibrationPrompt key={`${draft[0].x},${draft[0].y},${draft[1].x},${draft[1].y}`} p1={draft[0]} p2={draft[1]} />}
@@ -1171,7 +1431,41 @@ export default function ViewerCanvas() {
         className="pointer-events-none absolute left-0 top-0 z-30 hidden whitespace-nowrap rounded bg-white/95 px-2 py-0.5 text-xs font-medium text-neutral-800 shadow ring-1 ring-black/10"
         data-testid="viewer-readout"
       />
+      <SnapMarker ref={snapMarkerRef} />
     </div>
+  );
+}
+
+/**
+ * Geometry-snap marker (screen px, positioned imperatively): square = endpoint,
+ * triangle = midpoint, X = intersection — shape picked by CSS from data-kind.
+ */
+function SnapMarker({ ref }: { ref: React.Ref<SVGSVGElement> }) {
+  return (
+    <svg
+      ref={ref}
+      width={16}
+      height={16}
+      viewBox="0 0 16 16"
+      className="snap-marker pointer-events-none absolute left-0 top-0 z-30"
+      style={{ display: 'none', overflow: 'visible' }}
+      data-testid="snap-marker"
+      aria-hidden="true"
+    >
+      <style>{`.snap-marker>g{display:none}.snap-marker[data-kind=end]>.k-end,.snap-marker[data-kind=mid]>.k-mid,.snap-marker[data-kind=x]>.k-x{display:inline}`}</style>
+      <g className="k-end" fill="none" strokeWidth={2}>
+        <rect x={2} y={2} width={12} height={12} stroke="#fff" strokeWidth={4} />
+        <rect x={2} y={2} width={12} height={12} stroke="#16a34a" />
+      </g>
+      <g className="k-mid" fill="none" strokeLinejoin="round">
+        <path d="M8 1.5 15 14H1Z" stroke="#fff" strokeWidth={4} />
+        <path d="M8 1.5 15 14H1Z" stroke="#0891b2" strokeWidth={2} />
+      </g>
+      <g className="k-x" fill="none" strokeLinecap="round">
+        <path d="M2 2 14 14M14 2 2 14" stroke="#fff" strokeWidth={4.5} />
+        <path d="M2 2 14 14M14 2 2 14" stroke="#ea580c" strokeWidth={2.2} />
+      </g>
+    </svg>
   );
 }
 

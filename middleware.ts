@@ -1,13 +1,13 @@
 // Vercel Routing Middleware (framework-agnostic; runs on the Edge before the static app is served).
 // Gates the app HTML behind a passkey session: no valid pv_session cookie (or the user is no longer
 // 'active' in Redis) → 302 to /login?next=<path>. Decision logic lives in api/_lib/gate.ts (unit-tested).
-// Also gated: /welcome and /welcome.html (post-login welcome page). Never gated: /login, /download, /api/*, /assets/*, /icons/*, /tools/*, /manifest.webmanifest, /sw.js.
+// Also gated: /welcome and /welcome.html (post-login welcome page). Never gated: /login, /download, /privacy, /terms (Google Marketplace listing), /api/*, /assets/*, /icons/*, /tools/*, /manifest.webmanifest, /sw.js.
 import { decideGate, restUserLoader } from './api/_lib/gate.js';
 
 export const config = {
   // "/", "/index.html", "/welcome.html" and extension-less paths outside the public ones (this includes
   // "/welcome"). decideGate re-checks (shouldGate). Other dotted paths (/login.html, /download.html, files) stay public.
-  matcher: ['/', '/index.html', '/welcome.html', '/((?!api/|assets/|icons/|tools/|login|download)[^.]*)'],
+  matcher: ['/', '/index.html', '/welcome.html', '/((?!api/|assets/|icons/|tools/|login|download|privacy|terms)[^.]*)'],
 };
 
 export default async function middleware(request: Request): Promise<Response | undefined> {

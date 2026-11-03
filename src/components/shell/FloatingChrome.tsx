@@ -5,6 +5,10 @@ import { useZoom, viewerCommands } from '../viewer/commands';
 import { IconList, IconMenu, IconPages, IconDownload } from '../ui/icons';
 import { openExportDialog } from '../../export/exportUi';
 import { TOOLS } from '../toolActions';
+import { PillEditButtons } from './PillEditButtons';
+import { ScaleChip } from '../text/ScaleChip';
+import { IconSearch, openSearch } from '../text/SearchPanel';
+import { formatPaper } from '../../text/scaleDetect';
 
 const IDLE_MS = 2500;
 /** Pointer moves within this many px of the top edge wake the controls. */
@@ -99,6 +103,7 @@ export function FloatingChrome() {
   const calibrated = useViewer((s) => !!s.calibrations[s.currentPage]);
   const measurementCount = useViewer((s) => s.measurements.length);
   const zoom = useZoom().percent;
+  const paper = formatPaper(useViewer((s) => s.pageSizes[s.currentPage - 1]));
 
   const { awake, bind } = useAwake(menuOpen);
   const t = TOOLS.find((x) => x.id === tool) ?? TOOLS[0];
@@ -138,11 +143,12 @@ export function FloatingChrome() {
           {t.icon}
           <span className="hidden whitespace-nowrap sm:inline">{t.label}</span>
         </span>
+        <PillEditButtons />
         <button
           type="button"
           data-drawer-toggle="thumbs"
           onClick={() => toggleDrawer('thumbs')}
-          title="דפים (T)"
+          title={`דפים (T)${paper ? ` · ${paper}` : ''}`}
           aria-label={
             fileDoc
               ? `${fileDoc.name}, דף ${currentPage - fileDoc.pageOffset} מתוך ${fileDoc.numPages} (דף ${currentPage} מתוך ${numPages} בסך הכול)`
@@ -185,6 +191,16 @@ export function FloatingChrome() {
         >
           <IconDownload />
         </button>
+        <button
+          type="button"
+          onClick={() => openSearch()}
+          title="חיפוש וספירה בטקסט השרטוט (F3 / Ctrl+F)"
+          aria-label="חיפוש וספירה"
+          className={chipBtn}
+          data-testid="pill-search"
+        >
+          <IconSearch />
+        </button>
         {!calibrated && (
           <button
             type="button"
@@ -197,6 +213,7 @@ export function FloatingChrome() {
             לא מכויל
           </button>
         )}
+        <ScaleChip />
       </div>
 
       {/* drawer handles (RTL: thumbnails on the start/right side, measurements on the left) */}

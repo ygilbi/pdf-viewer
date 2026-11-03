@@ -13,6 +13,7 @@ import { useFileQueue } from './state/fileQueue';
 import { useDesktopFileOpen } from './desktop/bridge';
 import { useAuthGate } from './auth/session';
 import { AuthSplash } from './auth/AuthSplash';
+import { DriveOverlay, useDriveLaunch } from './drive/DriveUi';
 
 function isPdf(file: File) {
   return file.type === 'application/pdf' || /\.pdf$/i.test(file.name);
@@ -161,6 +162,8 @@ function Workspace() {
   useFileLaunch(addFiles);
   // Windows desktop app (Electron): PDFs double-clicked in Explorer / passed on the command line.
   useDesktopFileOpen(addFiles);
+  // Google Drive "Open with → PDF Viewer" (/drive/open?state=…): downloaded in the browser, then opened like a local file.
+  useDriveLaunch(addFiles);
 
   // Window-wide drag & drop: adds the dropped PDFs to the workspace (opens them when empty).
   const [dragging, setDragging] = useState(false);
@@ -245,6 +248,7 @@ function Workspace() {
         </div>
       )}
 
+      <DriveOverlay />
       <RestoreToast />
       <DefaultAppPrompt />
       {hasDoc && <AddProgress />}

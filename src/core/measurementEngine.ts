@@ -2,7 +2,7 @@
  * Pure measurement math. All geometry is in PDF page units (see types.ts).
  * `pixelsPerMeter` = page units per real-world meter.
  */
-import type { AreaMeasurement, Calibration, Category, MarkupKind, MeasurementKind, Point } from './types';
+import type { AreaMeasurement, Calibration, Category, ItemDims, MarkupKind, MeasurementKind, Point } from './types';
 
 const EPS = 1e-9;
 
@@ -409,6 +409,40 @@ export function polylineMidpoint(points: Point[]): Point {
   return { ...points[n - 1] };
 }
 
+// ---------------------------------------------------------------------------
+// Item dimensions (count groups)
+// ---------------------------------------------------------------------------
+
+const posNum = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v) && v > 0;
+
+/**
+ * Valid item dimensions of a count group (null for other kinds, missing or
+ * garbage values). Width / height in meters.
+ */
+export function itemOf(m: { kind?: unknown; item?: unknown }): ItemDims | null {
+  if (m.kind !== 'count' || !m.item || typeof m.item !== 'object') return null;
+  const { width, height, code } = m.item as Record<string, unknown>;
+  if (!posNum(width) || !posNum(height)) return null;
+  const c = typeof code === 'string' ? code.trim() : '';
+  return c ? { width, height, code: c } : { width, height };
+}
+
+/** Derived quantities of a count group with item dimensions: n×w×h (m²) and n×2(w+h) (m). */
+export function itemQuantities(m: AreaMeasurement): { areaM2: number; perimeterM: number; n: number } | null {
+  const it = itemOf(m);
+  if (!it) return null;
+  const n = m.points.length;
+  return { areaM2: n * it.width * it.height, perimeterM: n * 2 * (it.width + it.height), n };
+}
+
+/** "W1 150×140" (centimetres, as on a window schedule); '' without dimensions. */
+export function formatItemDims(it: ItemDims | null, withCode = true): string {
+  if (!it) return '';
+  const cm = (v: number) => String(Math.round(v * 1000) / 10);
+  const dims = `${cm(it.width)}×${cm(it.height)}`;
+  return withCode && it.code ? `${it.code} ${dims}` : dims;
+}
+
 function ppmOf(calibrations: Record<number, Calibration>, page: number): number | null {
   const ppm = calibrations[page]?.pixelsPerMeter;
   return typeof ppm === 'number' && Number.isFinite(ppm) && ppm > 0 ? ppm : null;
@@ -492,6 +526,10 @@ export interface MeasurementSummary {
   count: number;
   /** Area of the opening (deduct) polygons themselves, incl. orphans (calibrated pages only). */
   openingsM2: number;
+  /** Count groups with item dimensions: Σ n×w×h (m²; needs no calibration). */
+  itemAreaM2: number;
+  /** Count groups with item dimensions: Σ n×2(w+h) — frame / profile length (m). */
+  itemPerimeterM: number;
 }
 
 const emptySummary = (): MeasurementSummary => ({
@@ -503,6 +541,8 @@ const emptySummary = (): MeasurementSummary => ({
   orphanDeducts: 0,
   count: 0,
   openingsM2: 0,
+  itemAreaM2: 0,
+  itemPerimeterM: 0,
 });
 
 /**
@@ -524,7 +564,14 @@ function summarize(
     if (isMarkupKind(kind)) continue;
     const mine = inGroup(m);
     if (kind === 'count') {
-      if (mine) s.count += m.points.length;
+      if (mine) {
+        s.count += m.points.length;
+        const iq = itemQuantities(m);
+        if (iq) {
+          s.itemAreaM2 += iq.areaM2;
+          s.itemPerimeterM += iq.perimeterM;
+        }
+      }
       continue;
     }
     const ppm = ppmOf(calibrations, m.page);
@@ -601,6 +648,24 @@ export function computeDocumentSummary(
   return summarize(measurements, calibrations);
 }
 
+/** Column headers of {@link buildMeasurementRows} (CSV / TSV / Excel "מדידות" sheet). */
+export const MEASUREMENT_COLUMNS = [
+  'מס׳',
+  'סוג',
+  'שם',
+  'קטגוריה',
+  'עמוד',
+  'שטח (מ״ר)',
+  'היקף (מ׳)',
+  'אורך (מ׳)',
+  'כמות',
+  'מספר נקודות',
+  'שייך ל',
+  'מידות פריט (ס״מ)',
+  'שטח פריטים (מ״ר)',
+  'היקף פרופיל (מ׳)',
+] as const;
+
 function csvCell(v: string | number): string {
   const s = String(v);
   return /[",\r\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
@@ -611,10 +676,12 @@ function csvCell(v: string | number): string {
  * measurement, per-category subtotal rows (only when some measurement has a
  * category), then document totals rows. Deduction rows carry a negative area;
  * length rows fill only the length column; count rows only the quantity
- * column. Category subtotals show the *net* area of the category's facades
+ * column (count groups with item dimensions also fill the item columns:
+ * dimensions, n×w×h, n×2(w+h)). Category subtotals show the *net* area of the category's facades
  * (openings are subtracted from the category of the area they sit in), its
  * length and its count. Totals rows at the end: gross, deductions (negative),
- * net, total length, total count. Deductions outside every area are listed
+ * net, total length, total count (+ item area / profile length when any
+ * count group has item dimensions). Deductions outside every area are listed
  * but not counted in the totals (their "belongs to" cell is empty).
  *
  * `categories` resolves category ids to names (defaults to DEFAULT_CATEGORIES).
@@ -626,7 +693,7 @@ export function buildMeasurementRows(
 ): string[][] {
   const measurements = takeoffOnly(all);
   const rows: (string | number)[][] = [
-    ['מס׳', 'סוג', 'שם', 'קטגוריה', 'עמוד', 'שטח (מ״ר)', 'היקף (מ׳)', 'אורך (מ׳)', 'כמות', 'מספר נקודות', 'שייך ל'],
+    [...MEASUREMENT_COLUMNS],
   ];
   const assignment = assignDeductions(measurements);
   const byId = new Map(measurements.map((m) => [m.id, m]));
@@ -637,8 +704,18 @@ export function buildMeasurementRows(
     let perim = '';
     let len = '';
     let qty = '';
-    if (kind === 'count') qty = String(m.points.length);
-    else if (ppm !== null) {
+    let dims = '';
+    let itemArea = '';
+    let itemPerim = '';
+    if (kind === 'count') {
+      qty = String(m.points.length);
+      const iq = itemQuantities(m);
+      if (iq) {
+        dims = formatItemDims(itemOf(m));
+        itemArea = iq.areaM2.toFixed(2);
+        itemPerim = iq.perimeterM.toFixed(2);
+      }
+    } else if (ppm !== null) {
       if (kind === 'length') len = polylineLengthMeters(m.points, ppm).toFixed(2);
       else {
         const a = polygonAreaM2(m.points, ppm);
@@ -650,34 +727,39 @@ export function buildMeasurementRows(
     const cat = key ? categoryName(key, categories) : '';
     const parentId = assignment.get(m.id);
     const parent = parentId ? (byId.get(parentId)?.label ?? '') : '';
-    rows.push([i + 1, KIND_LABELS[kind], m.label, cat, m.page, area, perim, len, qty, m.points.length, parent]);
+    rows.push([i + 1, KIND_LABELS[kind], m.label, cat, m.page, area, perim, len, qty, m.points.length, parent, dims, itemArea, itemPerim]);
   });
+  const anyItems = measurements.some((m) => itemOf(m));
+  const itemCells = (t: MeasurementSummary): string[] =>
+    anyItems ? ['', t.itemAreaM2.toFixed(2), t.itemPerimeterM.toFixed(2)] : ['', '', ''];
   if (measurements.some((m) => categoryKey(m))) {
     for (const c of computeCategorySummaries(measurements, calibrations, categories)) {
       const t = c.summary;
-      rows.push(['', '', `סה״כ ${c.name}`, c.name, '', t.netM2.toFixed(2), '', t.lengthM.toFixed(2), t.count, '', '']);
+      rows.push(['', '', `סה״כ ${c.name}`, c.name, '', t.netM2.toFixed(2), '', t.lengthM.toFixed(2), t.count, '', '', ...itemCells(t)]);
     }
   }
   const s = computeDocumentSummary(measurements, calibrations);
   const total = (label: string, col: number, v: string | number) => {
-    const r: (string | number)[] = ['', '', label, '', '', '', '', '', '', '', ''];
+    const r: (string | number)[] = ['', '', label, '', '', '', '', '', '', '', '', '', '', ''];
     r[col] = v;
     rows.push(r);
+    return r;
   };
   total('ברוטו', 5, s.grossM2.toFixed(2));
   total('ניכויים', 5, (s.deductM2 === 0 ? 0 : -s.deductM2).toFixed(2));
   total('נטו', 5, s.netM2.toFixed(2));
   total('סה״כ אורך', 7, s.lengthM.toFixed(2));
-  total('סה״כ כמות', 8, s.count);
+  const countRow = total('סה״כ כמות', 8, s.count);
+  if (anyItems) countRow.splice(11, 3, ...itemCells(s));
   // Notes / text labels (not quantities) in their own section after the totals.
   const notes = all.filter((m) => (m.kind === 'note' || m.kind === 'text') && (m.text ?? '').trim());
   if (notes.length) {
-    rows.push(['', '', '', '', '', '', '', '', '', '', '']);
-    rows.push(['', 'הערות', 'שם', 'קטגוריה', 'עמוד', 'טקסט', '', '', '', '', '']);
+    rows.push(['', '', '', '', '', '', '', '', '', '', '', '', '', '']);
+    rows.push(['', 'הערות', 'שם', 'קטגוריה', 'עמוד', 'טקסט', '', '', '', '', '', '', '', '']);
     notes.forEach((m, i) => {
       const key = categoryKey(m);
       const text = (m.text ?? '').trim().replace(/\s*\r?\n\s*/g, ' / ');
-      rows.push([i + 1, KIND_LABELS[kindOf(m)], m.label, key ? categoryName(key, categories) : '', m.page, text, '', '', '', '', '']);
+      rows.push([i + 1, KIND_LABELS[kindOf(m)], m.label, key ? categoryName(key, categories) : '', m.page, text, '', '', '', '', '', '', '', '']);
     });
   }
   return rows.map((r) => r.map(String));

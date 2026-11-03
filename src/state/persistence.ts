@@ -21,6 +21,8 @@ import { useViewer } from './store';
 import type { ViewerState } from './store';
 import { sanitizeCategories } from '../core/measurementEngine';
 import { extractDocData, toGlobalData } from './workspace';
+import { usePricing } from '../pricing/store';
+import { sanitizePriceBook, type PriceBook } from '../pricing/boq';
 
 const DB_NAME = 'aluminum-app';
 const DB_VERSION = 1;
@@ -37,6 +39,8 @@ export interface PersistedDocument {
   measurements: ViewerState['measurements'];
   /** Added later — missing in older records (→ default categories). */
   categories?: ViewerState['categories'];
+  /** Added later — per-document price overrides (pricing/store.ts); missing = none. */
+  pricing?: PriceBook;
 }
 
 // ---------------------------------------------------------------------------
@@ -188,6 +192,7 @@ function snapshot(docId: string, t: Tracked): PersistedDocument | null {
     calibrations,
     measurements,
     categories: s.categories,
+    pricing: usePricing.getState().doc,
   };
 }
 
@@ -236,7 +241,7 @@ function takeJournal(fingerprint: string): PersistedDocument | null {
 }
 
 function signature(rec: PersistedDocument): string {
-  return JSON.stringify([rec.measurements, rec.calibrations, rec.categories]);
+  return JSON.stringify([rec.measurements, rec.calibrations, rec.categories, rec.pricing]);
 }
 
 function writeNow(unloading = false) {
@@ -275,6 +280,7 @@ export function detachDocument() {
   if (saveTimer) writeNow();
   tracked.clear();
   token++;
+  usePricing.getState().setDocBook(null); // the next document starts from the global price book
 }
 
 /** Flush pending saves and stop tracking one file. Call BEFORE store.removeDocument(docId). */
@@ -327,6 +333,19 @@ export async function restoreDocument(fingerprint: string, fileName: string, doc
       if (extra.length) categories = [...s.categories, ...extra];
     }
   }
+  const savedPricing = sanitizePriceBook(rec.pricing);
+  if (savedPricing) {
+    const cur = usePricing.getState().doc;
+    // single file: saved overrides win; multi-file: only fill categories / settings not set yet.
+    usePricing.getState().setDocBook(
+      s.docs.length <= 1
+        ? savedPricing
+        : {
+            categories: { ...savedPricing.categories, ...cur.categories },
+            settings: { ...savedPricing.settings, ...cur.settings },
+          },
+    );
+  }
   useViewer.setState({
     measurements: [...s.measurements, ...saved.measurements.filter((m) => !ids.has(m.id))],
     calibrations: { ...saved.calibrations, ...s.calibrations },
@@ -351,6 +370,9 @@ export function usePersistence() {
       )
         scheduleSave();
     });
+    const unsubPricing = usePricing.subscribe((s, prev) => {
+      if (s.doc !== prev.doc) scheduleSave();
+    });
     const flush = () => {
       if (saveTimer) writeNow(true);
     };
@@ -361,6 +383,7 @@ export function usePersistence() {
     document.addEventListener('visibilitychange', onVis);
     return () => {
       unsub();
+      unsubPricing();
       flush();
       window.removeEventListener('pagehide', flush);
       document.removeEventListener('visibilitychange', onVis);

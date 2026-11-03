@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="he" dir="rtl">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>מדיניות פרטיות — PDF Viewer</title>
+<link rel="icon" type="image/png" sizes="32x32" href="/icons/favicon-32.png" />
+<style>
+  :root { color-scheme: light dark; --bg: #ffffff; --fg: #0f172a; --muted: #475569; --line: #e2e8f0; }
+  @media (prefers-color-scheme: dark) { :root { --bg: #0f172a; --fg: #e2e8f0; --muted: #94a3b8; --line: #1e293b; } }
+  body { margin: 0; background: var(--bg); color: var(--fg); font: 16px/1.65 system-ui, -apple-system, "Segoe UI", Arial, sans-serif; }
+  main { max-width: 46rem; margin: 0 auto; padding: 2rem 1rem 4rem; }
+  h1 { font-size: 1.6rem; margin: 0 0 .25rem; } h2 { font-size: 1.15rem; margin: 1.6rem 0 .4rem; }
+  .muted { color: var(--muted); font-size: .9rem; } hr { border: 0; border-top: 1px solid var(--line); margin: 2.5rem 0; }
+  section[lang="en"] { direction: ltr; text-align: left; } a { color: #0284c7; }
+</style>
+</head>
+<body>
+<main>
+<section lang="he">
+<h1>מדיניות פרטיות</h1>
+<p class="muted">PDF Viewer · https://pdf-viewer-lemon.vercel.app · עודכן: נובמבר 2026</p>
+<h2>מה אנחנו שומרים בשרת</h2>
+<ul>
+  <li><strong>פרטי חשבון לצורך כניסה:</strong> כתובת אימייל, שם, סטטוס הגישה (ממתין / מאושר / בוטל) ומפתחות ציבוריים של מפתחות גישה (Passkeys), אם נוצרו. בכניסה עם Google אנחנו מקבלים מ-Google רק את האימייל, השם והמזהה של החשבון (הרשאות <code>openid email profile</code>).</li>
+  <li>עוגיית התחברות מאובטחת (<code>pv_session</code>) ורישומי שרת טכניים רגילים (כתובת IP, זמן, שגיאות) לצורכי אבטחה.</li>
+</ul>
+<h2>הקבצים שלך</h2>
+<ul>
+  <li>קובצי PDF נפתחים ומעובדים <strong>בדפדפן שלך בלבד</strong>. הם לא נשלחים לשרת שלנו ולא נשמרים בו.</li>
+  <li><strong>Google Drive:</strong> כשפותחים קובץ מ-Drive („פתיחה באמצעות” או „פתח מ-Google Drive”), הדפדפן מוריד אותו ישירות מ-Google בהרשאה <code>drive.file</code> — גישה רק לקבצים שבחרת לפתוח באפליקציה. אסימון הגישה נשמר בזיכרון הדף בלבד. איננו קוראים, משנים או מוחקים קבצים אחרים ב-Drive, ואיננו כותבים ל-Drive.</li>
+  <li>מדידות, הערות ומחירים שיצרת נשמרים <strong>מקומית בדפדפן</strong> (IndexedDB / localStorage) במכשיר שלך, כדי שישוחזרו כשתפתח/י שוב את אותו קובץ. אפשר למחוק אותם על ידי ניקוי נתוני האתר בדפדפן.</li>
+</ul>
+<h2>שיתוף</h2>
+<p>איננו מוכרים או משתפים מידע עם צד שלישי. השירות פועל על Vercel (אירוח), Upstash (מסד נתונים לחשבונות) ו-Google (כניסה ו-Drive), שמעבדים מידע רק לצורך הפעלת השירות. השימוש במידע שהתקבל מ-Google API עומד ב-<a href="https://developers.google.com/terms/api-services-user-data-policy">Google API Services User Data Policy</a>, כולל דרישות ה-Limited Use.</p>
+<h2>מחיקה ויצירת קשר</h2>
+<p>לביטול גישה ומחיקת החשבון פנו לבעל האתר (באמצעות כתובת האימייל שממנה קיבלת את הזמנת ההרשמה). ניתן גם לבטל את הרשאת האפליקציה בכל עת ב-<a href="https://myaccount.google.com/permissions">myaccount.google.com/permissions</a>.</p>
+</section>
+<hr />
+<section lang="en">
+<h1>Privacy Policy</h1>
+<p class="muted">PDF Viewer · https://pdf-viewer-lemon.vercel.app · Updated: November 2026</p>
+<h2>What we store on our server</h2>
+<ul>
+  <li><strong>Account data for sign-in:</strong> email address, name, access status (pending / approved / revoked) and passkey public keys, if created. With Google sign-in we receive only your email, name and account id (<code>openid email profile</code>).</li>
+  <li>A secure session cookie (<code>pv_session</code>) and ordinary technical server logs (IP address, time, errors) for security.</li>
+</ul>
+<h2>Your files</h2>
+<ul>
+  <li>PDF files are opened and processed <strong>in your browser only</strong>. They are never uploaded to or stored on our server.</li>
+  <li><strong>Google Drive:</strong> when you open a file from Drive ("Open with" or "Open from Google Drive"), your browser downloads it directly from Google using the <code>drive.file</code> scope — access only to files you choose to open with the app. The access token is kept in page memory only. We do not read, modify or delete any other Drive files, and we do not write to Drive.</li>
+  <li>Measurements, markups and prices you create are saved <strong>locally in your browser</strong> (IndexedDB / localStorage) on your device so they are restored when you reopen the same file. Clearing the site data in your browser deletes them.</li>
+</ul>
+<h2>Sharing</h2>
+<p>We do not sell or share data with third parties. The service runs on Vercel (hosting), Upstash (account database) and Google (sign-in and Drive), which process data only to operate the service. Use of information received from Google APIs adheres to the <a href="https://developers.google.com/terms/api-services-user-data-policy">Google API Services User Data Policy</a>, including the Limited Use requirements.</p>
+<h2>Deletion and contact</h2>
+<p>To revoke access and delete your account, contact the site owner (the address your registration invite came from). You can also remove the app's access at any time at <a href="https://myaccount.google.com/permissions">myaccount.google.com/permissions</a>.</p>
+</section>
+</main>
+</body>
+</html>

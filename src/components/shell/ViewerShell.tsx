@@ -2,7 +2,7 @@ import { useEffect } from 'react';
 import { useViewer } from '../../state/store';
 import { useUi } from '../../state/uiStore';
 import ThumbnailSidebar from '../ThumbnailSidebar';
-import MeasurementsPanel from '../MeasurementsPanel';
+import { LeftDrawerContent, toggleLeftTab } from '../../pricing/LeftDrawer';
 import { IconAlert, IconX } from '../ui/icons';
 import { isTypingTarget } from '../ui/util';
 import { toggleFullscreen, useToolShortcuts } from '../toolActions';
@@ -11,6 +11,7 @@ import { FloatingChrome } from './FloatingChrome';
 import { TopMenu } from './TopMenu';
 import { ToolPalette } from './ToolPalette';
 import { ExportDialog } from '../ExportDialog';
+import { SearchPanel } from '../text/SearchPanel';
 import { openExportDialog, useExportUi } from '../../export/exportUi';
 
 /**
@@ -43,7 +44,11 @@ function useShellKeys() {
           } else handled = false;
           break;
         case 'KeyM':
-          if (!e.shiftKey) ui.toggleDrawer('measurements');
+          if (!e.shiftKey) toggleLeftTab('measurements');
+          else handled = false;
+          break;
+        case 'KeyQ': // תמחור / כתב כמויות (tab of the left drawer)
+          if (!e.shiftKey) toggleLeftTab('pricing');
           else handled = false;
           break;
         case 'Escape':
@@ -78,9 +83,10 @@ export function ViewerShell({ onOpenFile }: { onOpenFile(file: File): void }) {
         {(p) => <ThumbnailSidebar {...p} />}
       </Drawer>
       <Drawer id="measurements" side="left" label="רשימת מדידות">
-        {(p) => <MeasurementsPanel {...p} />}
+        {(p) => <LeftDrawerContent {...p} />}
       </Drawer>
       <TopMenu onOpenFile={onOpenFile} />
+      <SearchPanel />
       <ExportDialog />
     </>
   );
