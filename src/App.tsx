@@ -213,7 +213,9 @@ function Workspace() {
   return (
     // Full-window shell: once a document is open the viewer covers 100% of the
     // window and every other control floats over it (pill, palette, drawers, menu).
-    <div className="fixed inset-0 overflow-hidden bg-slate-900 text-slate-100 antialiased">
+    // touch-action pan-x pan-y: panels still scroll, but the browser never pinch-zooms the whole page on top of
+    // the viewer's own zoom (iOS Safari ignores user-scalable=no; a doubled zoom can exhaust its memory).
+    <div className="fixed inset-0 overflow-hidden bg-slate-900 text-slate-100 antialiased" style={{ touchAction: 'pan-x pan-y' }}>
       {hasDoc ? (
         <>
           {/* File tabs on top; the viewer and all its floating chrome live in the region below. */}
