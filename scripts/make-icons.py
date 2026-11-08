@@ -14,8 +14,9 @@ Outputs (public/icons/):
   maskable-192.png, maskable-512.png  full-bleed off-white, mark inside the 80% safe zone
   apple-touch-icon.png (180)          full-bleed (iOS rounds it itself)
   favicon.ico (16/32/48), favicon-32.png
-  file-pdf-{32,48,256,512}.png        document sheet with folded corner + mark
-                                      (manifest file_handlers icons = .pdf file-type icon)
+  file-pdf-{32,48,256,512}.png, file-pdf.ico
+                                      dark-blue sheet with folded corner + bold white "P"
+                                      (manifest file_handlers icons / Windows .pdf file-type icon)
   logo-mark-white.png / @2x           white line-art mark only (no "PDF" caption, no tagline),
                                       for the dark start / login / download pages
 """
@@ -193,8 +194,33 @@ def icon_maskable(m: np.ndarray, size: int) -> Image.Image:
     return img
 
 
-def file_icon(m: np.ndarray, size: int) -> Image.Image:
-    """A page sheet with a folded top-left corner (RTL-neutral) and the mark."""
+FILE_NAVY = (16, 38, 86)      # .pdf file icon: dark blue sheet …
+FILE_FOLD = (64, 98, 168)     # … lighter folded corner
+FILE_EDGE = (9, 22, 52)       # … dark hairline so it reads on dark Explorer themes too
+
+
+def p_glyph(w: int, h: int) -> Image.Image:
+    """Solid rounded "P" (stem + bowl with counter) as an L mask of w×h, drawn supersampled."""
+    k = 8
+    W, H = w * k, h * k
+    m = Image.new("L", (W, H), 0)
+    d = ImageDraw.Draw(m)
+    sw, bh, r = W * 0.40, H * 0.62, W * 0.14
+    d.rounded_rectangle([0, 0, W, bh], radius=min(bh / 2, W * 0.5), fill=255)   # bowl
+    d.rounded_rectangle([0, 0, sw, H], radius=r, fill=255)                       # stem
+    d.rounded_rectangle([0, 0, W * 0.6, bh], radius=r, fill=255)                 # square-ish top-left
+    t = W * 0.17 * 0.95
+    ch = bh - 2 * t
+    d.rounded_rectangle([sw - W * 0.02, t, W - W * 0.17, t + ch], radius=ch / 2, fill=0)  # counter
+    return m.resize((w, h), Image.LANCZOS)
+
+
+def file_icon(size: int) -> Image.Image:
+    """.pdf file-type icon: dark-blue page with a folded top-right corner and a bold white "P".
+
+    A solid letter instead of the line-art mark: it stays crisp from 16 px up and makes PDF files
+    stand out in Explorer at every view size.
+    """
     big = size * SS
     img = Image.new("RGBA", (big, big), (0, 0, 0, 0))
     d = ImageDraw.Draw(img)
@@ -205,63 +231,23 @@ def file_icon(m: np.ndarray, size: int) -> Image.Image:
     fold = w * 0.28
     lw = max(SS, round(big / 64))
     page = [(x0, y0), (x1 - fold, y0), (x1, y0 + fold), (x1, y1), (x0, y1)]
-    # soft shadow
     shadow = Image.new("RGBA", (big, big), (0, 0, 0, 0))
-    ImageDraw.Draw(shadow).polygon([(x + big * 0.012, y + big * 0.02) for x, y in page], fill=(0, 0, 0, 70))
+    ImageDraw.Draw(shadow).polygon([(x + big * 0.012, y + big * 0.02) for x, y in page], fill=(0, 0, 0, 80))
     shadow = shadow.filter(ImageFilter.GaussianBlur(big * 0.012))
     img.alpha_composite(shadow)
-    d.polygon(page, fill=(255, 255, 255, 255))
-    d.line(page + [page[0]], fill=(120, 116, 108, 255), width=lw, joint="curve")
+    d.polygon(page, fill=FILE_NAVY + (255,))
+    d.line(page + [page[0]], fill=FILE_EDGE + (255,), width=lw, joint="curve")
     flap = [(x1 - fold, y0), (x1 - fold, y0 + fold), (x1, y0 + fold)]
-    d.polygon(flap, fill=(226, 222, 214, 255))
-    d.line(flap + [flap[0]], fill=(120, 116, 108, 255), width=lw, joint="curve")
-    # red "PDF" band at the bottom for instant file-type recognition at large sizes
-    if size >= 128:
-        by0 = y1 - big * 0.2
-        d.rectangle([x0 + lw, by0, x1 - lw, y1 - lw], fill=(220, 38, 38, 255))
+    d.polygon(flap, fill=FILE_FOLD + (255,))
+    d.line(flap + [flap[0]], fill=FILE_EDGE + (255,), width=lw, joint="curve")
     img = img.resize((size, size), Image.LANCZOS)
     s = size / big
-    mx0, mx1 = x0 * s + size * 0.08, x1 * s - size * 0.08
-    if size >= 128:
-        my0, my1 = (y0 + fold * 0.9) * s, (y1 - big * 0.2) * s - size * 0.05
-    else:
-        my0, my1 = (y0 + fold * 0.75) * s, y1 * s - size * 0.08
-    place(img, m, (mx0, my0, mx1, my1), stroke=stroke_for(size) * (0.85 if size >= 128 else 1))
-    if size >= 128:
-        draw_pdf_label(img, x0 * s, (y1 - big * 0.2) * s, x1 * s, y1 * s)
+    gh = round(size * 0.50)
+    gw = round(gh * 0.74)
+    cx = (x0 + x1) / 2 * s - size * 0.02
+    cy = (y0 + fold * 0.6 + y1) / 2 * s
+    img.alpha_composite(colored(p_glyph(gw, gh), (255, 255, 255)), (round(cx - gw / 2), round(cy - gh / 2)))
     return img
-
-
-def draw_pdf_label(img: Image.Image, x0, y0, x1, y1) -> None:
-    """White 'PDF' letters in the red band, drawn as strokes (no font dependency)."""
-    big = Image.new("RGBA", (img.width * SS, img.height * SS), (0, 0, 0, 0))
-    d = ImageDraw.Draw(big)
-    h = (y1 - y0) * 0.52 * SS
-    cy = (y0 + y1) / 2 * SS
-    lw = max(SS, round(h * 0.17))
-    lt = cy - h / 2
-    lb = cy + h / 2
-    gw = h * 0.62
-    gap = h * 0.28
-    total = 3 * gw + 2 * gap
-    x = (x0 + x1) / 2 * SS - total / 2
-    col = (255, 255, 255, 255)
-    r = h * 0.27
-    # P
-    d.line([(x, lb), (x, lt)], fill=col, width=lw)
-    d.arc([x - gw * 0.4, lt, x + gw, lt + 2 * r * 1.0 + h * 0.02], 270, 90, fill=col, width=lw)
-    d.line([(x, lt + lw / 2 - 1), (x + gw * 0.3, lt + lw / 2 - 1)], fill=col, width=lw)
-    d.line([(x, lt + 2 * r + h * 0.02 - lw / 2 + 1), (x + gw * 0.3, lt + 2 * r + h * 0.02 - lw / 2 + 1)], fill=col, width=lw)
-    x += gw + gap
-    # D
-    d.line([(x, lb), (x, lt)], fill=col, width=lw)
-    d.arc([x - gw * 0.6, lt, x + gw, lb], 270, 90, fill=col, width=lw)
-    x += gw + gap
-    # F
-    d.line([(x, lb), (x, lt)], fill=col, width=lw)
-    d.line([(x, lt + lw / 2), (x + gw, lt + lw / 2)], fill=col, width=lw)
-    d.line([(x, cy), (x + gw * 0.8, cy)], fill=col, width=lw)
-    img.alpha_composite(big.resize(img.size, Image.LANCZOS))
 
 
 def _largest_component(mask: np.ndarray) -> np.ndarray:
@@ -334,7 +320,12 @@ def main() -> None:
                  append_images=[fav[16], fav[32]])
 
     for s in (32, 48, 256, 512):
-        file_icon(m, s).save(OUT / f"file-pdf-{s}.png", optimize=True)
+        file_icon(s).save(OUT / f"file-pdf-{s}.png", optimize=True)
+    # Windows .pdf file-type icon (installer DefaultIcon): every size drawn natively, not scaled.
+    ico_sizes = (16, 20, 24, 32, 40, 48, 64, 96, 128, 256)
+    frames = [file_icon(s) for s in ico_sizes]
+    frames[-1].save(OUT / "file-pdf.ico", format="ICO", sizes=[(s, s) for s in ico_sizes],
+                    append_images=frames[:-1])
 
     wordmark_white(wm, 560).save(OUT / "logo-wordmark-white.png", optimize=True)
     # 2x for the large logo on /download and /login (srcset); ~ the source crop's resolution.
