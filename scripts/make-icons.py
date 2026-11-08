@@ -16,8 +16,8 @@ Outputs (public/icons/):
   favicon.ico (16/32/48), favicon-32.png
   file-pdf-{32,48,256,512}.png        document sheet with folded corner + mark
                                       (manifest file_handlers icons = .pdf file-type icon)
-  logo-wordmark-white.png             white lines on transparent, for the dark start screen
-  logo-wordmark-white@2x.png          same at 1120px wide (big logo on /download, /login)
+  logo-mark-white.png / @2x           white line-art mark only (no "PDF" caption, no tagline),
+                                      for the dark start / login / download pages
 """
 from pathlib import Path
 
@@ -339,9 +339,11 @@ def main() -> None:
     wordmark_white(wm, 560).save(OUT / "logo-wordmark-white.png", optimize=True)
     # 2x for the large logo on /download and /login (srcset); ~ the source crop's resolution.
     wordmark_white(wm, 1120).save(OUT / "logo-wordmark-white@2x.png", optimize=True)
-    # Mark + "PDF" only (tagline cropped off): the pages render the tagline as large HTML text.
+    # Line-art mark only (the small "PDF" caption and the tagline are dropped; pages render the
+    # tagline as HTML text). The full wordmark is only an intermediate and is not shipped.
     for name in ("logo-wordmark-white.png", "logo-wordmark-white@2x.png"):
         crop_mark_only(OUT / name, OUT / name.replace("wordmark-white", "mark-white"))
+        (OUT / name).unlink()
     print("wrote", ", ".join(sorted(p.name for p in OUT.iterdir())))
 
 

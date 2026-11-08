@@ -24,7 +24,7 @@ const PUBLIC_SHELL = [
   'icons/maskable-192.png',
   'icons/maskable-512.png',
   'icons/apple-touch-icon.png',
-  'icons/logo-wordmark-white.png',
+  'icons/logo-mark-white.png',
   'icons/logo-mark-white.png',
   'icons/file-pdf-32.png',
   'icons/file-pdf-48.png',

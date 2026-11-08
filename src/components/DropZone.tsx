@@ -31,14 +31,22 @@ export default function DropZone({ onFiles }: Props) {
 
   return (
     <div className="flex h-full w-full flex-col items-center justify-center gap-4 p-8">
-      <img
-        src={`${import.meta.env.BASE_URL}icons/logo-wordmark-white.png`}
-        alt="PDF — Professional Document Solutions"
-        width={560}
-        height={433}
-        draggable={false}
-        className="h-auto w-40 shrink-0 select-none opacity-90 sm:w-52"
-      />
+      <figure className="flex shrink-0 select-none flex-col items-center opacity-90" aria-label="Professional Document Solutions">
+        {/* Line-art mark only (no "PDF" caption) + tagline as text, like the login / download pages. */}
+        <img
+          src={`${import.meta.env.BASE_URL}icons/logo-mark-white.png`}
+          srcSet={`${import.meta.env.BASE_URL}icons/logo-mark-white.png 560w, ${import.meta.env.BASE_URL}icons/logo-mark-white@2x.png 1120w`}
+          sizes="13rem"
+          alt=""
+          width={560}
+          height={363}
+          draggable={false}
+          className="h-auto w-40 sm:w-52"
+        />
+        <figcaption className="mt-1.5 text-center text-[10px] font-medium uppercase tracking-[0.18em] text-slate-300 sm:text-[11px]" aria-hidden="true">
+          Professional Document Solutions
+        </figcaption>
+      </figure>
       <button
         type="button"
         onClick={() => input.current?.click()}
