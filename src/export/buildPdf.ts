@@ -46,6 +46,11 @@ import {
   arrowHeadSize,
   arrowShaftEnd,
   cloudPath,
+  linkHeadCenter,
+  linkHeadRadius,
+  linkLeader,
+  markupBounds,
+  roundedRectPath,
   shapePath,
   notePinPath,
   polylinePath,
@@ -223,7 +228,9 @@ function drawCalibration(c: Ctx, cal: { p1: Point; p2: Point; meters: number }) 
 /** A /Link annotation over the link area that jumps to output page `target` (fit page). */
 function addLinkAnnotation(out: PDFDocument, c: Ctx, m: AreaMeasurement, target: number | undefined, outPages: PDFPage[]) {
   if (target === undefined || m.points.length < 2) return;
-  const r = rectOfPoints(m.points.map((p) => P(c, p)));
+  // Clickable: the bubble and the callout head.
+  const scaled = { ...m, points: m.points.map((p) => P(c, p)), fontSize: linkHeadRadius(m) * c.sx };
+  const r = markupBounds(scaled);
   const a = viewportToPdf(c.g, { x: r.x, y: r.y });
   const b = viewportToPdf(c.g, { x: r.x + r.width, y: r.y + r.height });
   const annot = out.context.obj({
@@ -260,9 +267,29 @@ function drawMarkup(c: Ctx, m: AreaMeasurement, noteNo: number | undefined) {
     case 'highlight':
       path(c, rectPath(rectOfPoints(pts)), { fill: hexColor(m.color, HIGHLIGHT_COLOR), opacity: HIGHLIGHT_OPACITY, multiply: true });
       break;
-    case 'link':
-      path(c, rectPath(rectOfPoints(pts)), { stroke: col, width: 0.8 * c.s, dash: [4 * c.s, 2 * c.s], strokeOpacity: 0.8 });
+    case 'link': {
+      // Callout: dashed rounded bubble → leader → split head (name / page) + reference label.
+      if (pts.length < 2) break;
+      const r = rectOfPoints(pts);
+      const hr = linkHeadRadius(m) * c.sx;
+      const head = linkHeadCenter(pts, hr);
+      const lc = m.targetPage ? col : hexColor('#d97706');
+      path(c, roundedRectPath(r), { stroke: lc, width: 1.6 * c.s, dash: [6 * c.s, 4 * c.s], round: true });
+      const leader = linkLeader(r, head, hr);
+      if (leader) path(c, `M${f(leader[0].x)} ${f(leader[0].y)}L${f(leader[1].x)} ${f(leader[1].y)}`, { stroke: lc, width: 0.9 * c.s });
+      path(c, circleD(head.x, head.y, hr), { fill: WHITE, stroke: lc, width: 1 * c.s });
+      path(c, `M${f(head.x - hr)} ${f(head.y)}L${f(head.x + hr)} ${f(head.y)}`, { stroke: lc, width: 0.8 * c.s });
+      const name = (m.text ?? '').trim() || '?';
+      const nfs = hr * (name.length > 3 ? 0.55 : 0.72);
+      text(c, name, head.x, head.y - hr * 0.2, nfs, { bold: true, color: hexColor('#111827'), align: 'center' });
+      text(c, m.targetPage ? `עמ׳ ${m.targetPage}` : 'ללא יעד', head.x, head.y + hr * 0.58, hr * 0.46, { color: hexColor('#334155'), align: 'center' });
+      const ref = (m.refLabel ?? '').trim();
+      if (ref) {
+        const right = head.x >= r.x + r.width / 2;
+        text(c, ref, head.x + (right ? hr * 1.25 : -hr * 1.25), head.y - hr * 0.35, hr * 0.62, { bold: true, color: hexColor('#111827'), align: right ? 'left' : 'right' });
+      }
       break;
+    }
     case 'pen':
       path(c, polylinePath(pts), { stroke: col, width: sw, round: true });
       break;

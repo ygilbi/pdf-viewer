@@ -78,6 +78,8 @@ function LinkEditor({ m }: { m: AreaMeasurement }) {
   const ref = useRef<HTMLInputElement>(null);
   const isNew = useRef(useMarkup.getState().editingIsNew);
   const [value, setValue] = useState(String(m.targetPage ?? Math.min(numPages, m.page + 1)));
+  const [name, setName] = useState(m.text ?? '');
+  const [ref2, setRef2] = useState(m.refLabel ?? '');
   const done = useRef(false);
   const id = m.id;
 
@@ -100,7 +102,8 @@ function LinkEditor({ m }: { m: AreaMeasurement }) {
   const save = () => {
     if (!valid || done.current) return;
     done.current = true;
-    useViewer.getState().updateMeasurement(id, { targetPage: n });
+    const refLabel = ref2.trim();
+    useViewer.getState().updateMeasurement(id, { targetPage: n, text: name.trim(), refLabel: refLabel || undefined });
     close();
   };
   const cancel = () => {
@@ -115,6 +118,17 @@ function LinkEditor({ m }: { m: AreaMeasurement }) {
     close();
   };
 
+  const keys = (e: React.KeyboardEvent) => {
+    e.stopPropagation();
+    if (e.key === 'Enter' && !e.nativeEvent.isComposing) {
+      e.preventDefault();
+      save();
+    } else if (e.key === 'Escape') {
+      e.preventDefault();
+      cancel();
+    }
+  };
+
   const p = m.points[0];
   if (!p) return null;
   return (
@@ -125,7 +139,7 @@ function LinkEditor({ m }: { m: AreaMeasurement }) {
         left: p.x,
         top: p.y,
         transformOrigin: '0 0',
-        transform: 'scale(var(--inv-zoom, 1)) translate(0, calc(-100% - 22px))',
+        transform: 'scale(var(--inv-zoom, 1)) translate(0, calc(-100% - 8px))',
         pointerEvents: 'auto',
         zIndex: 45,
       }}
@@ -137,14 +151,42 @@ function LinkEditor({ m }: { m: AreaMeasurement }) {
         }
       }}
     >
-      <div dir="rtl" className="w-56 rounded-lg bg-white p-2 shadow-xl ring-1 ring-black/20" style={{ borderTop: '3px solid #0284c7' }}>
+      <div dir="rtl" className="w-60 rounded-lg bg-white p-2 shadow-xl ring-1 ring-black/20" style={{ borderTop: '3px solid #0284c7' }}>
+        <div className="mb-1.5 grid grid-cols-2 gap-1.5">
+          <label className="text-[11px] font-semibold text-slate-600">
+            שם הקישור
+            <input
+              ref={ref}
+              type="text"
+              value={name}
+              maxLength={12}
+              placeholder="A1"
+              data-testid="link-name-input"
+              onChange={(e) => setName(e.target.value)}
+              onKeyDown={keys}
+              className="mt-0.5 block w-full rounded border border-slate-300 px-1.5 py-1 text-[13px] font-normal text-slate-800 outline-none focus:border-sky-500 focus:ring-2 focus:ring-sky-200"
+            />
+          </label>
+          <label className="text-[11px] font-semibold text-slate-600">
+            תווית (רשות)
+            <input
+              type="text"
+              value={ref2}
+              maxLength={16}
+              placeholder="SIM"
+              data-testid="link-ref-input"
+              onChange={(e) => setRef2(e.target.value)}
+              onKeyDown={keys}
+              className="mt-0.5 block w-full rounded border border-slate-300 px-1.5 py-1 text-[13px] font-normal text-slate-800 outline-none focus:border-sky-500 focus:ring-2 focus:ring-sky-200"
+            />
+          </label>
+        </div>
         <label className="mb-1 block text-[11px] font-semibold text-slate-600" htmlFor={`link-${id}`}>
           קישור לעמוד
         </label>
         <div className="flex items-center gap-1.5">
           <input
             id={`link-${id}`}
-            ref={ref}
             type="number"
             inputMode="numeric"
             min={1}
@@ -152,16 +194,7 @@ function LinkEditor({ m }: { m: AreaMeasurement }) {
             value={value}
             data-testid="link-target"
             onChange={(e) => setValue(e.target.value)}
-            onKeyDown={(e) => {
-              e.stopPropagation();
-              if (e.key === 'Enter') {
-                e.preventDefault();
-                save();
-              } else if (e.key === 'Escape') {
-                e.preventDefault();
-                cancel();
-              }
-            }}
+            onKeyDown={keys}
             className={`w-20 rounded border px-1.5 py-1 text-[13px] text-slate-800 outline-none focus:ring-2 ${valid ? 'border-slate-300 focus:border-sky-500 focus:ring-sky-200' : 'border-rose-400 focus:ring-rose-200'}`}
           />
           <span className="text-[12px] text-slate-500">מתוך {numPages}</span>

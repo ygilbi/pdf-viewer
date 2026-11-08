@@ -212,7 +212,7 @@ describe('buildExportPdf', () => {
   });
 
   it('turns link areas into PDF /Link annotations to the exported target page', async () => {
-    const link: AreaMeasurement = { id: 'L1', page: 1, kind: 'link', label: 'קישור 1', color: '#0284c7', points: [{ x: 50, y: 40 }, { x: 150, y: 100 }], targetPage: 2 };
+    const link: AreaMeasurement = { id: 'L1', page: 1, kind: 'link', label: 'קישור 1', color: '#0284c7', points: [{ x: 50, y: 40 }, { x: 150, y: 100 }, { x: 300, y: 60 }], fontSize: 20, text: 'A1', refLabel: 'SIM', targetPage: 2 };
     const dangling: AreaMeasurement = { ...link, id: 'L2', targetPage: 9 };
     const input: PdfBuildInput = {
       docs: [{ id: 'doc1', name: 'x.pdf' }],
@@ -233,7 +233,7 @@ describe('buildExportPdf', () => {
     const { PDFName } = await import('pdf-lib');
     type Arr = { asRectangle(): unknown; get(i: number): unknown };
     const rect = (a.get(PDFName.of('Rect')) as Arr).asRectangle();
-    expect(rect).toEqual({ x: 50, y: 200, width: 100, height: 60 }); // y flipped: 300 - 100
+    expect(rect).toEqual({ x: 50, y: 200, width: 270, height: 60 }); // bubble + head (r 20 at 300,60); y flipped
     const dest = a.get(PDFName.of('Dest')) as Arr;
     expect(dest.get(0)).toBe(doc.getPage(1).ref);
   });

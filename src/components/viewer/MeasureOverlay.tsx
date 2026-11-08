@@ -7,6 +7,10 @@ import {
   arrowHeadSize,
   cloudPath,
   isBoxShape,
+  linkHeadCenter,
+  linkHeadRadius,
+  linkLeader,
+  roundedRectPath,
   shapePath,
   markupBounds,
   notePinPath,
@@ -381,7 +385,7 @@ const MarkupShape = memo(function MarkupShape({ m, selected }: { m: AreaMeasurem
   const handles =
     selected &&
     (kind === 'rect' || kind === 'cloud' || kind === 'highlight' || kind === 'arrow' || kind === 'line' || kind === 'link' || isBoxShape(kind)) &&
-    pts.map((p, i) => (
+    pts.slice(0, kind === 'link' ? 2 : undefined).map((p, i) => (
       <circle key={i} cx={p.x} cy={p.y} fill="#fff" stroke={SELECT_COLOR} style={{ r: px(5), strokeWidth: px(2) }} />
     ));
   const g = (children: ReactNode) => (
@@ -484,30 +488,53 @@ const MarkupShape = memo(function MarkupShape({ m, selected }: { m: AreaMeasurem
       );
     }
     case 'link': {
-      // Clickable area → page: dashed box + a screen-sized "עמ׳ N" badge on its top-right corner.
+      // Callout: dashed rounded bubble → leader line → split head (name / target page) + reference label.
       const r = rectOfPoints(pts);
       const t = m.targetPage;
-      const tag = t ? `עמ׳ ${t}` : 'ללא יעד';
-      const col = t ? LINK_COLOR : WARN;
+      const col = t ? m.color || LINK_COLOR : WARN;
+      const hr = linkHeadRadius(m);
+      const head = linkHeadCenter(pts, hr);
+      const leader = linkLeader(r, head, hr);
+      const name = (m.text ?? '').trim();
+      const ref = (m.refLabel ?? '').trim();
+      const refRight = head.x >= r.x + r.width / 2;
+      const nameFs = hr * (name.length > 3 ? 0.55 : 0.72);
       return g(
         <>
-          <rect
-            x={r.x}
-            y={r.y}
-            width={r.width}
-            height={r.height}
+          <path
+            d={roundedRectPath(r)}
             fill={col}
-            fillOpacity={selected ? 0.14 : 0.07}
+            fillOpacity={selected ? 0.1 : 0.001}
             stroke={col}
-            style={{ strokeWidth: px(1.5), strokeDasharray: `${px(6)} ${px(3)}` }}
+            strokeLinecap="round"
+            style={{ strokeWidth: px(2.25), strokeDasharray: `${px(9)} ${px(6)}` }}
           />
-          <g style={{ transform: `translate(${r.x + r.width}px, ${r.y}px) scale(var(--inv-zoom, 1))` }} data-testid="link-badge">
-            <rect x={-(tag.length * 6.2 + 22)} y={-17} width={tag.length * 6.2 + 22} height={17} rx={4} fill={col} />
-            <path d="M-13 -11.5l5 0 0 5M-8 -11.5l-5.5 5.5" stroke="#fff" strokeWidth={1.4} fill="none" strokeLinecap="round" />
-            <text x={-17} y={-4.5} textAnchor="start" fill="#fff" fontSize={11} fontWeight={700} style={{ direction: 'rtl', fontFamily: FONT }}>
-              {tag}
+          {leader && <line x1={leader[0].x} y1={leader[0].y} x2={leader[1].x} y2={leader[1].y} stroke={col} style={{ strokeWidth: px(1.25) }} />}
+          <g data-testid="link-head">
+            <circle cx={head.x} cy={head.y} r={hr} fill="#fff" stroke={col} style={{ strokeWidth: px(1.5) }} />
+            <line x1={head.x - hr} y1={head.y} x2={head.x + hr} y2={head.y} stroke={col} style={{ strokeWidth: px(1.1) }} />
+            <text x={head.x} y={head.y - hr * 0.2} textAnchor="middle" fill="#111827" fontSize={nameFs} fontWeight={600} style={{ fontFamily: FONT, unicodeBidi: 'plaintext' }} data-testid="link-name">
+              {name || '?'}
+            </text>
+            <text x={head.x} y={head.y + hr * 0.58} textAnchor="middle" fill={t ? '#334155' : WARN} fontSize={hr * 0.46} style={{ fontFamily: FONT, unicodeBidi: 'plaintext' }} data-testid="link-badge">
+              {t ? `עמ׳ ${t}` : 'ללא יעד'}
             </text>
           </g>
+          {ref && (
+            <text
+              x={head.x + (refRight ? hr * 1.25 : -hr * 1.25)}
+              y={head.y - hr * 0.55}
+              textAnchor={refRight ? 'start' : 'end'}
+              dominantBaseline="middle"
+              fill="#111827"
+              fontSize={hr * 0.62}
+              fontWeight={600}
+              style={{ fontFamily: FONT, direction: 'ltr', unicodeBidi: 'plaintext' }}
+              data-testid="link-ref"
+            >
+              {ref}
+            </text>
+          )}
         </>,
       );
     }

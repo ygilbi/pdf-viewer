@@ -42,7 +42,11 @@ import {
   arrowHeadSize,
   arrowShaftEnd,
   cloudPath,
+  defaultLinkHeadRadius,
+  hitLinkHead,
   isBoxShape,
+  linkHeadCenter,
+  linkHeadRadius,
   shapePath,
   hitMarkup,
   normRect,
@@ -91,7 +95,8 @@ type Gesture =
   /** `anchor` (pen): index where the current Shift-held straight segment starts. */
   | { kind: 'draw'; id: number; tool: MarkupKind; pts: Point[]; sx: number; sy: number; lx: number; ly: number; anchor?: number; locks?: number[] }
   /** Dragging a whole markup annotation (pan tool). */
-  | { kind: 'move'; id: number; mid: string; sx: number; sy: number; orig: Point[]; points: Point[]; moved: boolean }
+  /** `only`: move just that point (a link's callout head = index 2). */
+  | { kind: 'move'; id: number; mid: string; sx: number; sy: number; orig: Point[]; points: Point[]; moved: boolean; only?: number }
   | { kind: 'pinch'; a: number; b: number; dist: number; mx: number; my: number }
   /** Rectangle area / opening by dragging (rectArea tool, or Alt + deduct). */
   | { kind: 'rect'; id: number; a: Point; mk: 'area' | 'deduct'; sx: number; sy: number; moved: boolean; threshold: number };
@@ -850,6 +855,8 @@ export default function ViewerCanvas() {
           label: `${KIND_LABEL_PREFIX.link} ${nextLabelNumber(s.measurements, 'link')}`,
           points,
           targetPage: Math.min(s.numPages, s.currentPage + 1),
+          text: String(nextLabelNumber(s.measurements, 'link')),
+          fontSize: defaultLinkHeadRadius(s.pageSizes[s.currentPage - 1]?.width ?? 842, s.pageSizes[s.currentPage - 1]?.height ?? 595),
           color: LINK_COLOR,
         });
         useMarkup.getState().startEditing(id, true); // ask for the target page
@@ -990,7 +997,7 @@ export default function ViewerCanvas() {
       // vertex handle of the selected measurement?
       if (!space && s.draft.length === 0 && s.selectedId) {
         const m = s.measurements.find((x) => x.id === s.selectedId && x.page === s.currentPage);
-        if (m && !noHandles(m)) {
+        if (m && !noHandles(m) && !(m.kind === 'link' && s.tool === 'pan')) { // hand tool: links are clicked / dragged whole
           const slop = (e.pointerType === 'touch' ? VERTEX_PX * 1.8 : VERTEX_PX) / vp.zoom;
           const idx = nearestVertex(vp.toPage(q.x, q.y), m.points, slop);
           if (idx >= 0) {
@@ -1002,6 +1009,21 @@ export default function ViewerCanvas() {
         }
       }
 
+      if (!space && (s.tool === 'pan' || s.tool === 'link')) {
+        // Link callouts: grab the head to move it alone, the bubble to move the whole link.
+        // A plain click follows the link (hand tool) or edits it (link tool).
+        const pp = vp.toPage(q.x, q.y);
+        const links = s.measurements.filter((m) => m.page === s.currentPage && m.kind === 'link').reverse();
+        const head = links.find((m) => hitLinkHead(pp, m, 3 / vp.zoom));
+        const lk = head ?? (s.tool === 'link' ? links.find((m) => hitMarkup(pp, m, 3 / vp.zoom, 1 / vp.zoom)) : undefined);
+        if (lk) {
+          const orig = head && lk.points.length < 3 ? [...lk.points.slice(0, 2), linkHeadCenter(lk.points, linkHeadRadius(lk))] : lk.points;
+          gesture = { kind: 'move', id: e.pointerId, mid: lk.id, sx: q.x, sy: q.y, orig, points: orig, moved: false, ...(head ? { only: 2 } : {}) };
+          updateCursor();
+          updateBand();
+          return;
+        }
+      }
       if (!space && s.tool === 'pan') {
         // Grab a markup annotation to move it (a plain click still selects it).
         const hit = hitMarkupAt(vp.toPage(q.x, q.y), s.measurements, s.currentPage, vp.zoom);
@@ -1173,7 +1195,11 @@ export default function ViewerCanvas() {
           if (e.pointerId !== g.id) return;
           if (!g.moved && Math.hypot(q.x - g.sx, q.y - g.sy) <= (e.pointerType === 'touch' ? DRAG_PX_TOUCH : DRAG_PX_MOUSE)) return;
           g.moved = true;
-          g.points = translatePoints(g.orig, (q.x - g.sx) / vp.zoom, (q.y - g.sy) / vp.zoom);
+          if (g.only !== undefined) {
+            const pts = g.orig.slice();
+            pts[g.only] = { x: g.orig[g.only].x + (q.x - g.sx) / vp.zoom, y: g.orig[g.only].y + (q.y - g.sy) / vp.zoom };
+            g.points = pts;
+          } else g.points = translatePoints(g.orig, (q.x - g.sx) / vp.zoom, (q.y - g.sy) / vp.zoom);
           queueOverride({ id: g.mid, points: g.points });
           return;
         }
@@ -1219,10 +1245,13 @@ export default function ViewerCanvas() {
           // Plain click on a markup: double click edits note / text.
           const now = performance.now();
           const m = st().measurements.find((x) => x.id === g.mid);
-          if (m?.kind === 'link' && m.targetPage && st().tool === 'pan') {
-            // Follow the link (hand tool). Edit it with the link tool.
+          if (m?.kind === 'link') {
             lastMarkupClick = null;
-            st().setPage(m.targetPage);
+            if (st().tool === 'link') {
+              // Link tool: edit name / target / label.
+              st().select(m.id);
+              useMarkup.getState().startEditing(m.id);
+            } else if (m.targetPage) st().setPage(m.targetPage); // hand tool: follow the link
             return;
           }
           if (lastMarkupClick && lastMarkupClick.id === g.mid && now - lastMarkupClick.t < DBL_MS && (m?.kind === 'note' || m?.kind === 'text')) {

@@ -42,3 +42,24 @@ describe('count badge', () => {
     expect(badgeFontScale('CW-12')).toBeLessThan(0.6);
   });
 });
+
+import { defaultLinkHeadRadius, hitLinkHead, linkHeadCenter, linkLeader, markupBounds } from './markupGeometry';
+describe('link callout', () => {
+  const m = { kind: 'link', points: [{ x: 0, y: 0 }, { x: 100, y: 50 }], fontSize: 10 };
+  it('places the head up-right by default, or at points[2]', () => {
+    expect(linkHeadCenter(m.points, 10)).toEqual({ x: 120, y: -20 });
+    expect(linkHeadCenter([...m.points, { x: 5, y: 90 }], 10)).toEqual({ x: 5, y: 90 });
+  });
+  it('leader runs from the rounded corner to the head edge', () => {
+    const l = linkLeader({ x: 0, y: 0, width: 100, height: 50 }, { x: 120, y: -20 }, 10)!;
+    expect(Math.hypot(l[1].x - 120, l[1].y + 20)).toBeCloseTo(10, 6);
+    expect(l[0].x).toBeLessThan(100);
+    expect(l[0].y).toBeGreaterThan(0);
+  });
+  it('hits the head, bounds include it, size follows the page', () => {
+    expect(hitLinkHead({ x: 125, y: -20 }, m)).toBe(true);
+    expect(hitLinkHead({ x: 140, y: -20 }, m)).toBe(false);
+    expect(markupBounds(m)).toEqual({ x: 0, y: -30, width: 130, height: 80 });
+    expect(defaultLinkHeadRadius(1684, 1191)).toBeCloseTo(33, 0);
+  });
+});

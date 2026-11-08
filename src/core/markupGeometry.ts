@@ -92,6 +92,75 @@ export function shapePath(kind: BoxShape, r: Rect): string {
   );
 }
 
+// ---------------------------------------------------------------------------
+// Link callout: dashed rounded bubble + leader line + split circle head (+ reference label)
+// ---------------------------------------------------------------------------
+
+/**
+ * Callout head radius in page units. Like CAD callouts it scales with the drawing; stored in the
+ * link's `fontSize` when it is created (sized to the page), default 18.
+ */
+export const linkHeadRadius = (m: { fontSize?: number }): number => (m.fontSize && m.fontSize > 0 ? m.fontSize : 18);
+/** Head radius for a new link on a page of this size (≈1.6% of the page diagonal, min 12). */
+export const defaultLinkHeadRadius = (w: number, h: number): number => Math.round(Math.max(12, Math.hypot(w, h) * 0.016) * 10) / 10;
+
+/** Centre of a link's callout head: points[2] when the user placed it, else up-right of the bubble. */
+export function linkHeadCenter(points: Point[], headR: number): Point {
+  if (points.length >= 3) return points[2];
+  const r = rectOfPoints(points);
+  return { x: r.x + r.width + headR * 2, y: r.y - headR * 2 };
+}
+
+/** Corner radius of the callout bubble (page units). */
+export function bubbleRadius(r: Rect): number {
+  return Math.min(r.width, r.height) * 0.14;
+}
+
+/** Rounded rectangle (M / L / C / Z only). */
+export function roundedRectPath(r: Rect, rad: number = bubbleRadius(r)): string {
+  const { x, y, width: w, height: h } = r;
+  const q = Math.max(0, Math.min(rad, w / 2, h / 2));
+  const k = q * 0.4477; // (1 - 0.5523)
+  return (
+    `M${f(x + q)} ${f(y)}L${f(x + w - q)} ${f(y)}C${f(x + w - k)} ${f(y)} ${f(x + w)} ${f(y + k)} ${f(x + w)} ${f(y + q)}` +
+    `L${f(x + w)} ${f(y + h - q)}C${f(x + w)} ${f(y + h - k)} ${f(x + w - k)} ${f(y + h)} ${f(x + w - q)} ${f(y + h)}` +
+    `L${f(x + q)} ${f(y + h)}C${f(x + k)} ${f(y + h)} ${f(x)} ${f(y + h - k)} ${f(x)} ${f(y + h - q)}` +
+    `L${f(x)} ${f(y + q)}C${f(x)} ${f(y + k)} ${f(x + k)} ${f(y)} ${f(x + q)} ${f(y)}Z`
+  );
+}
+
+/**
+ * Leader line from the bubble to the head: starts on the bubble's rounded corner (or edge) closest
+ * to the head and stops at the head circle's edge. `headR` in page units.
+ */
+export function linkLeader(r: Rect, head: Point, headR: number): [Point, Point] | null {
+  const cx = Math.min(Math.max(head.x, r.x), r.x + r.width);
+  const cy = Math.min(Math.max(head.y, r.y), r.y + r.height);
+  let a: Point = { x: cx, y: cy };
+  // On a corner, start on the rounded arc instead of the (cut-off) square corner.
+  const q = bubbleRadius(r);
+  const atX = cx === r.x || cx === r.x + r.width;
+  const atY = cy === r.y || cy === r.y + r.height;
+  if (atX && atY && q > 0) {
+    const ox = cx === r.x ? r.x + q : r.x + r.width - q;
+    const oy = cy === r.y ? r.y + q : r.y + r.height - q;
+    const d = Math.hypot(head.x - ox, head.y - oy) || 1;
+    a = { x: ox + ((head.x - ox) / d) * q, y: oy + ((head.y - oy) / d) * q };
+  }
+  const dx = head.x - a.x, dy = head.y - a.y;
+  const len = Math.hypot(dx, dy);
+  if (len <= headR + 1e-6) return null; // head overlaps the bubble
+  return [a, { x: head.x - (dx / len) * headR, y: head.y - (dy / len) * headR }];
+}
+
+/** Is p on the link's callout head? (`slop` in page units) */
+export function hitLinkHead(p: Point, m: { points: Point[]; fontSize?: number }, slop = 0): boolean {
+  if (m.points.length < 2) return false;
+  const hr = linkHeadRadius(m);
+  const c = linkHeadCenter(m.points, hr);
+  return Math.hypot(p.x - c.x, p.y - c.y) <= hr + slop;
+}
+
 /** Default scallop chord length for a revision cloud around `r` (page units). */
 export function cloudArcSize(r: Rect): number {
   return Math.max(6, Math.min(30, Math.max(r.width, r.height) / 8));
@@ -323,6 +392,13 @@ export function markupBounds(m: MarkupLike, pinScale = 1): Rect {
     };
   }
   if (m.kind === 'text' && pts.length) return estimateTextBounds(pts[0], m.text, m.fontSize ?? 12);
+  if (m.kind === 'link' && pts.length >= 2) {
+    const r = rectOfPoints(pts);
+    const hr = linkHeadRadius(m);
+    const c = linkHeadCenter(pts, hr);
+    const x0 = Math.min(r.x, c.x - hr), y0 = Math.min(r.y, c.y - hr);
+    return { x: x0, y: y0, width: Math.max(r.x + r.width, c.x + hr) - x0, height: Math.max(r.y + r.height, c.y + hr) - y0 };
+  }
   if (m.kind === 'cloud') {
     const r = rectOfPoints(pts);
     const b = cloudBulge(r);
@@ -357,8 +433,9 @@ export function hitMarkup(p: Point, m: MarkupLike, slop: number, pinScale = 1): 
     case 'text':
       return inRect(p, markupBounds(m), slop);
     case 'highlight':
-    case 'link':
       return inRect(p, rectOfPoints(pts), slop);
+    case 'link':
+      return inRect(p, rectOfPoints(pts), slop) || hitLinkHead(p, m, slop);
     case 'rect':
       return distanceToRectEdge(p, rectOfPoints(pts)) <= slop;
     case 'cloud': {

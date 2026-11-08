@@ -165,8 +165,13 @@ export interface AreaMeasurement {
    * Read it through `itemOf(m)` (measurementEngine) — older saves lack it.
    */
   item?: ItemDims;
-  /** Link markup only: global page number (1-based, across all open files) it jumps to. */
+  /**
+   * Link markup only: global page number (1-based, across all open files) it jumps to.
+   * A link's points are [bubble corner, opposite corner, callout head centre?]; its `text` is the
+   * callout name (top of the head, e.g. "A1") and `refLabel` the optional label beside it ("SIM").
+   */
   targetPage?: number;
+  refLabel?: string;
 }
 
 /** Size of one counted item (meters) + optional item / schedule code. */
