@@ -14,6 +14,8 @@ import type { Point, Rect } from '../../core/types';
 
 const MAX_ZOOM = 64;
 const FIT_PADDING = 16; // CSS px around the page when fitted
+/** Quiet time after the last zoom change before dash patterns are re-sized. */
+const DASH_SETTLE_MS = 120;
 
 type Anim =
   | { kind: 'smooth'; target: number; ax: number; ay: number }
@@ -52,10 +54,14 @@ export class ViewportController {
   private anim: Anim | null = null;
   private listeners = new Set<ViewListener>();
   private lastWritten = '';
+  /** Zoom last written to --dash-inv-zoom (0 = never) and its pending debounce. */
+  private dashZoom = 0;
+  private dashTimer = 0;
 
   setWorld(el: HTMLElement | null): void {
     this.world = el;
     this.lastWritten = '';
+    this.dashZoom = 0;
     this.invalidate();
   }
 
@@ -325,11 +331,36 @@ export class ViewportController {
         w.style.setProperty('--inv-zoom', String(1 / this.zoom));
         this.lastWritten = t;
       }
+      this.scheduleDashZoom(w);
     }
     for (const fn of this.listeners) fn(this);
   };
 
+  /**
+   * --dash-inv-zoom follows --inv-zoom only once the zoom has settled (no change
+   * for DASH_SETTLE_MS), so dash patterns aren't regenerated on every frame of a
+   * pinch / animated zoom (see MeasureOverlay `dash`).
+   */
+  private scheduleDashZoom(w: HTMLElement): void {
+    if (this.zoom === this.dashZoom) {
+      if (this.dashTimer) window.clearTimeout(this.dashTimer);
+      this.dashTimer = 0;
+      return;
+    }
+    const write = () => {
+      this.dashTimer = 0;
+      if (this.world !== w) return;
+      this.dashZoom = this.zoom;
+      w.style.setProperty('--dash-inv-zoom', String(1 / this.zoom));
+    };
+    if (this.dashZoom === 0) return write(); // first frame: no stale pattern to show
+    if (this.dashTimer) window.clearTimeout(this.dashTimer);
+    this.dashTimer = window.setTimeout(write, DASH_SETTLE_MS);
+  }
+
   destroy(): void {
+    if (this.dashTimer) window.clearTimeout(this.dashTimer);
+    this.dashTimer = 0;
     if (this.frame) cancelAnimationFrame(this.frame);
     this.frame = 0;
     this.anim = null;

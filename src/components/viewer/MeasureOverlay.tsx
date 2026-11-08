@@ -50,6 +50,26 @@ import {
  */
 
 export const px = (n: number) => `calc(${n}px * var(--inv-zoom, 1))`;
+/**
+ * Screen-constant dash pattern. Uses --dash-inv-zoom, which the viewport only
+ * updates once the zoom has settled (not every frame of a pinch): a dash array
+ * that changes every frame forces the dashes to be re-generated on every frame
+ * (costly in mobile WebKit / CoreGraphics on long paths at high zoom). While
+ * zooming, the dashes simply scale with the page, then snap back.
+ * (`vector-effect: non-scaling-stroke` is no alternative — see above.)
+ */
+export const dash = (on: number, off: number) =>
+  `calc(${on}px * var(--dash-inv-zoom, var(--inv-zoom, 1))) calc(${off}px * var(--dash-inv-zoom, var(--inv-zoom, 1)))`;
+/**
+ * For <text> sized in PAGE units (link head, text markup). By default browsers
+ * size SVG glyphs from the full screen CTM — including the world's CSS
+ * scale — so every zoom frame instantiates a new font at the on-screen size
+ * (≈ 4000 device px at zoom 64 on a 3× phone), re-lays the text out and (in
+ * Chromium) grows the overlay's compositing layer to page size × zoom
+ * (56k × 33k px measured). `geometricPrecision` keeps the font at its specified
+ * size and scales the glyph outlines instead (WebKit: scalingFactor = 1).
+ */
+const PAGE_TEXT = { textRendering: 'geometricPrecision' } as const;
 
 const WARN = '#dc2626';
 const DRAFT = '#2563eb';
@@ -164,7 +184,7 @@ function MeasureOverlayImpl({ width, height, measurements, selectedId, calibrati
             x2={calibration.p2.x}
             y2={calibration.p2.y}
             stroke={CALIB}
-            style={{ strokeWidth: px(1.5), strokeDasharray: `${px(6)} ${px(4)}` }}
+            style={{ strokeWidth: px(1.5), strokeDasharray: dash(6, 4) }}
           />
           {[calibration.p1, calibration.p2].map((p, i) => (
             <circle key={i} cx={p.x} cy={p.y} fill={CALIB} style={{ r: px(3) }} />
@@ -275,7 +295,7 @@ function MeasureOverlayImpl({ width, height, measurements, selectedId, calibrati
               strokeLinejoin="round"
               style={{
                 strokeWidth: px(selected ? 2.5 : deduct ? 1.5 : 1.75),
-                strokeDasharray: bad ? `${px(6)} ${px(4)}` : undefined,
+                strokeDasharray: bad ? dash(6, 4) : undefined,
               }}
             />
             <text x={c.x} y={c.y} textAnchor="middle" fill={deduct ? '#9f1239' : '#111827'} style={labelStyle(deduct ? 11 : 13)}>
@@ -333,7 +353,7 @@ function MeasureOverlayImpl({ width, height, measurements, selectedId, calibrati
         stroke={dc}
         strokeOpacity={0.5}
         visibility="hidden"
-        style={{ strokeWidth: px(1.25), strokeDasharray: `${px(4)} ${px(4)}` }}
+        style={{ strokeWidth: px(1.25), strokeDasharray: dash(4, 4) }}
       />
       {band.markup && (
         <path
@@ -349,7 +369,7 @@ function MeasureOverlayImpl({ width, height, measurements, selectedId, calibrati
         ref={band.segment}
         stroke={dc}
         visibility="hidden"
-        style={{ strokeWidth: px(2), strokeDasharray: `${px(6)} ${px(3)}` }}
+        style={{ strokeWidth: px(2), strokeDasharray: dash(6, 3) }}
       />
     </svg>
   );
@@ -369,7 +389,7 @@ function SelectBox({ r }: { r: Rect }) {
       height={Math.max(0, r.height)}
       fill="none"
       stroke={SELECT_COLOR}
-      style={{ strokeWidth: px(1.25), strokeDasharray: `${px(5)} ${px(3)}`, outline: 'none' }}
+      style={{ strokeWidth: px(1.25), strokeDasharray: dash(5, 3), outline: 'none' }}
       data-testid="markup-selection"
     />
   );
@@ -426,6 +446,7 @@ const MarkupShape = memo(function MarkupShape({ m, selected }: { m: AreaMeasurem
               fontSize={fs}
               textAnchor="start"
               style={{
+                ...PAGE_TEXT,
                 direction: 'rtl',
                 fontFamily: FONT,
                 fontWeight: 600,
@@ -503,20 +524,23 @@ const MarkupShape = memo(function MarkupShape({ m, selected }: { m: AreaMeasurem
         <>
           <path
             d={roundedRectPath(r)}
-            fill={col}
-            fillOpacity={selected ? 0.1 : 0.001}
+            // No near-invisible fill when unselected (hit testing is done in JS; the SVG has
+            // pointer-events: none): a filled path of tens of thousands of screen px is painted
+            // for nothing on every zoom frame.
+            fill={selected ? col : 'none'}
+            fillOpacity={0.1}
             stroke={col}
             strokeLinecap="round"
-            style={{ strokeWidth: px(2.25), strokeDasharray: `${px(9)} ${px(6)}` }}
+            style={{ strokeWidth: px(2.25), strokeDasharray: dash(9, 6) }}
           />
           {leader && <line x1={leader[0].x} y1={leader[0].y} x2={leader[1].x} y2={leader[1].y} stroke={col} style={{ strokeWidth: px(1.25) }} />}
           <g data-testid="link-head">
             <circle cx={head.x} cy={head.y} r={hr} fill="#fff" stroke={col} style={{ strokeWidth: px(1.5) }} />
             <line x1={head.x - hr} y1={head.y} x2={head.x + hr} y2={head.y} stroke={col} style={{ strokeWidth: px(1.1) }} />
-            <text x={head.x} y={head.y - hr * 0.2} textAnchor="middle" fill="#111827" fontSize={nameFs} fontWeight={600} style={{ fontFamily: FONT, unicodeBidi: 'plaintext' }} data-testid="link-name">
+            <text x={head.x} y={head.y - hr * 0.2} textAnchor="middle" fill="#111827" fontSize={nameFs} fontWeight={600} style={{ fontFamily: FONT, unicodeBidi: 'plaintext', ...PAGE_TEXT }} data-testid="link-name">
               {name || '?'}
             </text>
-            <text x={head.x} y={head.y + hr * 0.58} textAnchor="middle" fill={t ? '#334155' : WARN} fontSize={hr * 0.46} style={{ fontFamily: FONT, unicodeBidi: 'plaintext' }} data-testid="link-badge">
+            <text x={head.x} y={head.y + hr * 0.58} textAnchor="middle" fill={t ? '#334155' : WARN} fontSize={hr * 0.46} style={{ fontFamily: FONT, unicodeBidi: 'plaintext', ...PAGE_TEXT }} data-testid="link-badge">
               {t ? `עמ׳ ${t}` : 'ללא יעד'}
             </text>
           </g>
@@ -529,7 +553,7 @@ const MarkupShape = memo(function MarkupShape({ m, selected }: { m: AreaMeasurem
               fill="#111827"
               fontSize={hr * 0.62}
               fontWeight={600}
-              style={{ fontFamily: FONT, direction: 'ltr', unicodeBidi: 'plaintext' }}
+              style={{ fontFamily: FONT, direction: 'ltr', unicodeBidi: 'plaintext', ...PAGE_TEXT }}
               data-testid="link-ref"
             >
               {ref}
