@@ -15,7 +15,12 @@
  *   is per-origin and can be cleared, this file survives (also uninstall +
  *   reinstall: deleteAppDataOnUninstall is false, so it is asked once per Windows user).
  *
- * Auto-update is intentionally not implemented yet (new versions: run the new installer).
+ * - Web-content updates (updater.cjs): the app checks the site's app-version.json at most
+ *   once a week (re-evaluated at startup and every 6 hours) or on demand ("בדוק עדכונים"),
+ *   downloads a new web build into userData/web/<buildId>/ and serves it after a window
+ *   reload / the next launch. Changes to THIS file / preload.cjs still need a new installer.
+ *   PDF_VIEWER_UPDATE_URL overrides the site; PDF_VIEWER_NO_AUTO_UPDATE=1 (and smoke-test
+ *   captures) disable the automatic checks.
  */
 'use strict';
 
@@ -24,6 +29,7 @@ const { execFile } = require('node:child_process');
 const fs = require('node:fs');
 const path = require('node:path');
 const { pathToFileURL } = require('node:url');
+const { createUpdater, RECHECK_EVERY_MS } = require('./updater.cjs');
 
 const SCHEME = 'app';
 const HOST = 'pdf-viewer';
@@ -34,6 +40,9 @@ const BG = '#0f172a';
 const WEB_ROOT = path.join(__dirname, 'web-dist');
 const ICON = path.join(__dirname, 'build', process.platform === 'win32' ? 'icon.ico' : 'icon.png');
 const MAX_PDF_BYTES = 2 * 1024 * 1024 * 1024; // refuse absurd sizes instead of crashing on readFile
+const UPDATE_BASE_URL = (process.env.PDF_VIEWER_UPDATE_URL || 'https://pdf-viewer-lemon.vercel.app').replace(/\/+$/, '');
+/** First automatic update check after startup (the weekly rule decides whether it hits the network). */
+const FIRST_UPDATE_CHECK_MS = 20 * 1000;
 
 app.setName('PDF Viewer');
 if (process.platform === 'win32') app.setAppUserModelId('com.ygilbi.pdfviewer');
@@ -207,6 +216,55 @@ function writePrefs(prefs) {
   fs.renameSync(tmp, file); // atomic replace: never a half-written prefs.json
 }
 
+// ---------------------------------------------------------------- web-content updates
+
+/** Root the app:// handler serves from: bundled web-dist or a downloaded build (updater.cjs). */
+let webRoot = WEB_ROOT;
+/** @type {ReturnType<typeof createUpdater> | null} */
+let updater = null;
+
+function initUpdater() {
+  try {
+    updater = createUpdater({
+      userDataDir: app.getPath('userData'),
+      bundledRoot: WEB_ROOT,
+      appVersion: app.getVersion(),
+      baseUrl: UPDATE_BASE_URL,
+      fetch: (url, init) => net.fetch(url, init),
+      log: (...a) => {
+        if (process.env.PDF_VIEWER_DEBUG) console.log(...a);
+      },
+    });
+    webRoot = updater.resolveServeRoot();
+  } catch (err) {
+    console.error('[desktop] updater unavailable', err);
+    updater = null;
+    webRoot = WEB_ROOT;
+  }
+}
+
+function notifyUpdateReady() {
+  if (updater && win && !win.isDestroyed()) win.webContents.send('pdf:update-ready', updater.status());
+}
+
+async function runUpdateCheck(force) {
+  if (!updater) return { status: 'error', error: 'updater unavailable' };
+  try {
+    const r = await updater.check({ force });
+    if (r.status === 'downloaded' || r.status === 'pending') notifyUpdateReady();
+    if (r.status === 'incompatible') return { ...r, downloadUrl: `${UPDATE_BASE_URL}/download` };
+    return r;
+  } catch (err) {
+    return { status: 'error', error: String(err) };
+  }
+}
+
+function scheduleUpdateChecks() {
+  if (!updater || process.env.PDF_VIEWER_CAPTURE || process.env.PDF_VIEWER_NO_AUTO_UPDATE === '1') return;
+  setTimeout(() => void runUpdateCheck(false), FIRST_UPDATE_CHECK_MS);
+  setInterval(() => void runUpdateCheck(false), RECHECK_EVERY_MS);
+}
+
 // ---------------------------------------------------------------- app:// protocol
 
 function registerProtocol() {
@@ -222,8 +280,9 @@ function registerProtocol() {
     if (rel === '/' || rel === '') rel = '/index.html';
     // The desktop app never uses the PWA service worker (or its PowerShell icon tool).
     if (rel === '/sw.js' || rel.startsWith('/tools/')) return new Response('Not found', { status: 404 });
-    const file = path.normalize(path.join(WEB_ROOT, rel));
-    if (file !== WEB_ROOT && !file.startsWith(WEB_ROOT + path.sep)) return new Response('Forbidden', { status: 403 });
+    const root = webRoot;
+    const file = path.normalize(path.join(root, rel));
+    if (file !== root && !file.startsWith(root + path.sep)) return new Response('Forbidden', { status: 403 });
     try {
       if (!(await fs.promises.stat(file)).isFile()) throw new Error('not a file');
     } catch {
@@ -345,6 +404,25 @@ ipcMain.handle('pdf:set-pref', (e, key, value) => {
   prefs[key] = JSON.parse(json);
   writePrefs(prefs);
 });
+ipcMain.handle('pdf:update-check', (e) => {
+  if (!fromApp(e)) throw new Error('not allowed');
+  return runUpdateCheck(true);
+});
+ipcMain.handle('pdf:update-state', (e) => {
+  if (!fromApp(e)) throw new Error('not allowed');
+  return updater ? updater.status() : { active: null, pending: null, lastCheck: null };
+});
+ipcMain.handle('pdf:update-apply', (e) => {
+  if (!fromApp(e) || !updater) return false;
+  const root = updater.applyPending();
+  if (!root) return false;
+  webRoot = root;
+  // Reload after replying so the renderer's promise settles first.
+  setTimeout(() => {
+    if (win && !win.isDestroyed()) win.webContents.reloadIgnoringCache();
+  }, 50);
+  return true;
+});
 ipcMain.handle('pdf:open-default-apps', async () => {
   if (process.platform !== 'win32') return;
   await shell.openExternal(DEFAULT_APPS_URI);
@@ -400,8 +478,10 @@ Menu.setApplicationMenu(null);
 nativeTheme.themeSource = 'dark';
 
 app.whenReady().then(() => {
+  initUpdater();
   registerProtocol();
   createWindow();
+  scheduleUpdateChecks();
   if (process.env.PDF_VIEWER_CAPTURE) captureForTest(process.env.PDF_VIEWER_CAPTURE);
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();

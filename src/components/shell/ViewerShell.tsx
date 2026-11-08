@@ -96,12 +96,16 @@ export function ViewerShell({ onOpenFile }: { onOpenFile(file: File): void }) {
 export function ErrorToast() {
   const error = useViewer((s) => s.error);
   const setError = useViewer((s) => s.setError);
+  const hasDocs = useViewer((s) => s.docs.length > 0);
   if (!error) return null;
   return (
     <div
       role="alert"
       data-testid="error-toast"
-      className="absolute left-1/2 top-14 z-50 flex w-max max-w-[calc(100vw-2rem)] -translate-x-1/2 items-center gap-2 rounded-md border border-red-800 bg-red-950/90 px-3 py-2 text-sm text-red-200 shadow-xl backdrop-blur"
+      className={
+        (hasDocs ? 'top-[5.5rem] ' : 'top-14 ') +
+        'absolute left-1/2 z-50 flex w-max max-w-[calc(100vw-2rem)] -translate-x-1/2 items-center gap-2 rounded-md border border-red-800 bg-red-950/90 px-3 py-2 text-sm text-red-200 shadow-xl backdrop-blur'
+      }
     >
       <IconAlert className="shrink-0 text-red-400" />
       <span className="flex-1">{error}</span>

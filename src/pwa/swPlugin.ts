@@ -15,7 +15,7 @@ import { SW_SOURCE } from './swTemplate';
 const LAZY_DATA_RE = /[\\/](cmaps|standard_fonts)[\\/]|\.(bcmap|pfb|ttf)(\?|$)/;
 
 /** Static files from public/ that belong to the app shell. */
-const PUBLIC_SHELL = [
+export const PUBLIC_SHELL = [
   'manifest.webmanifest',
   'icons/favicon.ico',
   'icons/favicon-32.png',
@@ -24,7 +24,6 @@ const PUBLIC_SHELL = [
   'icons/maskable-192.png',
   'icons/maskable-512.png',
   'icons/apple-touch-icon.png',
-  'icons/logo-mark-white.png',
   'icons/logo-mark-white.png',
   'icons/file-pdf-32.png',
   'icons/file-pdf-48.png',
@@ -76,7 +75,8 @@ export function serviceWorkerPlugin(): Plugin {
       }
       all.sort();
       precache.sort();
-      const shell = ['index.html', ...PUBLIC_SHELL, ...precache];
+      // Deduplicated: Cache.addAll() rejects duplicate requests, which fails the whole SW install.
+      const shell = [...new Set(['index.html', ...PUBLIC_SHELL, ...precache])];
       const version = fnv1a(all.join('\n') + '\n' + shell.join('\n'));
       const source = SW_SOURCE.replace('__SW_VERSION__', () => JSON.stringify(version))
         .replace('__SW_PRECACHE__', () => JSON.stringify(shell))

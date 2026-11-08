@@ -13,8 +13,9 @@ import { MEASUREMENT_COLORS, newId } from '../core/measurementEngine';
 import { setPendingFocus, zoomToRect } from '../components/viewer/commands';
 import { DEFAULT_SEARCH_OPTIONS, buildMatcher, findInItems, type SearchOptions, type TextMatch } from './textSearch';
 import { rectCenter } from './textGeometry';
+import { pagesForScope, type SearchScope } from './searchScope';
 
-export type SearchScope = 'page' | 'all';
+export type { SearchScope } from './searchScope';
 
 /** Max results kept (the list and highlights stay light even for "e" on 40 pages). */
 export const MAX_RESULTS = 5000;
@@ -34,6 +35,9 @@ interface SearchState {
   done: number;
   total: number;
   truncated: boolean;
+  /** Global pages scanned by the current run / pages that had any text runs (for the "no text layer" note). */
+  scanned: ReadonlySet<number>;
+  pagesWithText: ReadonlySet<number>;
   error: string | null;
   activeIndex: number;
   setOpen(open: boolean): void;
@@ -59,6 +63,8 @@ export const useSearch = create<SearchState>((set, get) => ({
   done: 0,
   total: 0,
   truncated: false,
+  scanned: new Set<number>(),
+  pagesWithText: new Set<number>(),
   error: null,
   activeIndex: -1,
 
@@ -72,7 +78,18 @@ export const useSearch = create<SearchState>((set, get) => ({
   },
   clear: () => {
     runSeq++;
-    set({ results: [], ranQuery: null, running: false, done: 0, total: 0, error: null, activeIndex: -1, truncated: false });
+    set({
+      results: [],
+      ranQuery: null,
+      running: false,
+      done: 0,
+      total: 0,
+      error: null,
+      activeIndex: -1,
+      truncated: false,
+      scanned: new Set(),
+      pagesWithText: new Set(),
+    });
   },
 
   run: async (query) => {
@@ -93,12 +110,22 @@ export const useSearch = create<SearchState>((set, get) => ({
     const v = useViewer.getState();
     if (v.numPages === 0) return;
     const seq = ++runSeq;
-    // Current page first, then the rest in order.
-    const pages =
-      scope === 'page'
-        ? [v.currentPage]
-        : [v.currentPage, ...Array.from({ length: v.numPages }, (_, i) => i + 1).filter((p) => p !== v.currentPage)];
-    set({ ranQuery: q, results: [], running: true, done: 0, total: pages.length, error: null, activeIndex: -1, truncated: false });
+    // Current page first, then the rest (of the current file / of all files) in order.
+    const pages = pagesForScope(scope, v.docs, v.currentPage, v.numPages);
+    const scanned = new Set<number>();
+    const pagesWithText = new Set<number>();
+    set({
+      ranQuery: q,
+      results: [],
+      running: true,
+      done: 0,
+      total: pages.length,
+      error: null,
+      activeIndex: -1,
+      truncated: false,
+      scanned,
+      pagesWithText,
+    });
 
     const byPage = new Map<number, TextMatch[]>();
     let next = 0;
@@ -110,7 +137,7 @@ export const useSearch = create<SearchState>((set, get) => ({
       publishScheduled = false;
       if (seq !== runSeq) return;
       const results = [...byPage.keys()].sort((a, b) => a - b).flatMap((p) => byPage.get(p)!);
-      set({ results, done, truncated });
+      set({ results, done, truncated, scanned: new Set(scanned), pagesWithText: new Set(pagesWithText) });
     };
     const schedule = () => {
       if (publishScheduled) return;
@@ -123,6 +150,8 @@ export const useSearch = create<SearchState>((set, get) => ({
         try {
           const items = await getPageText(page).catch(() => getPageText(page)); // one retry (worker → main fallback)
           if (seq !== runSeq) return;
+          scanned.add(page);
+          if (items.length) pagesWithText.add(page);
           const m = findInItems(items, page, re!, MAX_RESULTS - count);
           count += m.length;
           if (count >= MAX_RESULTS) truncated = true;
