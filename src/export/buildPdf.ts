@@ -48,9 +48,10 @@ import {
   cloudPath,
   linkHeadCenter,
   linkHeadRadius,
+  dashedPolylinePath,
   linkLeader,
   markupBounds,
-  roundedRectPath,
+  roundedRectOutline,
   shapePath,
   notePinPath,
   polylinePath,
@@ -274,7 +275,7 @@ function drawMarkup(c: Ctx, m: AreaMeasurement, noteNo: number | undefined) {
       const hr = linkHeadRadius(m) * c.sx;
       const head = linkHeadCenter(pts, hr);
       const lc = m.targetPage ? col : hexColor('#d97706');
-      path(c, roundedRectPath(r), { stroke: lc, width: 1.6 * c.s, dash: [6 * c.s, 4 * c.s], round: true });
+      path(c, dashedPolylinePath(roundedRectOutline(r), hr * 0.42, hr * 0.28), { stroke: lc, width: 1.6 * c.s, round: true });
       const leader = linkLeader(r, head, hr);
       if (leader) path(c, `M${f(leader[0].x)} ${f(leader[0].y)}L${f(leader[1].x)} ${f(leader[1].y)}`, { stroke: lc, width: 0.9 * c.s });
       path(c, circleD(head.x, head.y, hr), { fill: WHITE, stroke: lc, width: 1 * c.s });

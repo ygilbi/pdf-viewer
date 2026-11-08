@@ -104,6 +104,9 @@ function LinkEditor({ m }: { m: AreaMeasurement }) {
 
   const close = () => {
     if (useMarkup.getState().editingId === id) useMarkup.getState().stopEditing();
+    // Don't leave the link selected (handles + fill) after editing — on iPhone the selected callout
+    // was the state in which pinch-zoom crashed the tab.
+    if (useViewer.getState().selectedId === id) useViewer.getState().select(null);
   };
   const save = () => {
     if (!valid || done.current) return;

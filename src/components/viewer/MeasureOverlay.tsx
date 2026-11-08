@@ -9,7 +9,9 @@ import {
   isBoxShape,
   linkHeadCenter,
   linkHeadRadius,
+  dashedPolylinePath,
   linkLeader,
+  roundedRectOutline,
   roundedRectPath,
   shapePath,
   markupBounds,
@@ -522,16 +524,14 @@ const MarkupShape = memo(function MarkupShape({ m, selected }: { m: AreaMeasurem
       const nameFs = hr * (name.length > 3 ? 0.55 : 0.72);
       return g(
         <>
+          {/* Bubble: dashes are explicit segments (no stroke-dasharray, see dashedPolylinePath). */}
+          {selected && <path d={roundedRectPath(r)} fill={col} fillOpacity={0.1} stroke="none" />}
           <path
-            d={roundedRectPath(r)}
-            // No near-invisible fill when unselected (hit testing is done in JS; the SVG has
-            // pointer-events: none): a filled path of tens of thousands of screen px is painted
-            // for nothing on every zoom frame.
-            fill={selected ? col : 'none'}
-            fillOpacity={0.1}
+            d={dashedPolylinePath(roundedRectOutline(r), hr * 0.42, hr * 0.28)}
+            fill="none"
             stroke={col}
             strokeLinecap="round"
-            style={{ strokeWidth: px(2.25), strokeDasharray: dash(9, 6) }}
+            style={{ strokeWidth: px(2.25) }}
           />
           {leader && <line x1={leader[0].x} y1={leader[0].y} x2={leader[1].x} y2={leader[1].y} stroke={col} style={{ strokeWidth: px(1.25) }} />}
           <g data-testid="link-head">

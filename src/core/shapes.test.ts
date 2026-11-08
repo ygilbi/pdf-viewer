@@ -63,3 +63,18 @@ describe('link callout', () => {
     expect(defaultLinkHeadRadius(1684, 1191)).toBeCloseTo(33, 0);
   });
 });
+
+import { dashedPolylinePath, roundedRectOutline } from './markupGeometry';
+describe('explicit dashes (no stroke-dasharray)', () => {
+  it('alternates dashes along a closed rounded outline and caps the count', () => {
+    const o = roundedRectOutline({ x: 0, y: 0, width: 100, height: 50 }, 10);
+    expect(o[0]).toEqual(o[o.length - 1]);
+    const d = dashedPolylinePath(o, 6, 4);
+    const dashes = (d.match(/M/g) ?? []).length;
+    expect(dashes).toBeGreaterThan(20);
+    expect(dashes).toBeLessThan(40);
+    const many = dashedPolylinePath([{ x: 0, y: 0 }, { x: 1e6, y: 0 }], 1, 1, 400);
+    expect((many.match(/M/g) ?? []).length).toBeLessThanOrEqual(401);
+    expect(/NaN|Infinity/.test(d + many)).toBe(false);
+  });
+});

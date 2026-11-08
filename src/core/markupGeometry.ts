@@ -129,6 +129,62 @@ export function roundedRectPath(r: Rect, rad: number = bubbleRadius(r)): string 
   );
 }
 
+/** Points along a rounded rectangle's outline (closed; corners sampled as arcs). */
+export function roundedRectOutline(r: Rect, rad: number = bubbleRadius(r), arcSteps = 8): Point[] {
+  const { x, y, width: w, height: h } = r;
+  const q = Math.max(0, Math.min(rad, w / 2, h / 2));
+  const out: Point[] = [];
+  const arc = (cx: number, cy: number, a0: number) => {
+    for (let i = 0; i <= arcSteps; i++) {
+      const a = a0 + (i / arcSteps) * (Math.PI / 2);
+      out.push({ x: cx + q * Math.cos(a), y: cy + q * Math.sin(a) });
+    }
+  };
+  arc(x + w - q, y + q, -Math.PI / 2); // top-right
+  arc(x + w - q, y + h - q, 0); // bottom-right
+  arc(x + q, y + h - q, Math.PI / 2); // bottom-left
+  arc(x + q, y + q, Math.PI); // top-left
+  out.push(out[0]);
+  return out;
+}
+
+/**
+ * A dashed outline as explicit "M…L…" dash segments (page units), so renderers never use
+ * stroke-dasharray — WebKit's dasher has known memory / crash bugs with scaled SVG paths.
+ * Dashes scale with the drawing (CAD-like). At most `maxDashes` dashes (longer dashes beyond that).
+ */
+export function dashedPolylinePath(pts: Point[], dash: number, gap: number, maxDashes = 400): string {
+  let total = 0;
+  for (let i = 1; i < pts.length; i++) total += Math.hypot(pts[i].x - pts[i - 1].x, pts[i].y - pts[i - 1].y);
+  if (!(total > 0) || !(dash > 0)) return polylinePath(pts);
+  const k = Math.max(1, (total / (dash + Math.max(0, gap))) / maxDashes);
+  const D = dash * k, G = Math.max(0, gap) * k;
+  let d = '';
+  let pos = 0; // distance along the current pattern period
+  let on = true;
+  let left = D;
+  for (let i = 1; i < pts.length; i++) {
+    const a = pts[i - 1], b = pts[i];
+    const len = Math.hypot(b.x - a.x, b.y - a.y);
+    let t = 0;
+    while (t < len) {
+      const step = Math.min(left, len - t);
+      const p0 = { x: a.x + ((b.x - a.x) * t) / len, y: a.y + ((b.y - a.y) * t) / len };
+      const p1 = { x: a.x + ((b.x - a.x) * (t + step)) / len, y: a.y + ((b.y - a.y) * (t + step)) / len };
+      if (on) d += (pos === 0 ? `M${f(p0.x)} ${f(p0.y)}` : '') + `L${f(p1.x)} ${f(p1.y)}`;
+      t += step;
+      pos += step;
+      left -= step;
+      if (left <= 1e-9) {
+        on = !on;
+        left = on ? D : G;
+        pos = 0;
+      }
+    }
+  }
+  return d;
+}
+
 /**
  * Leader line from the bubble to the head: starts on the bubble's rounded corner (or edge) closest
  * to the head and stops at the head circle's edge. `headR` in page units.
