@@ -33,6 +33,7 @@ import { LINK_COLOR, MeasureOverlay, OVERLAY_WARN_COLOR } from './viewer/Measure
 import { emitZoom, registerViewer, takePendingFocus } from './viewer/commands';
 import { TextHighlights } from './text/TextHighlights';
 import { MarkupEditor, NoteBubbles } from './viewer/MarkupHtml';
+import { createWheelPager } from './viewer/wheelPager';
 import { useMarkup } from '../state/markupStore';
 import {
   DEFAULT_STROKE_WIDTH,
@@ -1292,6 +1293,7 @@ export default function ViewerCanvas() {
     // Wheel MUST be non-passive: preventDefault() is the only way to stop the
     // browser from scrolling the page / applying its own pinch-zoom (ctrl+wheel)
     // while we zoom the drawing. All other listeners stay passive.
+    const wheelPager = createWheelPager();
     const onWheel = (e: WheelEvent) => {
       if (st().numPages === 0) return;
       e.preventDefault();
@@ -1311,8 +1313,14 @@ export default function ViewerCanvas() {
       } else if (e.shiftKey) {
         vp.panBy(-(dx || dy), 0);
       } else {
-        if (dy) vp.zoomSmooth(Math.exp(-Math.max(-300, Math.min(300, dy)) * 0.0025), q.x, q.y);
-        if (dx) vp.panBy(-dx, 0);
+        // Plain wheel turns pages: one page per scroll gesture (down = next, up = previous).
+        // Ctrl+wheel / pinch zooms (above); Shift+wheel or a sideways swipe pans.
+        if (dx && Math.abs(dx) > Math.abs(dy)) {
+          vp.panBy(-dx, 0);
+          return;
+        }
+        const step = wheelPager.push(dy, performance.now());
+        if (step) st().setPage(st().currentPage + step);
       }
     };
 
