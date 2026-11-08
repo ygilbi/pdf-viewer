@@ -1,3 +1,4 @@
+import './diag/boot'; // crash reporter: must stay the first import
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 import App from './App';
