@@ -2,8 +2,9 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useViewer } from '../../state/store';
 import { MAX_RESULTS, countMatchesAsItems, useSearch } from '../../text/searchStore';
 import { usePageTextInfo } from '../../text/pageTextInfo';
+import { docsWithoutText, groupResultsByDoc, type SearchScope } from '../../text/searchScope';
 import type { TextMatch } from '../../text/textSearch';
-import { IconX } from '../ui/icons';
+import { IconFilePdf, IconX } from '../ui/icons';
 import { isTypingTarget } from '../ui/util';
 
 export const IconSearch = ({ size = 16 }: { size?: number }) => (
@@ -12,6 +13,17 @@ export const IconSearch = ({ size = 16 }: { size?: number }) => (
     <path d="m20 20-3.5-3.5" />
   </svg>
 );
+
+/** The search box in the file tab bar (Ctrl+F focuses it). */
+export const TABBAR_SEARCH_SELECTOR = '[data-testid="tabbar-search"]';
+
+/** Focuses the tab bar's "search in files" box; falls back to the panel. */
+export function focusTabbarSearch(): void {
+  const el = document.querySelector<HTMLInputElement>(TABBAR_SEARCH_SELECTOR);
+  if (!el || el.offsetParent === null) return openSearch();
+  el.focus();
+  el.select();
+}
 
 /** Opens the search panel and focuses its input (F3 / Ctrl+F / menu). */
 export function openSearch(): void {
@@ -31,7 +43,13 @@ function useSearchKeys() {
       const isF3 = e.key === 'F3';
       const isCtrlF = (e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && e.code === 'KeyF';
       if (!isF3 && !isCtrlF) return;
-      if (isCtrlF && isTypingTarget(e.target) && !(e.target as HTMLElement).closest('[data-testid="search-panel"]')) return;
+      if (
+        isCtrlF &&
+        isTypingTarget(e.target) &&
+        !(e.target as HTMLElement).closest('[data-testid="search-panel"]') &&
+        !(e.target as HTMLElement).matches(TABBAR_SEARCH_SELECTOR)
+      )
+        return;
       e.preventDefault();
       e.stopPropagation();
       const s = useSearch.getState();
@@ -40,7 +58,8 @@ function useSearchKeys() {
         s.goTo(((s.activeIndex < 0 ? (e.shiftKey ? 0 : -1) : s.activeIndex) + (e.shiftKey ? -1 : 1) + n) % n);
         return;
       }
-      openSearch();
+      if (isCtrlF) focusTabbarSearch();
+      else openSearch();
     };
     window.addEventListener('keydown', onKey, true);
     return () => window.removeEventListener('keydown', onKey, true);
@@ -85,12 +104,11 @@ function Highlighted({ m }: { m: TextMatch }) {
 export function SearchPanel() {
   useSearchKeys();
   const open = useSearch((s) => s.open);
-  const docs = useViewer((s) => s.docs);
-
-  // A changed workspace invalidates page numbers of results.
+  // A changed workspace (file added/removed/reordered) invalidates page numbers of results.
+  const layoutKey = useViewer((s) => s.docs.map((d) => `${d.id}:${d.pageOffset}:${d.numPages}`).join('|'));
   useEffect(() => {
     useSearch.getState().clear();
-  }, [docs]);
+  }, [layoutKey]);
 
   if (!open) return null;
   return <SearchPanelBody />;
@@ -100,21 +118,32 @@ function SearchPanelBody() {
   const s = useSearch();
   const currentPage = useViewer((v) => v.currentPage);
   const numPages = useViewer((v) => v.numPages);
+  const docs = useViewer((v) => v.docs);
+  const multi = docs.length > 1;
+  const curDoc = docs.find((d) => currentPage > d.pageOffset && currentPage <= d.pageOffset + d.numPages);
   const activeCat = useViewer((v) => v.categories.find((c) => c.id === v.activeCategoryId));
   const info = usePageTextInfo(currentPage);
   const [notice, setNotice] = useState<string | null>(null);
   const listRef = useRef<HTMLDivElement>(null);
 
   const pagesWithHits = useMemo(() => new Set(s.results.map((r) => r.page)).size, [s.results]);
-  const grouped = useMemo(() => {
-    const out: { page: number; items: { m: TextMatch; i: number }[] }[] = [];
-    s.results.forEach((m, i) => {
-      const last = out[out.length - 1];
-      if (last && last.page === m.page) last.items.push({ m, i });
-      else out.push({ page: m.page, items: [{ m, i }] });
-    });
-    return out;
-  }, [s.results]);
+  const grouped = useMemo(() => groupResultsByDoc(s.results, docs), [s.results, docs]);
+  const noText = useMemo(
+    () => (s.running || s.scope === 'page' ? [] : docsWithoutText(docs, s.scanned, s.pagesWithText)),
+    [docs, s.scanned, s.pagesWithText, s.running, s.scope],
+  );
+  const scopes: { id: SearchScope; label: string; title: string }[] = multi
+    ? [
+        { id: 'page', label: 'דף נוכחי', title: `דף ${currentPage}` },
+        { id: 'doc', label: 'קובץ נוכחי', title: curDoc ? `${curDoc.name} (${curDoc.numPages} דפים)` : '' },
+        { id: 'all', label: `כל הקבצים (${docs.length})`, title: `${docs.length} קבצים, ${numPages} דפים` },
+      ]
+    : [
+        { id: 'page', label: 'דף נוכחי', title: `דף ${currentPage}` },
+        { id: 'all', label: `כל הדפים (${numPages})`, title: `${numPages} דפים` },
+      ];
+  // Single file: "current file" is the same as all pages.
+  const shownScope: SearchScope = !multi && s.scope === 'doc' ? 'all' : s.scope;
 
   // Keep the active result in view.
   useEffect(() => {
@@ -205,17 +234,18 @@ function SearchPanelBody() {
           </Toggle>
           <span className="flex-1" />
           <div className="flex overflow-hidden rounded border border-slate-600 text-[11px]" role="radiogroup" aria-label="היקף החיפוש">
-            {(['page', 'all'] as const).map((sc) => (
+            {scopes.map((sc) => (
               <button
-                key={sc}
+                key={sc.id}
                 type="button"
                 role="radio"
-                aria-checked={s.scope === sc}
-                data-testid={`scope-${sc}`}
-                onClick={() => s.setScope(sc)}
-                className={'h-7 px-2 ' + (s.scope === sc ? 'bg-slate-600 text-white' : 'text-slate-400 hover:bg-slate-700')}
+                aria-checked={shownScope === sc.id}
+                data-testid={`scope-${sc.id}`}
+                title={sc.title}
+                onClick={() => s.setScope(sc.id)}
+                className={'h-7 whitespace-nowrap px-1.5 ' + (shownScope === sc.id ? 'bg-slate-600 text-white' : 'text-slate-400 hover:bg-slate-700')}
               >
-                {sc === 'page' ? 'דף נוכחי' : `כל הדפים (${numPages})`}
+                {sc.label}
               </button>
             ))}
           </div>
@@ -227,10 +257,11 @@ function SearchPanelBody() {
             <span>
               {s.results.length}
               {s.truncated ? '+' : ''} תוצאות{pagesWithHits > 1 ? ` ב‑${pagesWithHits} דפים` : ''}
+              {multi && grouped.length > 1 ? ` · ${grouped.length} קבצים` : ''}
             </span>
             {s.running && (
               <>
-                <span className="text-sky-300">
+                <span className="text-sky-300" data-testid="search-progress">
                   סורק {s.done}/{s.total}…
                 </span>
                 <button type="button" className="text-slate-400 underline hover:text-white" onClick={() => s.cancel()}>
@@ -243,6 +274,18 @@ function SearchPanelBody() {
         )}
         {s.ranQuery !== null && !s.running && s.results.length === 0 && !s.error && s.scope === 'page' && info.status === 'ready' && info.runs === 0 && (
           <div className="text-xs text-amber-300">אין בדף טקסט שניתן לחפש (שרטוט סרוק או טקסט כקווים).</div>
+        )}
+        {noText.length > 0 && (
+          <div className="space-y-0.5 text-[11px] text-amber-300" data-testid="search-no-text">
+            {noText.map((d) => (
+              <div key={d.id} className="flex gap-1">
+                <span className="min-w-0 truncate" dir="auto" title={d.name}>
+                  {multi ? d.name : 'בקובץ'}
+                </span>
+                <span className="shrink-0">— אין שכבת טקסט (סרוק?), לא ניתן לחפש בו.</span>
+              </div>
+            ))}
+          </div>
         )}
         <button
           type="button"
@@ -263,27 +306,53 @@ function SearchPanelBody() {
       </div>
 
       <div ref={listRef} className="min-h-0 flex-1 overflow-y-auto border-t border-slate-700" data-testid="search-results">
-        {grouped.map((g) => (
-          <div key={g.page}>
-            <div className="sticky top-0 bg-slate-800/95 px-3 py-0.5 text-[11px] text-slate-400">
-              דף {g.page} · {g.items.length}
-            </div>
-            {g.items.slice(0, 300).map(({ m, i }) => (
-              <button
-                key={i}
-                type="button"
-                data-active={i === s.activeIndex ? 'true' : 'false'}
-                data-testid="search-result"
-                onClick={() => s.goTo(i)}
-                className={
-                  'flex w-full items-center gap-2 px-3 py-1 text-start text-xs hover:bg-slate-700/70 ' +
-                  (i === s.activeIndex ? 'bg-sky-900/50 text-white' : 'text-slate-300')
-                }
-              >
-                <Highlighted m={m} />
-              </button>
+        {grouped.map((dg) => (
+          <div key={dg.doc?.id ?? '?'} data-testid="search-doc-group">
+            {multi && dg.doc && (
+              <div className="flex items-center gap-1.5 border-b border-slate-700/70 bg-slate-950/60 px-3 py-1 text-[11px] font-medium text-slate-200">
+                <IconFilePdf size={12} className="shrink-0 text-red-400" />
+                <span className="min-w-0 flex-1 truncate" dir="auto" title={dg.doc.name}>
+                  {dg.doc.name}
+                </span>
+                <span className="shrink-0 tabular-nums text-slate-500">{dg.count}</span>
+              </div>
+            )}
+            {dg.pages.map((g) => (
+              <div key={g.page}>
+                <div className="sticky top-0 flex gap-1 bg-slate-800/95 px-3 py-0.5 text-[11px] text-slate-400" data-testid="search-page-header">
+                  {multi && dg.doc ? (
+                    <>
+                      <span className="min-w-0 truncate" dir="auto">
+                        {dg.doc.name.replace(/\.pdf$/i, '')}
+                      </span>
+                      <span className="shrink-0">
+                        › עמוד {g.localPage} · {g.items.length}
+                      </span>
+                    </>
+                  ) : (
+                    <span>
+                      דף {g.page} · {g.items.length}
+                    </span>
+                  )}
+                </div>
+                {g.items.slice(0, 300).map(({ m, i }) => (
+                  <button
+                    key={i}
+                    type="button"
+                    data-active={i === s.activeIndex ? 'true' : 'false'}
+                    data-testid="search-result"
+                    onClick={() => s.goTo(i)}
+                    className={
+                      'flex w-full items-center gap-2 px-3 py-1 text-start text-xs hover:bg-slate-700/70 ' +
+                      (i === s.activeIndex ? 'bg-sky-900/50 text-white' : 'text-slate-300')
+                    }
+                  >
+                    <Highlighted m={m} />
+                  </button>
+                ))}
+                {g.items.length > 300 && <div className="px-3 py-1 text-[11px] text-slate-500">ועוד {g.items.length - 300} בדף זה…</div>}
+              </div>
             ))}
-            {g.items.length > 300 && <div className="px-3 py-1 text-[11px] text-slate-500">ועוד {g.items.length - 300} בדף זה…</div>}
           </div>
         ))}
 
