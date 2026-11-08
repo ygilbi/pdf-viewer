@@ -260,32 +260,40 @@ function createUpdater(opts) {
     try {
       fs.mkdirSync(tmp, { recursive: true });
       const queue = m.files.slice();
+      let failure = null;
       const worker = async () => {
-        for (let f = queue.shift(); f; f = queue.shift()) {
-          let buf = null;
-          if (typeof m.inline[f.path] === 'string') buf = Buffer.from(m.inline[f.path], 'utf8');
-          else if (local.has(f.sha256)) {
-            try {
-              buf = await fsp.readFile(local.get(f.sha256));
-              if (buf.length !== f.size || sha256(buf) !== f.sha256) buf = null;
-              else copied++;
-            } catch {
-              buf = null;
-            }
-          }
-          if (!buf) {
-            buf = await fetchBytes(fileUrl(f.path));
-            downloaded++;
-          }
-          if (buf.length !== f.size) throw new Error(`size mismatch: ${f.path} (${buf.length} != ${f.size})`);
-          if (sha256(buf) !== f.sha256) throw new Error(`hash mismatch: ${f.path}`);
-          const dest = path.join(tmp, ...f.path.split('/'));
-          if (!dest.startsWith(tmp + path.sep)) throw new Error(`unsafe path: ${f.path}`);
-          await fsp.mkdir(path.dirname(dest), { recursive: true });
-          await fsp.writeFile(dest, buf);
+        try {
+          for (let f = queue.shift(); f && !failure; f = queue.shift()) await fetchOne(f);
+        } catch (err) {
+          failure = failure || err;
         }
       };
+      const fetchOne = async (f) => {
+        let buf = null;
+        if (typeof m.inline[f.path] === 'string') buf = Buffer.from(m.inline[f.path], 'utf8');
+        else if (local.has(f.sha256)) {
+          try {
+            buf = await fsp.readFile(local.get(f.sha256));
+            if (buf.length !== f.size || sha256(buf) !== f.sha256) buf = null;
+            else copied++;
+          } catch {
+            buf = null;
+          }
+        }
+        if (!buf) {
+          buf = await fetchBytes(fileUrl(f.path));
+          downloaded++;
+        }
+        if (buf.length !== f.size) throw new Error(`size mismatch: ${f.path} (${buf.length} != ${f.size})`);
+        if (sha256(buf) !== f.sha256) throw new Error(`hash mismatch: ${f.path}`);
+        const dest = path.join(tmp, ...f.path.split('/'));
+        if (!dest.startsWith(tmp + path.sep)) throw new Error(`unsafe path: ${f.path}`);
+        await fsp.mkdir(path.dirname(dest), { recursive: true });
+        await fsp.writeFile(dest, buf);
+      };
+      // All workers settle before cleanup, so nothing writes into tmp after it is removed.
       await Promise.all(Array.from({ length: CONCURRENCY }, worker));
+      if (failure) throw failure;
       // Completion marker last: a folder without a valid manifest is never served.
       await fsp.writeFile(path.join(tmp, MANIFEST), JSON.stringify(m));
       if (versionInfo(m.buildId)) {
