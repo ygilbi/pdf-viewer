@@ -11,6 +11,18 @@ const listeners = new Set();
 let readySent = false;
 /** Files that arrived while nobody was subscribed (e.g. between React effect re-runs). */
 let held = [];
+/** @type {Set<(state: unknown) => void>} */
+const updateListeners = new Set();
+
+ipcRenderer.on('pdf:update-ready', (_e, state) => {
+  for (const cb of updateListeners) {
+    try {
+      cb(state);
+    } catch (err) {
+      console.error('[desktop] onUpdateReady listener failed', err);
+    }
+  }
+});
 
 ipcRenderer.on('pdf:open-files', (_e, files) => {
   const list = (Array.isArray(files) ? files : []).map((f) => {
@@ -60,4 +72,18 @@ contextBridge.exposeInMainWorld('pdfDesktop', {
   getPref: (key) => ipcRenderer.invoke('pdf:get-pref', String(key)),
   /** Stores a JSON-serialisable preference in userData/prefs.json. */
   setPref: (key, value) => ipcRenderer.invoke('pdf:set-pref', String(key), value),
+  /** Checks the site for a new web build now and downloads it ({status, buildId?, downloadUrl?}). */
+  checkForUpdates: () => ipcRenderer.invoke('pdf:update-check'),
+  /** Reloads the window onto the downloaded build (false when there is none). */
+  applyUpdate: () => ipcRenderer.invoke('pdf:update-apply'),
+  /** {active, pending, lastCheck} */
+  getUpdateState: () => ipcRenderer.invoke('pdf:update-state'),
+  /** Called when a new build was downloaded. Returns unsubscribe. */
+  onUpdateReady(cb) {
+    if (typeof cb !== 'function') return () => {};
+    updateListeners.add(cb);
+    return () => {
+      updateListeners.delete(cb);
+    };
+  },
 });

@@ -27,6 +27,33 @@ export interface PdfDesktopApi {
    */
   getPref?(key: DesktopPrefKey): Promise<unknown>;
   setPref?(key: DesktopPrefKey, value: unknown): Promise<void>;
+  /**
+   * Web-content updates (desktop/updater.cjs). Optional: absent before 0.3.0.
+   * checkForUpdates downloads a new build right away when there is one.
+   */
+  checkForUpdates?(): Promise<DesktopUpdateResult>;
+  /** Reloads the window onto the downloaded build. */
+  applyUpdate?(): Promise<boolean>;
+  getUpdateState?(): Promise<DesktopUpdateState>;
+  /** A new build was downloaded and is ready (applyUpdate, or the next launch, uses it). Returns unsubscribe. */
+  onUpdateReady?(cb: (state: DesktopUpdateState) => void): () => void;
+}
+
+export interface DesktopUpdateState {
+  /** Build being served. */
+  active: string | null;
+  /** Downloaded build waiting for a reload / restart, or null. */
+  pending: string | null;
+  /** ms epoch of the last successful check, or null. */
+  lastCheck: number | null;
+}
+
+export interface DesktopUpdateResult {
+  status: 'up-to-date' | 'downloaded' | 'pending' | 'incompatible' | 'busy' | 'error';
+  buildId?: string;
+  /** status 'incompatible': page with the new installer. */
+  downloadUrl?: string;
+  error?: string;
 }
 
 /** Keys accepted by getPref / setPref (keep in sync with PREF_KEYS in desktop/main.cjs). */

@@ -1,9 +1,10 @@
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 import { serviceWorkerPlugin } from './src/pwa/swPlugin';
+import { appVersionPlugin } from './src/pwa/appVersionPlugin';
 
 export default defineConfig({
-  plugins: [react(), serviceWorkerPlugin()],
+  plugins: [react(), serviceWorkerPlugin(), appVersionPlugin()],
   worker: { format: 'es' },
   // pdf.js CMaps / standard fonts are imported with ?inline (see renderQueue.ts)
   assetsInclude: ['**/*.bcmap', '**/*.pfb'],

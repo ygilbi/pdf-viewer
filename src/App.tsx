@@ -9,11 +9,13 @@ import { formatBytes } from './components/ui/util';
 import { RestoreToast, detachDoc, detachDocument, fingerprintFile, restoreDocument, usePersistence } from './state/persistence';
 import { useFileLaunch } from './pwa/fileHandling';
 import { DefaultAppPrompt } from './pwa/DefaultAppPrompt';
+import { UpdateToast } from './pwa/UpdateToast';
 import { useFileQueue } from './state/fileQueue';
 import { useDesktopFileOpen } from './desktop/bridge';
 import { useAuthGate } from './auth/session';
 import { AuthSplash } from './auth/AuthSplash';
 import { DriveOverlay, useDriveLaunch } from './drive/DriveUi';
+import { FileTabBar, TABBAR_H } from './components/shell/FileTabBar';
 
 function isPdf(file: File) {
   return file.type === 'application/pdf' || /\.pdf$/i.test(file.name);
@@ -213,14 +215,18 @@ function Workspace() {
     <div className="fixed inset-0 overflow-hidden bg-slate-900 text-slate-100 antialiased">
       {hasDoc ? (
         <>
-          <main
-            className="absolute inset-0 overflow-hidden bg-slate-950"
-            aria-label={fileName ?? undefined}
-            data-testid="viewer-main"
-          >
-            <ViewerCanvas />
-          </main>
-          <ViewerShell onOpenFile={openFile} />
+          {/* File tabs on top; the viewer and all its floating chrome live in the region below. */}
+          <FileTabBar />
+          <div className="absolute inset-x-0 bottom-0" style={{ top: TABBAR_H }} data-testid="viewer-region">
+            <main
+              className="absolute inset-0 overflow-hidden bg-slate-950"
+              aria-label={fileName ?? undefined}
+              data-testid="viewer-main"
+            >
+              <ViewerCanvas />
+            </main>
+            <ViewerShell onOpenFile={openFile} />
+          </div>
         </>
       ) : (
         <main className="absolute inset-0">{!loading && <DropZone onFiles={addFiles} />}</main>
@@ -251,6 +257,7 @@ function Workspace() {
       <DriveOverlay />
       <RestoreToast />
       <DefaultAppPrompt />
+      <UpdateToast />
       {hasDoc && <AddProgress />}
 
       {dragging && (

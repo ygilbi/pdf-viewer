@@ -1,7 +1,9 @@
 #!/usr/bin/env node
 /**
  * Builds the web app (repo root) for the desktop shell into desktop/web-dist/.
- * Relative base (`./`) so every asset URL resolves under app://pdf-viewer/.
+ * Base `/` (same as the Vercel build): app://pdf-viewer/ is the origin root, and the
+ * builds the shell downloads from the site (updater.cjs) use `/` too — so a bundled
+ * build and the deployed build of the same commit get the same buildId (no re-download).
  * Uses the root project's own Vite (root `npm ci` must have run); Electron is
  * never installed at the root.
  */
@@ -23,7 +25,7 @@ const run = (args) => {
 };
 // Same type check as the root `npm run build`.
 run([path.join(root, 'node_modules', 'typescript', 'bin', 'tsc'), '-b']);
-run([viteBin, 'build', '--base', './', '--outDir', outDir, '--emptyOutDir']);
+run([viteBin, 'build', '--base', '/', '--outDir', outDir, '--emptyOutDir']);
 
 if (!fs.existsSync(path.join(outDir, 'index.html'))) {
   console.error('[build:web] index.html missing in', outDir);

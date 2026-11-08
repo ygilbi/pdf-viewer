@@ -114,5 +114,9 @@ self.addEventListener('fetch', (event) => {
 
 self.addEventListener('message', (event) => {
   if (event.data === 'SKIP_WAITING') self.skipWaiting();
+  // Update check (src/pwa/updates.ts): is the page's entry script part of this build?
+  else if (event.data && event.data.type === 'GET_VERSION' && event.ports && event.ports[0]) {
+    event.ports[0].postMessage({ version: VERSION, assets: ALL_ASSETS.map(abs) });
+  }
 });
 `;

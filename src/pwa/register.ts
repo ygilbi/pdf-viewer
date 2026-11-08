@@ -3,8 +3,10 @@
  * - starts capturing `beforeinstallprompt` immediately
  * - registers the service worker in production only, top-level window only,
  *   and never inside the Windows desktop app (Electron serves the files itself)
+ * - then keeps looking for new versions (updates.ts → UpdateToast)
  */
 import './installPrompt';
+import { watchServiceWorker } from './updates';
 
 function registerServiceWorker(): void {
   if (!import.meta.env.PROD) return;
@@ -14,7 +16,10 @@ function registerServiceWorker(): void {
     if ((window as { pdfDesktop?: unknown }).pdfDesktop) return; // desktop app (desktop/preload.cjs)
     const url = `${import.meta.env.BASE_URL}sw.js`;
     const register = () => {
-      navigator.serviceWorker.register(url).catch((err) => console.warn('[pwa] SW registration failed', err));
+      navigator.serviceWorker
+        .register(url, { updateViaCache: 'none' })
+        .then(watchServiceWorker)
+        .catch((err) => console.warn('[pwa] SW registration failed', err));
     };
     if (document.readyState === 'complete') register();
     else window.addEventListener('load', register, { once: true });
