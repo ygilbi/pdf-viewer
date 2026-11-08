@@ -898,6 +898,10 @@ export default function ViewerCanvas() {
 
     // ---- pointer events -----------------------------------------------------
     const startPinch = () => {
+      // A focused editor (link / note / text) must not stay focused while the page zooms: on
+      // phones the browser keeps scrolling the focused field into view → heavy layout loops.
+      const ae = document.activeElement;
+      if (ae instanceof HTMLElement && isTypingTarget(ae)) ae.blur();
       const [a, b] = [...pointers.keys()];
       const pa = pointers.get(a)!;
       const pb = pointers.get(b)!;
