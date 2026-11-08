@@ -16,6 +16,7 @@ import { useAuthGate } from './auth/session';
 import { AuthSplash } from './auth/AuthSplash';
 import { DriveOverlay, useDriveLaunch } from './drive/DriveUi';
 import { FileTabBar, TABBAR_H } from './components/shell/FileTabBar';
+import { CrashReportCard } from './diag/CrashReportCard';
 
 function isPdf(file: File) {
   return file.type === 'application/pdf' || /\.pdf$/i.test(file.name);
@@ -258,6 +259,7 @@ function Workspace() {
       <RestoreToast />
       <DefaultAppPrompt />
       <UpdateToast />
+      <CrashReportCard />
       {hasDoc && <AddProgress />}
 
       {dragging && (

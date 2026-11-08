@@ -146,7 +146,10 @@ function LinkEditor({ m }: { m: AreaMeasurement }) {
       className={coarse ? 'fixed inset-x-0 top-24 flex justify-center px-3' : 'absolute'}
       style={
         coarse
-          ? { zIndex: 60, pointerEvents: 'auto' }
+          ? // The full-width centring strip is transparent: it must not swallow touches (a pinch whose
+            // finger landed in it reached the viewer as a 1-finger drag → drew a new link instead of
+            // zooming, and the strip's touch-action:auto let the browser zoom the whole page).
+            { zIndex: 60, pointerEvents: 'none' }
           : {
               left: p.x,
               top: p.y,
@@ -164,7 +167,12 @@ function LinkEditor({ m }: { m: AreaMeasurement }) {
         }
       }}
     >
-      <div dir="rtl" className="w-60 rounded-lg bg-white p-2 shadow-xl ring-1 ring-black/20" style={{ borderTop: '3px solid #0284c7' }}>
+      <div
+        dir="rtl"
+        className="w-60 rounded-lg bg-white p-2 shadow-xl ring-1 ring-black/20"
+        // Phones: only the card itself takes touches, and never as a native page pinch / scroll.
+        style={{ borderTop: '3px solid #0284c7', ...(coarse ? { pointerEvents: 'auto', touchAction: 'none' } : {}) }}
+      >
         <div className="mb-1.5 grid grid-cols-2 gap-1.5">
           <label className="text-[11px] font-semibold text-slate-600">
             שם הקישור

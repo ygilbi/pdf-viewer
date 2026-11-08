@@ -41,16 +41,24 @@ export interface DiagReport {
 /** Server limit (api/_routes/diag/report.ts); the client aims below it. */
 export const REPORT_MAX_BYTES = 200 * 1024;
 export const REPORT_TARGET_BYTES = 180 * 1024;
-const MAX_TEXT = 300;
+const MAX_TEXT = 600;
 const MAX_KEYS = 20;
 
-const FILE_RE = /[^\s/\\"'<>:|*?]+\.(pdf|png|jpe?g|gif|webp|heic|xlsx?|csv|docx?|dwg|dxf|zip|txt)\b/gi;
+const EXT = 'pdf|png|jpe?g|gif|webp|heic|xlsx?|csv|docx?|dwg|dxf|zip|txt';
+/** A quoted name (may contain spaces): "My Plan v2.pdf" */
+const QUOTED_FILE_RE = new RegExp(`(["'“«])[^"'“”«»\\n]{0,200}?\\.(${EXT})(?=["'”»])`, 'gi');
+/** A name with spaces after "הקובץ" / "file", up to its extension. */
+const NAMED_FILE_RE = new RegExp(`(הקובץ\\s|file\\s)[^"'“”«»\\n<]{0,200}?\\.(${EXT})\\b`, 'gi');
+/** Any other name.ext token. Replacements use "<*.ext>", which none of these patterns match again. */
+const FILE_RE = new RegExp(`[^\\s/\\\\"'<>:|*?]+\\.(${EXT})\\b`, 'gi');
 
 /** Remove file names, URL query values and long digit runs; truncate. */
 export function scrubText(input: unknown, max = MAX_TEXT): string {
   let s = typeof input === 'string' ? input : String(input ?? '');
   s = s
-    .replace(FILE_RE, (_m, ext: string) => `<file.${ext.toLowerCase()}>`)
+    .replace(QUOTED_FILE_RE, (_m, pre: string, ext: string) => `${pre}<*.${ext.toLowerCase()}>`)
+    .replace(NAMED_FILE_RE, (_m, pre: string, ext: string) => `${pre}<*.${ext.toLowerCase()}>`)
+    .replace(FILE_RE, (_m, ext: string) => `<*.${ext.toLowerCase()}>`)
     .replace(/blob:[^\s"')]+/g, 'blob:<url>')
     .replace(/([?&#][\w.-]{1,40}=)[^&\s"')#]+/g, '$1…')
     .replace(/[\w.+-]+@[\w-]+\.[\w.-]+/g, '<email>');

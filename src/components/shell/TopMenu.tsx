@@ -31,6 +31,7 @@ import { usePricingUi } from '../../pricing/pricingUi';
 import { DriveOpenButton } from '../../drive/DriveUi';
 import { formatPaper } from '../../text/scaleDetect';
 import { IconSearch, openSearch } from '../text/SearchPanel';
+import { sendManualReport } from '../../diag/diagUi';
 
 function Group({ children, label }: { children: React.ReactNode; label: string }) {
   return (
@@ -365,6 +366,18 @@ export function TopMenu({ onOpenFile }: { onOpenFile(file: File): void }) {
               הורד גרסת Windows
             </a>
           )}
+          <button
+            type="button"
+            data-testid="menu-diag-report"
+            title="שליחת נתונים טכניים על הפעולות האחרונות (ללא תוכן קבצים) כדי שנוכל לאתר תקלה"
+            onClick={() => {
+              setMenuOpen(false);
+              sendManualReport();
+            }}
+            className="flex h-8 items-center whitespace-nowrap rounded px-2 text-xs text-slate-300 hover:bg-slate-700 hover:text-white focus:outline-none focus-visible:ring-1 focus-visible:ring-sky-400"
+          >
+            שלח דוח תקלה
+          </button>
           <InstallButton
             label="התקן"
             className="flex h-8 items-center gap-1.5 rounded px-2 text-xs text-sky-300 hover:bg-slate-700 hover:text-white focus:outline-none focus-visible:ring-1 focus-visible:ring-sky-400"
