@@ -1,4 +1,5 @@
 import { memo, useEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import type { AreaMeasurement } from '../../core/types';
 import { NOTE_PIN } from '../../core/markupGeometry';
 import { useViewer } from '../../state/store';
@@ -11,6 +12,9 @@ import { useMarkup } from '../../state/markupStore';
  *    them imperatively via the `data-hover` attribute — no React render)
  *  - the in-place text editor for note / text annotations.
  */
+
+/** Touch-first device (phone / tablet): the in-place editors behave differently there. */
+const isCoarse = () => typeof matchMedia === 'function' && matchMedia('(pointer: coarse)').matches;
 
 const BUBBLE_GAP = NOTE_PIN.headY + NOTE_PIN.radius + 6;
 
@@ -84,6 +88,8 @@ function LinkEditor({ m }: { m: AreaMeasurement }) {
   const id = m.id;
 
   useEffect(() => {
+    // Phones: no autofocus — the keyboard would pop up over a layer that is being zoomed.
+    if (isCoarse()) return;
     ref.current?.focus({ preventScroll: true });
     ref.current?.select();
   }, []);
@@ -131,18 +137,25 @@ function LinkEditor({ m }: { m: AreaMeasurement }) {
 
   const p = m.points[0];
   if (!p) return null;
-  return (
+  // Phones: a fixed card on top of the screen (portal, outside the zoomed drawing layer), so pinch
+  // zoom never moves or re-lays-out a focused input. Desktop: next to the link, like before.
+  const coarse = isCoarse();
+  const card = (
     <div
       data-viewer-ui
-      className="absolute"
-      style={{
-        left: p.x,
-        top: p.y,
-        transformOrigin: '0 0',
-        transform: 'scale(var(--inv-zoom, 1)) translate(0, calc(-100% - 8px))',
-        pointerEvents: 'auto',
-        zIndex: 45,
-      }}
+      className={coarse ? 'fixed inset-x-0 top-24 flex justify-center px-3' : 'absolute'}
+      style={
+        coarse
+          ? { zIndex: 60, pointerEvents: 'auto' }
+          : {
+              left: p.x,
+              top: p.y,
+              transformOrigin: '0 0',
+              transform: 'scale(var(--inv-zoom, 1)) translate(0, calc(-100% - 8px))',
+              pointerEvents: 'auto',
+              zIndex: 45,
+            }
+      }
       onPointerDown={(e) => e.stopPropagation()}      onBlur={(e) => {
         // Focus left the editor (click on the drawing…): keep a valid page, otherwise drop it.
         if (!e.currentTarget.contains(e.relatedTarget as Node | null)) {
@@ -164,7 +177,7 @@ function LinkEditor({ m }: { m: AreaMeasurement }) {
               data-testid="link-name-input"
               onChange={(e) => setName(e.target.value)}
               onKeyDown={keys}
-              className="mt-0.5 block w-full rounded border border-slate-300 px-1.5 py-1 text-[13px] font-normal text-slate-800 outline-none focus:border-sky-500 focus:ring-2 focus:ring-sky-200"
+              className="mt-0.5 block w-full rounded border border-slate-300 px-1.5 py-1 text-[13px] [@media(pointer:coarse)]:text-base font-normal text-slate-800 outline-none focus:border-sky-500 focus:ring-2 focus:ring-sky-200"
             />
           </label>
           <label className="text-[11px] font-semibold text-slate-600">
@@ -177,7 +190,7 @@ function LinkEditor({ m }: { m: AreaMeasurement }) {
               data-testid="link-ref-input"
               onChange={(e) => setRef2(e.target.value)}
               onKeyDown={keys}
-              className="mt-0.5 block w-full rounded border border-slate-300 px-1.5 py-1 text-[13px] font-normal text-slate-800 outline-none focus:border-sky-500 focus:ring-2 focus:ring-sky-200"
+              className="mt-0.5 block w-full rounded border border-slate-300 px-1.5 py-1 text-[13px] [@media(pointer:coarse)]:text-base font-normal text-slate-800 outline-none focus:border-sky-500 focus:ring-2 focus:ring-sky-200"
             />
           </label>
         </div>
@@ -195,7 +208,7 @@ function LinkEditor({ m }: { m: AreaMeasurement }) {
             data-testid="link-target"
             onChange={(e) => setValue(e.target.value)}
             onKeyDown={keys}
-            className={`w-20 rounded border px-1.5 py-1 text-[13px] text-slate-800 outline-none focus:ring-2 ${valid ? 'border-slate-300 focus:border-sky-500 focus:ring-sky-200' : 'border-rose-400 focus:ring-rose-200'}`}
+            className={`w-20 rounded border px-1.5 py-1 text-[13px] [@media(pointer:coarse)]:text-base text-slate-800 outline-none focus:ring-2 ${valid ? 'border-slate-300 focus:border-sky-500 focus:ring-sky-200' : 'border-rose-400 focus:ring-rose-200'}`}
           />
           <span className="text-[12px] text-slate-500">מתוך {numPages}</span>
         </div>
@@ -224,6 +237,7 @@ function LinkEditor({ m }: { m: AreaMeasurement }) {
       </div>
     </div>
   );
+  return coarse ? createPortal(card, document.body) : card;
 }
 
 /** Floating textarea that edits an annotation's text live (Enter = done, Shift+Enter = new line, Esc = cancel). */
@@ -311,7 +325,7 @@ function TextEditor({ m }: { m: AreaMeasurement }) {
             }
           }}
           onBlur={() => finish(true)}
-          className="block w-60 resize rounded border border-slate-300 px-1.5 py-1 text-[13px] leading-snug text-slate-800 outline-none focus:border-sky-500 focus:ring-2 focus:ring-sky-200"
+          className="block w-60 resize rounded border border-slate-300 px-1.5 py-1 text-[13px] [@media(pointer:coarse)]:text-base leading-snug text-slate-800 outline-none focus:border-sky-500 focus:ring-2 focus:ring-sky-200"
         />
         <div className="mt-1 flex justify-start gap-1">
           <button

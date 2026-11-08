@@ -126,3 +126,10 @@ describe('entryScriptsInBuild', () => {
     expect(entryScriptsInBuild([], assets)).toBe(true);
   });
 });
+
+describe('service worker precache list', () => {
+  it('has no duplicates (Cache.addAll rejects them and the SW never installs)', async () => {
+    const { PUBLIC_SHELL } = await import('./swPlugin');
+    expect(new Set(PUBLIC_SHELL).size).toBe(PUBLIC_SHELL.length);
+  });
+});

@@ -34,6 +34,7 @@ import { emitZoom, registerViewer, takePendingFocus } from './viewer/commands';
 import { TextHighlights } from './text/TextHighlights';
 import { MarkupEditor, NoteBubbles } from './viewer/MarkupHtml';
 import { createWheelPager } from './viewer/wheelPager';
+import { followLink } from '../state/linkHistory';
 import { useMarkup } from '../state/markupStore';
 import {
   DEFAULT_STROKE_WIDTH,
@@ -94,7 +95,7 @@ type Gesture =
   | { kind: 'vertex'; id: number; mid: string; index: number; points: Point[] }
   /** Drag-to-draw markup (rect / cloud / arrow / pen / highlight). */
   /** `anchor` (pen): index where the current Shift-held straight segment starts. */
-  | { kind: 'draw'; id: number; tool: MarkupKind; pts: Point[]; sx: number; sy: number; lx: number; ly: number; anchor?: number; locks?: number[] }
+  | { kind: 'draw'; id: number; tool: MarkupKind; pts: Point[]; sx: number; sy: number; lx: number; ly: number; anchor?: number; locks?: number[]; straight?: boolean; hx?: number; hy?: number }
   /** Dragging a whole markup annotation (pan tool). */
   /** `only`: move just that point (a link's callout head = index 2). */
   | { kind: 'move'; id: number; mid: string; sx: number; sy: number; orig: Point[]; points: Point[]; moved: boolean; only?: number }
@@ -108,6 +109,11 @@ function isTypingTarget(t: EventTarget | null): boolean {
   return el.isContentEditable || el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.tagName === 'SELECT';
 }
 
+/** Pen: hold still this long (ms) within PEN_HOLD_SLOP px to straighten the stroke. */
+const PEN_HOLD_MS = 500;
+const PEN_HOLD_SLOP = 6;
+/** …only once the stroke is at least this long on screen (px). */
+const PEN_HOLD_MIN_LEN = 12;
 const LINE_HIT_PX = 7; // pan-tool hit radius around a length polyline
 
 /** Drawing tool → kind of measurement it creates (null for pan / calibrate). */
@@ -818,7 +824,11 @@ export default function ViewerCanvas() {
       const a = g.pts[0];
       const b = g.pts[g.pts.length - 1];
       let points: Point[];
-      if (g.tool === 'pen') {
+      clearPenHold();
+      if (g.tool === 'pen' && g.straight) {
+        if (distance(a, b) * vp.zoom < MIN_DRAW_PX) return;
+        points = [a, b];
+      } else if (g.tool === 'pen') {
         // Simplify the freehand runs only; Shift-drawn straight segments keep their exact ends.
         const cuts = [...new Set([0, ...(g.locks ?? []), g.pts.length - 1])].sort((x, y) => x - y);
         points = [g.pts[0]];
@@ -888,6 +898,10 @@ export default function ViewerCanvas() {
 
     // ---- pointer events -----------------------------------------------------
     const startPinch = () => {
+      // A focused editor (link / note / text) must not stay focused while the page zooms: on
+      // phones the browser keeps scrolling the focused field into view → heavy layout loops.
+      const ae = document.activeElement;
+      if (ae instanceof HTMLElement && isTypingTarget(ae)) ae.blur();
       const [a, b] = [...pointers.keys()];
       const pa = pointers.get(a)!;
       const pb = pointers.get(b)!;
@@ -899,6 +913,38 @@ export default function ViewerCanvas() {
         mx: (pa.x + pb.x) / 2,
         my: (pa.y + pb.y) / 2,
       };
+    };
+
+    // ---- pen: press and hold still → straight line (QuickShape-style) ----
+    let penHoldTimer = 0;
+    const clearPenHold = () => {
+      if (penHoldTimer) window.clearTimeout(penHoldTimer);
+      penHoldTimer = 0;
+    };
+    /** (Re)start the hold timer unless the pointer stayed within PEN_HOLD_SLOP px of the hold spot. */
+    const armPenHold = (g: Extract<Gesture, { kind: 'draw' }>, x: number, y: number) => {
+      if (g.straight) return;
+      if (penHoldTimer && g.hx !== undefined && Math.hypot(x - g.hx, y - (g.hy ?? y)) <= PEN_HOLD_SLOP) return;
+      clearPenHold();
+      g.hx = x;
+      g.hy = y;
+      penHoldTimer = window.setTimeout(() => {
+        penHoldTimer = 0;
+        if (gesture !== g || g.straight || g.pts.length < 2) return;
+        const a = g.pts[0];
+        const b = g.pts[g.pts.length - 1];
+        if (distance(a, b) * vp.zoom < PEN_HOLD_MIN_LEN) return; // a dot, not a stroke
+        g.straight = true;
+        g.anchor = undefined;
+        g.locks = undefined;
+        g.pts = [a, b];
+        updateLive(g);
+        try {
+          navigator.vibrate?.(12); // haptic tick on phones
+        } catch {
+          /* ignore */
+        }
+      }, PEN_HOLD_MS);
     };
 
     /** Right-click delete (see onPointerDown). Returns true when something was removed. */
@@ -1058,6 +1104,7 @@ export default function ViewerCanvas() {
       if (!space && isDragTool(s.tool)) {
         const p0 = vp.toPage(q.x, q.y);
         gesture = { kind: 'draw', id: e.pointerId, tool: s.tool, pts: [p0, p0], sx: q.x, sy: q.y, lx: q.x, ly: q.y };
+        if (s.tool === 'pen') armPenHold(gesture, q.x, q.y);
         const el = markupRef.current;
         if (el) {
           const ms = useMarkup.getState();
@@ -1158,7 +1205,12 @@ export default function ViewerCanvas() {
         case 'draw': {
           if (e.pointerId !== g.id) return;
           const p = vp.toPage(q.x, q.y);
-          if (g.tool === 'pen') {
+          if (g.tool === 'pen' && g.straight) {
+            // Long-press turned the stroke into a straight line: move its end (Shift: 30° steps).
+            const a = g.pts[0];
+            g.pts = [a, shift ? snapAngle(a, p, 30) : p];
+          } else if (g.tool === 'pen') {
+            armPenHold(g, q.x, q.y);
             if (shift) {
               // Shift held: a straight segment from where Shift went down, locked to 30° steps.
               if (g.anchor === undefined) {
@@ -1252,7 +1304,7 @@ export default function ViewerCanvas() {
               // Link tool: edit name / target / label.
               st().select(m.id);
               useMarkup.getState().startEditing(m.id);
-            } else if (m.targetPage) st().setPage(m.targetPage); // hand tool: follow the link
+            } else if (m.targetPage) followLink(m.targetPage, m.text?.trim() || undefined); // hand tool: follow the link
             return;
           }
           if (lastMarkupClick && lastMarkupClick.id === g.mid && now - lastMarkupClick.t < DBL_MS && (m?.kind === 'note' || m?.kind === 'text')) {

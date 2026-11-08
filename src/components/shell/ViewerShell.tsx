@@ -10,6 +10,7 @@ import { Drawer } from './Drawer';
 import { FloatingChrome } from './FloatingChrome';
 import { TopMenu } from './TopMenu';
 import { ToolPalette } from './ToolPalette';
+import { LinkBackButton } from './LinkBackButton';
 import { ExportDialog } from '../ExportDialog';
 import { SearchPanel } from '../text/SearchPanel';
 import { openExportDialog, useExportUi } from '../../export/exportUi';
@@ -79,6 +80,7 @@ export function ViewerShell({ onOpenFile }: { onOpenFile(file: File): void }) {
     <>
       <FloatingChrome />
       <ToolPalette />
+      <LinkBackButton />
       <Drawer id="thumbs" side="right" label="תצוגת דפים">
         {(p) => <ThumbnailSidebar {...p} />}
       </Drawer>
