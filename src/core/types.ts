@@ -186,6 +186,21 @@ export interface AreaMeasurement {
   sizeText?: string;
   qtyText?: string;
   extra?: string;
+  /**
+   * 'textEdit' only (cover-and-replace edit of the PDF's own text). `points` = [cover top-left,
+   * cover bottom-right] — the opaque paper rectangle over the original run (+ padding); `text` =
+   * the replacement, `fontSize` its size in page units, `rtl` its direction, `origText` the
+   * original run's text (reference / width estimate; absent for a box drawn on a scan).
+   */
+  origText?: string;
+  rtl?: boolean;
+  /**
+   * 'signature' only: `points` = [image top-left, image bottom-right]; `image` = small PNG data URL
+   * (≤ ~60 KB, trimmed); `aspect` = width / height (locked on resize); optional `text` = the date
+   * line drawn under it. A visual signature — not a certified digital signature.
+   */
+  image?: string;
+  aspect?: number;
 }
 
 /** One free-form detail line of an item ("key: value"). */
@@ -253,7 +268,22 @@ export interface WorkspaceClient extends PdfClient {
 // subtotals must ignore them (use `isMarkupKind`).
 /** 'ellipse' / 'triangle' / 'diamond' = shapes inscribed in the two-corner box; 'line' = [start, end]. */
 /** 'link' = clickable box ([corner, opposite corner]) that jumps to `targetPage`. */
-export type MarkupKind = 'note' | 'text' | 'rect' | 'ellipse' | 'triangle' | 'diamond' | 'line' | 'cloud' | 'arrow' | 'pen' | 'highlight' | 'link';
+/** 'textEdit' / 'signature' = document edits (cover-and-replace text, placed signature image); see AreaMeasurement. */
+export type MarkupKind =
+  | 'note'
+  | 'text'
+  | 'rect'
+  | 'ellipse'
+  | 'triangle'
+  | 'diamond'
+  | 'line'
+  | 'cloud'
+  | 'arrow'
+  | 'pen'
+  | 'highlight'
+  | 'link'
+  | 'textEdit'
+  | 'signature';
 
 // ---------------------------------------------------------------------------
 // Page text (contract — worker 'text' request, pdfClient.getPageText)

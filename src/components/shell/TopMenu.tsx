@@ -28,7 +28,7 @@ import { signOut, useAuthUser } from '../../auth/session';
 import { toggleLeftTab } from '../../pricing/LeftDrawer';
 import { DriveOpenButton } from '../../drive/DriveUi';
 import { formatPaper } from '../../text/scaleDetect';
-import { IconSearch, openSearch } from '../text/SearchPanel';
+import { IconSearch, openSearch } from '../text/searchControls';
 import { sendManualReport } from '../../diag/diagUi';
 import { VersionTag } from '../../pwa/VersionTag';
 

@@ -20,6 +20,15 @@ import {
   textLineBaselines,
 } from '../../core/markupGeometry';
 import {
+  PAPER_COLOR,
+  signatureDateBaseline,
+  signatureDateSize,
+  textEditBaseRect,
+  textEditBaseline,
+  textEditCoverRect,
+  textEditFontSize,
+} from '../../core/docTools';
+import {
   DEDUCT_COLOR,
   centroid,
   computeNetAreas,
@@ -90,6 +99,9 @@ const negArea = (m2: number) => `${ltr(`-${formatArea(m2).replace(/\s*מ״ר$/, 
 
 /** Areas first, then openings, then lines → openings and lines paint on top. */
 const KIND_ORDER = {
+  // document edits (paper cover + replacement text, signatures) belong to the sheet itself: under everything
+  textEdit: -2,
+  signature: -1,
   area: 0,
   deduct: 1,
   length: 2,
@@ -115,6 +127,10 @@ export interface BandRefs {
   closing: Ref<SVGLineElement>;
   /** Live preview path of a markup shape being dragged out. */
   markup?: Ref<SVGPathElement>;
+  /** Edit-text tool: highlight of the PDF text run under the pointer (attributes set imperatively). */
+  textRun?: Ref<SVGRectElement>;
+  /** Signature tool: ghost image following the pointer (href / x / y / size set imperatively). */
+  ghost?: Ref<SVGImageElement>;
 }
 
 interface Props {
@@ -367,6 +383,18 @@ function MeasureOverlayImpl({ width, height, measurements, selectedId, calibrati
           data-testid="live-markup"
         />
       )}
+      {band.textRun && (
+        <rect
+          ref={band.textRun}
+          visibility="hidden"
+          fill="#0ea5e9"
+          fillOpacity={0.14}
+          stroke="#0ea5e9"
+          style={{ strokeWidth: px(1.5) }}
+          data-testid="text-run-hover"
+        />
+      )}
+      {band.ghost && <image ref={band.ghost} visibility="hidden" opacity={0.6} preserveAspectRatio="none" data-testid="signature-ghost" />}
       <line
         ref={band.segment}
         stroke={dc}
@@ -406,7 +434,7 @@ const MarkupShape = memo(function MarkupShape({ m, selected }: { m: AreaMeasurem
   const stroke = { strokeWidth: px(sw) };
   const handles =
     selected &&
-    (kind === 'rect' || kind === 'cloud' || kind === 'highlight' || kind === 'arrow' || kind === 'line' || kind === 'link' || isBoxShape(kind)) &&
+    (kind === 'rect' || kind === 'cloud' || kind === 'highlight' || kind === 'arrow' || kind === 'line' || kind === 'link' || kind === 'signature' || isBoxShape(kind)) &&
     pts.slice(0, kind === 'link' ? 2 : undefined).map((p, i) => (
       <circle key={i} cx={p.x} cy={p.y} fill="#fff" stroke={SELECT_COLOR} style={{ r: px(5), strokeWidth: px(2) }} />
     ));
@@ -466,6 +494,56 @@ const MarkupShape = memo(function MarkupShape({ m, selected }: { m: AreaMeasurem
             </text>
           )}
           {(selected || empty) && <SelectBox r={markupBounds(m)} />}
+        </>,
+      );
+    }
+    case 'textEdit': {
+      // Cover-and-replace: opaque paper over the original run, the new text on top (no per-frame
+      // calc: page-unit sizes + geometricPrecision, like the 'text' markup).
+      const fs = textEditFontSize(m);
+      const cover = textEditCoverRect(m);
+      const bl = textEditBaseline(m, cover);
+      const t = m.text ?? '';
+      return g(
+        <>
+          <rect x={cover.x} y={cover.y} width={cover.width} height={cover.height} fill={PAPER_COLOR} stroke="none" />
+          {t.trim() && (
+            <text
+              x={bl.x}
+              y={bl.y}
+              fill={m.color || '#000'}
+              fontSize={fs}
+              textAnchor="start"
+              style={{ ...PAGE_TEXT, direction: bl.rtl ? 'rtl' : 'ltr', fontFamily: FONT, whiteSpace: 'pre' }}
+              data-testid="text-edit-text"
+            >
+              {t}
+            </text>
+          )}
+          {selected && <SelectBox r={cover} />}
+        </>,
+      );
+    }
+    case 'signature': {
+      const r = textEditBaseRect(m);
+      const date = (m.text ?? '').trim();
+      const dp = date ? signatureDateBaseline(r) : null;
+      return g(
+        <>
+          {m.image && <image href={m.image} x={r.x} y={r.y} width={r.width} height={r.height} preserveAspectRatio="none" data-testid="signature-image" />}
+          {dp && (
+            <text
+              x={dp.x}
+              y={dp.y}
+              textAnchor="middle"
+              fill="#111827"
+              fontSize={signatureDateSize(r)}
+              style={{ ...PAGE_TEXT, fontFamily: FONT, direction: 'ltr' }}
+            >
+              {date}
+            </text>
+          )}
+          {selected && <SelectBox r={markupBounds(m)} />}
         </>,
       );
     }

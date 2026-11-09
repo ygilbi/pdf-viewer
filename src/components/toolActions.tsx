@@ -23,12 +23,13 @@ import {
   IconRuler,
   IconText,
 } from './ui/icons';
+import { IconSignature, IconTextEdit } from './doc/docIcons';
 import { isTypingTarget } from './ui/util';
 import { useSnap } from '../state/snapStore';
 
 export const DOWNLOAD_HINT = "אם ההורדה חסומה, השתמש ב'העתק טבלה'";
 
-export type ToolGroup = 'measure' | 'markup';
+export type ToolGroup = 'measure' | 'markup' | 'document';
 
 export interface ToolDef {
   id: ToolId;
@@ -49,7 +50,7 @@ export type ToolMenuId = 'area' | 'shapes';
 /** Titles of the palette's expandable menus. */
 export const TOOL_MENU_LABELS: Record<ToolMenuId, string> = { area: 'חישוב שטח', shapes: 'צורות' };
 
-export const TOOL_GROUP_LABELS: Record<ToolGroup, string> = { measure: 'מדידה', markup: 'סימון והערות' };
+export const TOOL_GROUP_LABELS: Record<ToolGroup, string> = { measure: 'מדידה', markup: 'סימון והערות', document: 'מסמך' };
 
 export const TOOLS: ToolDef[] = [
   { id: 'pan', label: 'יד / הזזה', short: 'יד / הזזה', shortcut: 'V / H', icon: <IconHand />, group: 'measure', hint: 'גרירת סימון מזיזה אותו' },
@@ -71,7 +72,9 @@ export const TOOLS: ToolDef[] = [
   { id: 'cloud', label: 'ענן', short: 'ענן', shortcut: 'U', icon: <IconCloud />, group: 'markup', hint: 'גרור מלבן' },
   { id: 'pen', label: 'כלי שרטוט', short: 'כלי שרטוט', shortcut: 'P', icon: <IconDraw />, group: 'markup', hint: 'גרור לציור חופשי · Shift לחוץ: קו ישר עם נעילה כל 30°' },
   { id: 'highlight', label: 'מרקר (הדגשה)', short: 'מרקר', shortcut: 'G', icon: <IconHighlight />, group: 'markup', hint: 'גרור מלבן שקוף' },
-  { id: 'link', label: 'קישור לעמוד', short: 'קישור לעמוד', shortcut: '', icon: <IconLink />, group: 'markup', hint: 'גרור אזור ובחר עמוד יעד · לחיצה עם יד / הזזה עוברת לעמוד' },
+  { id: 'link', label: 'קישור לעמוד', short: 'קישור לעמוד', shortcut: '', icon: <IconLink />, group: 'document', hint: 'גרור אזור ובחר עמוד יעד · לחיצה עם יד / הזזה עוברת לעמוד' },
+  { id: 'textEdit', label: 'עריכת טקסט קיים', short: 'עריכת טקסט', shortcut: 'Shift+X', icon: <IconTextEdit />, group: 'document', hint: 'לחץ על טקסט בשרטוט לעריכה (מכסה ומחליף) · בסריקה: גרור מלבן והקלד' },
+  { id: 'signature', label: 'חתימה', short: 'חתימה', shortcut: 'Shift+S', icon: <IconSignature />, group: 'document', hint: 'צייר / הקלד / העלה חתימה ולחץ למיקום · חתימה חזותית, לא דיגיטלית מאושרת' },
 ];
 
 /** e.code → tool (e.code so shortcuts work on a Hebrew keyboard layout too). */
@@ -98,6 +101,15 @@ const TOOL_KEYS: Record<string, ToolId> = {
   KeyG: 'highlight',
 };
 
+/** Shift + key → tool (document tools; plain X / S stay 'text' / snap toggle). */
+const SHIFT_TOOL_KEYS: Record<string, ToolId> = {
+  KeyX: 'textEdit',
+  KeyS: 'signature',
+};
+
+/** Tool bound to a key (e.code), if any. */
+export const toolForKey = (code: string): ToolId | undefined => TOOL_KEYS[code];
+
 /** Global tool / page shortcuts (always active while a document is open). */
 export function useToolShortcuts() {
   useEffect(() => {
@@ -111,7 +123,7 @@ export function useToolShortcuts() {
         e.preventDefault();
         return;
       }
-      const t = TOOL_KEYS[e.code];
+      const t = (e.shiftKey ? SHIFT_TOOL_KEYS[e.code] : undefined) ?? TOOL_KEYS[e.code];
       if (t) {
         s.setTool(t);
         e.preventDefault();

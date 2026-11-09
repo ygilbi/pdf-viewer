@@ -15,6 +15,7 @@ import {
   pushGraphicsState,
   setLineJoin,
   LineJoinStyle,
+  type PDFImage,
   type PDFPage,
   type RGB,
 } from 'pdf-lib';
@@ -59,6 +60,17 @@ import {
   rectPath,
   textLineBaselines,
 } from '../core/markupGeometry';
+import {
+  PAPER_COLOR,
+  TEXT_EDIT_COLOR,
+  signatureDateBaseline,
+  signatureDateSize,
+  textEditBaseRect,
+  textEditBaseline,
+  textEditCoverRect,
+  textEditFontSize,
+} from '../core/docTools';
+import { decodeDataUrl } from '../core/signatureImage';
 import { hatchSegments } from './hatch';
 import { pageGeometry, placement, viewportSize, viewportToPdf, type PageGeometry } from './pageTransform';
 import { BLACK, WHITE, hexColor, shape, svgNum as f, type FontPair } from './pdfCommon';
@@ -325,6 +337,60 @@ function drawMarkup(c: Ctx, m: AreaMeasurement, noteNo: number | undefined) {
   }
 }
 
+/** Document edits are part of the sheet (drawn under the takeoff / markup, whatever the markup option). */
+export const isDocEdit = (m: { kind?: unknown }) => m.kind === 'textEdit' || m.kind === 'signature';
+
+/**
+ * Document edits: 'textEdit' = opaque paper rectangle (no stroke) over the original run + the
+ * replacement text (shaped for Hebrew / mixed text); 'signature' = the embedded PNG / JPG image
+ * (+ date line). The signature is a visual one — an image, not a certified digital signature.
+ */
+async function drawDocEdit(c: Ctx, m: AreaMeasurement, images: Map<string, Promise<PDFImage | null>>, out: PDFDocument) {
+  if (m.points.length < 2) return;
+  const scaled = { ...m, points: m.points.map((p) => P(c, p)), fontSize: textEditFontSize(m) * c.sy };
+  if (m.kind === 'textEdit') {
+    const fs = scaled.fontSize;
+    const font = c.fonts.regular;
+    const t = (m.text ?? '').trim() ? (m.text ?? '') : '';
+    const sh = t ? shape(font, t, fs, !!m.rtl) : null;
+    const cover = textEditCoverRect(scaled, sh ? sh.width : 0);
+    path(c, rectPath(cover), { fill: hexColor(PAPER_COLOR) });
+    if (!sh || !sh.visual.trim()) return;
+    const bl = textEditBaseline(scaled, cover);
+    const x0 = bl.rtl ? bl.x - sh.width : bl.x;
+    const color = hexColor(m.color, TEXT_EDIT_COLOR);
+    for (const p of sh.parts) {
+      if (!p.text.trim()) continue;
+      const at = viewportToPdf(c.g, { x: x0 + p.dx, y: bl.y });
+      c.page.drawText(p.text, { x: at.x, y: at.y, size: fs, font, color, rotate: degrees(c.pl.rotate) });
+    }
+    return;
+  }
+  // signature
+  const src = m.image;
+  if (!src) return;
+  let img = images.get(src);
+  if (!img) {
+    const dec = decodeDataUrl(src);
+    img = !dec
+      ? Promise.resolve(null)
+      : (dec.mime === 'image/jpeg' || dec.mime === 'image/jpg' ? out.embedJpg(dec.bytes) : out.embedPng(dec.bytes)).catch(() => null);
+    images.set(src, img);
+  }
+  const pdfImg = await img;
+  const r = textEditBaseRect(scaled);
+  if (pdfImg) {
+    // drawImage rotates around its (x, y) corner: anchor it at the image's bottom-left in viewport space.
+    const at = viewportToPdf(c.g, { x: r.x, y: r.y + r.height });
+    c.page.drawImage(pdfImg, { x: at.x, y: at.y, width: r.width, height: r.height, rotate: degrees(c.pl.rotate) });
+  }
+  const date = (m.text ?? '').trim();
+  if (date) {
+    const dp = signatureDateBaseline(r);
+    text(c, date, dp.x, dp.y, signatureDateSize(r), { color: hexColor('#111827'), align: 'center' });
+  }
+}
+
 function drawLegend(c: Ctx, ms: AreaMeasurement[], categories: Category[]) {
   const keys: string[] = [];
   let hasDeduct = false;
@@ -436,6 +502,8 @@ export async function buildExportPdf(
   }
 
   const pageIndex = new Map(pages.map((p, i) => [p.globalPage, i]));
+  /** Signature images, embedded once per distinct data URL. */
+  const images = new Map<string, Promise<PDFImage | null>>();
   // 2) Overlay per page.
   for (let i = 0; i < pages.length; i++) {
     check();
@@ -458,9 +526,10 @@ export async function buildExportPdf(
     const cal = input.calibrations[spec.globalPage];
     const ppm = cal && cal.pixelsPerMeter > 0 ? cal.pixelsPerMeter : null;
     const labels: (() => void)[] = [];
+    for (const m of ms) if (isDocEdit(m)) await drawDocEdit(c, m, images, out);
     if (o.measurements) labels.push(...drawTakeoff(c, takeoff, ppm, nets));
     if (o.calibration && cal) labels.push(drawCalibration(c, cal));
-    if (o.markup) for (const m of ms) if (isMarkupKind(m.kind)) drawMarkup(c, m, notes.get(m.id));
+    if (o.markup) for (const m of ms) if (isMarkupKind(m.kind) && !isDocEdit(m)) drawMarkup(c, m, notes.get(m.id));
     // Link areas become real PDF links when their target page is part of this export.
     if (o.markup) for (const m of ms) if (m.kind === 'link') addLinkAnnotation(out, c, m, pageIndex.get(m.targetPage ?? -1), outPages);
     for (const l of labels) l();

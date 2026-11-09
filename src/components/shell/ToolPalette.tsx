@@ -13,9 +13,9 @@ const THUMBS_OFFSET = 184 + 8;
 const LABELS_KEY = 'aluminum-palette-labels-v1';
 const MENU_KEY = (m: ToolMenuId) => `aluminum-palette-${m}-open-v1`;
 /** Header icon of each expandable menu (when no tool of it is active). */
-const MENU_ICON: Record<ToolMenuId, ReactElement> = { area: <IconAreaManual />, shapes: <IconShapes /> };
+export const MENU_ICON: Record<ToolMenuId, ReactElement> = { area: <IconAreaManual />, shapes: <IconShapes /> };
 /** Each menu sits right after this tool. */
-const MENU_AFTER: Record<string, ToolMenuId> = { calibrate: 'area', text: 'shapes' };
+export const MENU_AFTER: Record<string, ToolMenuId> = { calibrate: 'area', text: 'shapes' };
 
 /** Colours offered for markup (null = follow the active category). */
 export const MARKUP_SWATCH_NAMES: Record<string, string> = {
@@ -50,10 +50,14 @@ function loadMenuOpen(): Record<ToolMenuId, boolean> {
   return { area: get('area', true), shapes: get('shapes', false) };
 }
 
-const GROUPS: ToolGroup[] = ['measure', 'markup'];
+/** Palette sections, in TOOL_GROUP_LABELS order (new groups, e.g. 'document', appear automatically). */
+export const TOOL_GROUPS: ToolGroup[] = (Object.keys(TOOL_GROUP_LABELS) as ToolGroup[]).filter((g) => TOOLS.some((t) => t.group === g));
+/** Thumbnails handle (top-2 + 36px) + gap: the palette starts below it, top-anchored. */
+const PALETTE_TOP = 52;
 
 /**
- * Vertical tool palette on the right (RTL start) edge. Shows Hebrew labels
+ * Edit mode, desktop: vertical tool palette on the right (RTL start) edge, anchored to the top
+ * so it never covers the sheet's title block in the bottom-right corner. Shows Hebrew labels
  * next to the icons by default, grouped (measure / markup); can switch to
  * icons only (remembered), or collapse to a single button showing the active
  * tool. Scrolls when the window is too short. Keyboard shortcuts work
@@ -102,12 +106,12 @@ export function ToolPalette() {
       data-collapsed={collapsed ? 'true' : 'false'}
       data-labels={labels ? 'true' : 'false'}
       className={
-        'absolute top-1/2 z-20 flex -translate-y-1/2 flex-col rounded-xl border border-slate-600/70 ' +
+        'absolute z-20 flex flex-col rounded-xl border border-slate-600/70 ' +
         'bg-slate-900/85 p-1 text-slate-200 shadow-lg shadow-black/40 backdrop-blur ' +
         'transition-[right] duration-200 ease-out motion-reduce:transition-none ' +
         (labels && !collapsed ? 'items-stretch' : 'items-center')
       }
-      style={{ right: thumbsOpen ? THUMBS_OFFSET : 8, maxHeight: 'calc(100% - 128px)' }}
+      style={{ right: thumbsOpen ? THUMBS_OFFSET : 8, top: thumbsOpen ? 8 : PALETTE_TOP, maxHeight: `calc(100% - ${PALETTE_TOP + 8}px)` }}
     >
       {collapsed ? (
         <ToolButton
@@ -131,7 +135,7 @@ export function ToolPalette() {
             }
             style={{ scrollbarWidth: 'thin' }}
           >
-            {GROUPS.map((g, gi) => (
+            {TOOL_GROUPS.map((g, gi) => (
               <Fragment key={g}>
                 {labels ? (
                   <div
@@ -258,11 +262,11 @@ function ToolMenu({ menu, labels, open, onToggle, tool, onPick, className }: {
   );
 }
 
-function StyleButton({ labels, open, onToggle, className }: { labels: boolean; open: boolean; onToggle(): void; className: string }) {
+export function StyleButton({ labels, open, onToggle, className, tooltipSide = 'left' }: { labels: boolean; open: boolean; onToggle(): void; className: string; tooltipSide?: 'left' | 'top' }) {
   const color = useMarkup((s) => s.color);
   const width = useMarkup((s) => s.strokeWidth);
   return (
-    <ToolButton label="צבע ועובי קו לסימון" active={open} tooltipSide="left" onClick={onToggle} className={className + ' shrink-0'}>
+    <ToolButton label="צבע ועובי קו לסימון" active={open} tooltipSide={tooltipSide} onClick={onToggle} className={className + ' shrink-0'}>
       <span
         className="flex h-4 w-4 shrink-0 items-center justify-center rounded-full border border-slate-400"
         style={{ background: color ?? 'conic-gradient(#dc2626, #facc15, #16a34a, #2563eb, #9333ea, #dc2626)' }}
@@ -279,7 +283,7 @@ function StyleButton({ labels, open, onToggle, className }: { labels: boolean; o
 }
 
 /** Colour + stroke width for new markup; also restyles the selected markup. */
-function StylePopover({ onClose }: { onClose(): void }) {
+export function StylePopover({ onClose, className }: { onClose(): void; className?: string }) {
   const color = useMarkup((s) => s.color);
   const width = useMarkup((s) => s.strokeWidth);
   const ref = useRef<HTMLDivElement>(null);
@@ -318,7 +322,9 @@ function StylePopover({ onClose }: { onClose(): void }) {
       dir="rtl"
       data-viewer-ui
       data-testid="markup-style-popover"
-      className="absolute right-full top-1/2 me-2 w-44 -translate-y-1/2 rounded-lg border border-slate-600 bg-slate-900/95 p-2 text-[11px] text-slate-300 shadow-xl"
+      className={
+        (className ?? 'absolute right-full top-1/2 me-2 -translate-y-1/2') + ' w-44 rounded-lg border border-slate-600 bg-slate-900/95 p-2 text-[11px] text-slate-300 shadow-xl'
+      }
     >
       <div className="mb-1 font-semibold text-slate-200">צבע</div>
       <div className="mb-2 grid grid-cols-6 gap-1.5" data-testid="markup-swatches">

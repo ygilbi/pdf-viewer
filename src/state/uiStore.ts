@@ -14,6 +14,14 @@ interface UiState {
   thumbsPinned: boolean;
   measurementsPinned: boolean;
   paletteCollapsed: boolean;
+  /** Edit mode (all tools) vs the clean viewing mode (calibrate / area dock). Per session; every opened file starts clean. */
+  editMode: boolean;
+  /** ☰ was opened at least once (its lazy chunk stays mounted afterwards so its toasts survive closing it). */
+  menuMounted: boolean;
+  setEditMode(editMode: boolean): void;
+  /** The user hid the step hints (only the forced ones show; "?" brings them back). */
+  hintsHidden: boolean;
+  setHintsHidden(hidden: boolean): void;
   setMenuOpen(open: boolean): void;
   setDrawerOpen(id: DrawerId, open: boolean): void;
   toggleDrawer(id: DrawerId): void;
@@ -53,6 +61,15 @@ function save(s: UiState) {
 /** Narrow screens: two drawers side by side would cover the whole drawing. */
 const isNarrow = () => typeof window !== 'undefined' && window.innerWidth < 720;
 
+const HINTS_KEY = 'aluminum-hints-v1';
+function loadHintsHidden(): boolean {
+  try {
+    return localStorage.getItem(HINTS_KEY) === '0';
+  } catch {
+    return false;
+  }
+}
+
 const saved = load();
 const openKey = (id: DrawerId): 'thumbsOpen' | 'measurementsOpen' => (id === 'thumbs' ? 'thumbsOpen' : 'measurementsOpen');
 const pinKey = (id: DrawerId): 'thumbsPinned' | 'measurementsPinned' =>
@@ -68,7 +85,19 @@ export const useUi = create<UiState>((set, get) => ({
   measurementsOpen: !!saved.measurementsPinned && !isNarrow(),
   paletteCollapsed: !!saved.paletteCollapsed,
 
-  setMenuOpen: (menuOpen) => set({ menuOpen }),
+  editMode: false,
+  menuMounted: false,
+  setEditMode: (editMode) => set({ editMode }),
+  hintsHidden: loadHintsHidden(),
+  setHintsHidden: (hintsHidden) => {
+    set({ hintsHidden });
+    try {
+      localStorage.setItem(HINTS_KEY, hintsHidden ? '0' : '1');
+    } catch {
+      /* per-viewer convenience only */
+    }
+  },
+  setMenuOpen: (menuOpen) => set(menuOpen ? { menuOpen, menuMounted: true } : { menuOpen }),
   setDrawerOpen: (id, open) => {
     const patch: Partial<UiState> = { [openKey(id)]: open };
     if (open && isNarrow()) patch[openKey(other(id))] = false;
