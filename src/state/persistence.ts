@@ -21,6 +21,7 @@ import { useViewer } from './store';
 import type { ViewerState } from './store';
 import { sanitizeCategories } from '../core/measurementEngine';
 import { extractDocData, toGlobalData } from './workspace';
+import { isTempMeasurement, persistentMeasurements } from '../core/tempMeasurements';
 
 const DB_NAME = 'aluminum-app';
 const DB_VERSION = 1;
@@ -182,7 +183,8 @@ function snapshot(docId: string, t: Tracked): PersistedDocument | null {
   const s = useViewer.getState();
   const doc = s.docs.find((d) => d.id === docId);
   if (!doc) return null;
-  const { measurements, calibrations } = extractDocData(doc, s.measurements, s.calibrations);
+  // View-mode quick checks (temp) are never saved; calibrations made in the view mode are.
+  const { measurements, calibrations } = extractDocData(doc, persistentMeasurements(s.measurements), s.calibrations);
   return {
     fingerprint: t.fingerprint,
     fileName: t.fileName,
@@ -314,7 +316,8 @@ export async function restoreDocument(fingerprint: string, fileName: string, doc
   if (!rec) return 0;
   const saved = toGlobalData(
     doc,
-    Array.isArray(rec.measurements) ? rec.measurements : [],
+    // (Defensive: a record never holds temp measurements.)
+    Array.isArray(rec.measurements) ? rec.measurements.filter((m) => !isTempMeasurement(m)) : [],
     rec.calibrations && typeof rec.calibrations === 'object' ? rec.calibrations : {},
   );
   // Merge with anything drawn in the brief window before hydration.

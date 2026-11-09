@@ -9,6 +9,7 @@ import { savePickerSupported, startExport, type ExportHandle } from '../export/r
 import { DEFAULT_CSV_OPTIONS, DEFAULT_PDF_OPTIONS, type CsvOptions, type ExportFormat, type PdfContentOptions } from '../export/types';
 import { baseName } from './ui/util';
 import { IconX } from './ui/icons';
+import { persistentMeasurements } from '../core/tempMeasurements';
 
 const KIND_OPTIONS: { id: CsvOptions['kinds'][number]; label: string }[] = [
   { id: 'area', label: 'שטחים' },
@@ -126,7 +127,7 @@ function ExportDialogBody() {
   const docs = useViewer((s) => s.docs);
   const numPages = useViewer((s) => s.numPages);
   const currentPage = useViewer((s) => s.currentPage);
-  const measurements = useViewer((s) => s.measurements);
+  const measurements = useViewer((s) => persistentMeasurements(s.measurements));
   const categories = useViewer((s) => s.categories);
 
   const perPage = useMemo(() => {
@@ -597,7 +598,7 @@ function ExportDialogBody() {
 
 /** Excel: what the workbook will contain + how many item rows the selected pages have. */
 function XlsxSummary({ pages }: { pages: Set<number> }) {
-  const measurements = useViewer((s) => s.measurements);
+  const measurements = useViewer((s) => persistentMeasurements(s.measurements));
   const itemCount = useMemo(() => measurements.filter((m) => pages.has(m.page) && !isMarkupKind(m.kind) && isItem(m)).length, [measurements, pages]);
   return (
     <Section title="תוכן קובץ ה־Excel">

@@ -78,6 +78,10 @@ contextBridge.exposeInMainWorld('pdfDesktop', {
   applyUpdate: () => ipcRenderer.invoke('pdf:update-apply'),
   /** {active, pending, lastCheck} */
   getUpdateState: () => ipcRenderer.invoke('pdf:update-state'),
+  /** "שמור בשם": native Save dialog → {token, name} or null (cancelled). */
+  saveAsChoose: (suggestedName) => ipcRenderer.invoke('pdf:save-as-choose', String(suggestedName || '')),
+  /** Writes the PDF bytes to the path chosen with saveAsChoose (one write per token). */
+  saveAsWrite: (token, bytes) => ipcRenderer.invoke('pdf:save-as-write', String(token), bytes),
   /** Called when a new build was downloaded. Returns unsubscribe. */
   onUpdateReady(cb) {
     if (typeof cb !== 'function') return () => {};

@@ -4,19 +4,15 @@
  */
 import { lazy, Suspense, type ReactNode } from 'react';
 import { useUi } from '../state/uiStore';
-import { loadEditChrome } from '../components/shell/modeActions';
+import { itemsTableAvailable } from '../state/editMode';
 
 const ItemsPanel = lazy(() => import('../components/items/ItemsPanel'));
 
-/** Toggle the left drawer (the items table). */
+/** Toggle the left drawer (the items table). Edit mode only: in the clean view mode it does nothing. */
 export function toggleLeftTab(_tab: 'items' = 'items') {
   const ui = useUi.getState();
-  // The items table is an edit-mode panel: opening it from the clean view switches to edit mode.
-  if (!ui.editMode) {
-    void loadEditChrome();
-    ui.setEditMode(true);
-  }
-  ui.setDrawerOpen('measurements', !useUi.getState().measurementsOpen || !ui.editMode);
+  if (!itemsTableAvailable(ui)) return;
+  ui.setDrawerOpen('measurements', !ui.measurementsOpen);
 }
 
 export function LeftDrawerContent(props: { onHide: () => void; headerActions: ReactNode }) {

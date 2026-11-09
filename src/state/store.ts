@@ -3,6 +3,9 @@ import type { AreaMeasurement, Calibration, Category, PageSize, Point, ToolId, W
 import { concatPages, layoutDocs, removeDocFromWorkspace } from './workspace';
 import { DEFAULT_CATEGORIES, MEASUREMENT_COLORS, kindOf } from '../core/measurementEngine';
 import { coalesce, withHistory, type HistoryState } from './history';
+import { useUi } from './uiStore';
+import { isCleanTool } from './editMode';
+import { hasTempMeasurements, persistentMeasurements } from '../core/tempMeasurements';
 
 /**
  * Global UI state. Keep high-frequency state (pan/zoom transform, mouse
@@ -54,10 +57,14 @@ export interface ViewerState extends HistoryState {
   setLoading(loading: boolean): void;
   setError(error: string | null): void;
   setPage(page: number): void;
+  /** Ignored in the clean view mode for a tool that is not in the clean dock (only "מצב עריכה" opens edit mode). */
   setTool(tool: ToolId): void;
   setDraft(points: Point[]): void;
   setCalibration(page: number, c: Calibration): void;
+  /** In the clean view mode the measurement is a temporary quick check (`temp: true`, see core/tempMeasurements). */
   addMeasurement(m: AreaMeasurement): void;
+  /** Drops the view-mode quick checks (file / tab changed, edit mode started). Clears the undo history when any were dropped. */
+  discardTempMeasurements(): void;
   updateMeasurement(id: string, patch: Partial<Omit<AreaMeasurement, 'id'>>): void;
   removeMeasurement(id: string): void;
   select(id: string | null): void;
@@ -136,10 +143,26 @@ export const useViewer = create<ViewerState>()(
     const p = Math.min(Math.max(1, Math.round(page)), numPages);
     set({ currentPage: p, draft: [], selectedId: null });
   },
-  setTool: (tool) => set({ tool, draft: [] }),
+  setTool: (tool) => {
+    if (!useUi.getState().editMode && !isCleanTool(tool)) return;
+    set({ tool, draft: [] });
+  },
   setDraft: (draft) => set({ draft }),
   setCalibration: (page, c) => set((s) => ({ calibrations: { ...s.calibrations, [page]: c } })),
-  addMeasurement: (m) => set((s) => ({ measurements: [...s.measurements, m], selectedId: m.id })),
+  addMeasurement: (m) => {
+    const temp = !useUi.getState().editMode;
+    const add = temp ? { ...m, temp: true } : m;
+    set((s) => ({ measurements: [...s.measurements, add], selectedId: add.id }));
+  },
+  discardTempMeasurements: () => {
+    const s = get();
+    if (!hasTempMeasurements(s.measurements)) return;
+    const measurements = persistentMeasurements(s.measurements);
+    const keepSel = s.selectedId != null && measurements.some((m) => m.id === s.selectedId);
+    set({ measurements, selectedId: keepSel ? s.selectedId : null, draft: [] });
+    // Older snapshots still hold the quick checks: an undo must not bring them back.
+    get().resetHistory();
+  },
   updateMeasurement: (id, patch) => {
     // Text / label / style edits in a row on one item = one undo step; geometry edits never merge.
     const keys = Object.keys(patch).sort();

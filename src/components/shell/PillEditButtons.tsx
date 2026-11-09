@@ -12,14 +12,14 @@ const isMac = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigat
 const mod = isMac ? '⌘' : 'Ctrl';
 
 /** Undo / redo + geometry-snap toggle for the floating status pill. */
-export function PillEditButtons() {
+export function PillEditButtons({ dividers = true }: { dividers?: boolean }) {
   const canUndo = useViewer((s) => s.historyPast.length > 0 || s.draft.length > 0);
   const canRedo = useViewer((s) => s.historyFuture.length > 0);
   const snap = useSnap((s) => s.enabled);
   const toggleSnap = useSnap((s) => s.toggle);
   return (
     <>
-      <span className="mx-0.5 h-4 w-px bg-slate-600" aria-hidden="true" />
+      {dividers && <span className="mx-0.5 h-4 w-px bg-slate-600" aria-hidden="true" />}
       {/* RTL pill: undo sits first (right), redo after it */}
       <button
         type="button"
@@ -62,7 +62,7 @@ export function PillEditButtons() {
           )}
         </span>
       </button>
-      <span className="mx-0.5 h-4 w-px bg-slate-600" aria-hidden="true" />
+      {dividers && <span className="mx-0.5 h-4 w-px bg-slate-600" aria-hidden="true" />}
     </>
   );
 }

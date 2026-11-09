@@ -4,6 +4,7 @@ import { getPdfClient } from '../core/pdfClient';
 import type { PageSize, WorkspaceDoc } from '../core/types';
 import { useFileQueue } from '../state/fileQueue';
 import { IconFilePdf, IconPanel, IconX } from './ui/icons';
+import { persistentMeasurements } from '../core/tempMeasurements';
 
 // ---------------------------------------------------------------------------
 // Layout constants
@@ -375,7 +376,7 @@ export default function ThumbnailSidebar({ onHide, headerActions }: SidebarProps
   const docs = useViewer((s) => s.docs);
   const currentPage = useViewer((s) => s.currentPage);
   const setPage = useViewer((s) => s.setPage);
-  const measurements = useViewer((s) => s.measurements);
+  const measurements = useViewer((s) => persistentMeasurements(s.measurements));
   const calibrations = useViewer((s) => s.calibrations);
   const queued = useFileQueue((s) => s.items);
   const [collapsed, setCollapsed] = useState(false);

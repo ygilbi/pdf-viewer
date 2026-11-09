@@ -4,6 +4,7 @@ import { useViewer } from '../state/store';
 import { buildMeasurementRows, measurementsToTSV } from '../core/measurementEngine';
 import { ToolButton } from './ui/ToolButton';
 import { IconCopy } from './ui/icons';
+import { persistentMeasurements } from '../core/tempMeasurements';
 
 const escapeHtml = (s: string) =>
   s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
@@ -57,8 +58,8 @@ export function CopyTableButton({ disabled }: { disabled?: boolean }) {
 
   const onClick = () => {
     const s = useViewer.getState();
-    const tsv = measurementsToTSV(s.measurements, s.calibrations, s.categories);
-    const html = rowsToHtmlTable(buildMeasurementRows(s.measurements, s.calibrations, s.categories));
+    const tsv = measurementsToTSV(persistentMeasurements(s.measurements), s.calibrations, s.categories);
+    const html = rowsToHtmlTable(buildMeasurementRows(persistentMeasurements(s.measurements), s.calibrations, s.categories));
     // Called synchronously from the click handler so the user gesture is still active.
     void copyToClipboard(tsv, html).then((ok) => (ok ? setToast(Date.now()) : setFallback(tsv)));
   };

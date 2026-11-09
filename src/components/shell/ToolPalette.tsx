@@ -8,6 +8,7 @@ import { IconAreaManual, IconChevronDown, IconCollapse, IconLabels, IconShapes }
 import { TOOLS, TOOL_GROUP_LABELS, TOOL_MENU_LABELS, type ToolDef, type ToolGroup, type ToolMenuId } from '../toolActions';
 import { STROKE_WIDTHS } from '../../core/markupGeometry';
 import { isMarkupKind, kindOf } from '../../core/measurementEngine';
+import { HintsToggle } from './HintPanel';
 
 /** Thumbnail drawer width (ThumbnailSidebar is 184px) + gap, so the palette slides clear of it. */
 const THUMBS_OFFSET = 184 + 8;
@@ -166,6 +167,8 @@ export function ToolPalette() {
             >
               <IconCollapse size={14} />
             </ToolButton>
+            {/* "?" — bring the step hints back (shown only while they are hidden). */}
+            <HintsToggle />
           </div>
           {styleOpen && <StylePopover onClose={() => setStyleOpen(false)} />}
         </>

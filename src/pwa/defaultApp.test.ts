@@ -9,7 +9,7 @@ import {
   parseState,
   recordFileLaunch,
   shouldAutoPrompt,
-  desktopFirstRunAction,
+  desktopStartupAction,
   makeDesktopRecord,
   parseDesktopRecord,
   type PromptContext,
@@ -108,30 +108,14 @@ describe('parseState', () => {
   });
 });
 
-describe('desktop: ask once', () => {
+describe('desktop: ask on every start until PDF Viewer is the default', () => {
   const now = Date.UTC(2026, 10, 2, 12, 0, 0);
-  it('asks on the first launch while another app (or nothing) is the default', () => {
-    expect(desktopFirstRunAction({ stored: null, isDefault: false })).toBe('ask');
-    expect(desktopFirstRunAction({ stored: null, isDefault: null })).toBe('ask');
+  it('asks while another app (or nothing / unknown) is the default', () => {
+    expect(desktopStartupAction(false)).toBe('ask');
+    expect(desktopStartupAction(null)).toBe('ask');
   });
-  it('does not ask when already the default, but settles the question', () => {
-    expect(desktopFirstRunAction({ stored: null, isDefault: true })).toBe('mark-already-default');
-  });
-  it('never asks again once answered, whatever the registry says', () => {
-    for (const answer of ['yes', 'no', 'already-default'] as const) {
-      const stored = JSON.parse(JSON.stringify(makeDesktopRecord(answer, now))) as unknown; // round-trip like prefs.json
-      expect(desktopFirstRunAction({ stored, isDefault: false })).toBe('skip');
-      expect(desktopFirstRunAction({ stored, isDefault: null })).toBe('skip');
-      expect(desktopFirstRunAction({ stored, isDefault: true })).toBe('skip');
-    }
-  });
-  it('does not ask when the answer cannot be stored / read (would re-ask every launch)', () => {
-    expect(desktopFirstRunAction({ stored: undefined, isDefault: false })).toBe('skip');
-  });
-  it('ignores junk in prefs.json', () => {
-    expect(desktopFirstRunAction({ stored: { answered: 'yes' }, isDefault: false })).toBe('ask');
-    expect(desktopFirstRunAction({ stored: 42, isDefault: false })).toBe('ask');
-    expect(desktopFirstRunAction({ stored: [], isDefault: false })).toBe('ask');
+  it('says nothing once PDF Viewer is the default', () => {
+    expect(desktopStartupAction(true)).toBe('skip');
   });
   it('makes / parses the stored record', () => {
     expect(makeDesktopRecord('no', now)).toEqual({ answered: true, answer: 'no', at: '2026-11-02T12:00:00.000Z' });

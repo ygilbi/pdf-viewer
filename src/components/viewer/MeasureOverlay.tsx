@@ -273,14 +273,15 @@ function MeasureOverlayImpl({ width, height, measurements, selectedId, calibrati
           const mid = polylineMidpoint(points);
           const len = ppm ? formatLength(polylineLengthMeters(points, ppm)) : null;
           return (
-            <g key={m.id} data-measurement-id={m.id} data-kind="length">
+            <g key={m.id} data-measurement-id={m.id} data-kind="length" data-temp={m.temp ? 'true' : undefined}>
               <polyline
                 points={pts(points)}
                 fill="none"
                 stroke={m.color}
                 strokeLinejoin="round"
                 strokeLinecap="round"
-                style={{ strokeWidth: px(selected ? 3 : 2.25) }}
+                // View-mode quick check (temp): dashed.
+                style={{ strokeWidth: px(selected ? 3 : 2.25), strokeDasharray: m.temp ? dash(8, 5) : undefined }}
               />
               {!selected &&
                 [points[0], points[points.length - 1]].map((p, i) => (
@@ -304,7 +305,7 @@ function MeasureOverlayImpl({ width, height, measurements, selectedId, calibrati
         if (net && net.deductIds.length) lines.push(`נטו ${formatArea(net.netM2)}`);
         const deduct = kind === 'deduct';
         return (
-          <g key={m.id} data-measurement-id={m.id} data-kind={kind}>
+          <g key={m.id} data-measurement-id={m.id} data-kind={kind} data-temp={m.temp ? 'true' : undefined}>
             <polygon
               points={pts(points)}
               fill={deduct ? `url(#${HATCH_ID})` : m.color}
@@ -313,7 +314,7 @@ function MeasureOverlayImpl({ width, height, measurements, selectedId, calibrati
               strokeLinejoin="round"
               style={{
                 strokeWidth: px(selected ? 2.5 : deduct ? 1.5 : 1.75),
-                strokeDasharray: bad ? dash(6, 4) : undefined,
+                strokeDasharray: bad ? dash(6, 4) : m.temp ? dash(8, 5) : undefined,
               }}
             />
             <text x={c.x} y={c.y} textAnchor="middle" fill={deduct ? '#9f1239' : '#111827'} style={labelStyle(deduct ? 11 : 13)}>
