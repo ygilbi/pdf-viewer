@@ -32,6 +32,7 @@ import { DriveOpenButton } from '../../drive/DriveUi';
 import { formatPaper } from '../../text/scaleDetect';
 import { IconSearch, openSearch } from '../text/SearchPanel';
 import { sendManualReport } from '../../diag/diagUi';
+import { useLabUi } from '../../diag/labUi';
 
 function Group({ children, label }: { children: React.ReactNode; label: string }) {
   return (
@@ -377,6 +378,18 @@ export function TopMenu({ onOpenFile }: { onOpenFile(file: File): void }) {
             className="flex h-8 items-center whitespace-nowrap rounded px-2 text-xs text-slate-300 hover:bg-slate-700 hover:text-white focus:outline-none focus-visible:ring-1 focus-visible:ring-sky-400"
           >
             שלח דוח תקלה
+          </button>
+          <button
+            type="button"
+            data-testid="menu-crash-lab"
+            title="מתגים שמכבים חלק אחד בכל פעם, כדי לאתר מה גורם לקריסה"
+            onClick={() => {
+              setMenuOpen(false);
+              useLabUi.getState().setOpen(true);
+            }}
+            className="flex h-8 items-center whitespace-nowrap rounded px-2 text-xs text-amber-300 hover:bg-slate-700 hover:text-white focus:outline-none focus-visible:ring-1 focus-visible:ring-sky-400"
+          >
+            מעבדת אבחון
           </button>
           <InstallButton
             label="התקן"

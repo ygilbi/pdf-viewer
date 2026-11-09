@@ -35,6 +35,7 @@ import { TextHighlights } from './text/TextHighlights';
 import { MarkupEditor, NoteBubbles } from './viewer/MarkupHtml';
 import { createWheelPager } from './viewer/wheelPager';
 import { followLink } from '../state/linkHistory';
+import { useLab } from '../diag/lab';
 import { useMarkup } from '../state/markupStore';
 import {
   DEFAULT_STROKE_WIDTH,
@@ -870,7 +871,7 @@ export default function ViewerCanvas() {
           fontSize: defaultLinkHeadRadius(s.pageSizes[s.currentPage - 1]?.width ?? 842, s.pageSizes[s.currentPage - 1]?.height ?? 595),
           color: LINK_COLOR,
         });
-        useMarkup.getState().startEditing(id, true); // ask for the target page
+        if (!useLab.getState().instantLink) useMarkup.getState().startEditing(id, true); // ask for the target page
         return;
       }
       s.addMeasurement({
@@ -897,7 +898,24 @@ export default function ViewerCanvas() {
     };
 
     // ---- pointer events -----------------------------------------------------
+    // Crash lab: optionally hide the whole SVG overlay while pinching (restored shortly after).
+    let overlayTimer = 0;
+    const overlayEl = () => world.querySelector<SVGElement>('[data-testid="measure-overlay"]');
+    const hideOverlayForPinch = () => {
+      if (!useLab.getState().hideOverlayOnPinch) return;
+      window.clearTimeout(overlayTimer);
+      const el = overlayEl();
+      if (el) el.style.visibility = 'hidden';
+    };
+    const showOverlayAfterPinch = () => {
+      window.clearTimeout(overlayTimer);
+      overlayTimer = window.setTimeout(() => {
+        const el = overlayEl();
+        if (el) el.style.visibility = '';
+      }, 400);
+    };
     const startPinch = () => {
+      hideOverlayForPinch();
       // A focused editor (link / note / text) must not stay focused while the page zooms: on
       // phones the browser keeps scrolling the focused field into view → heavy layout loops.
       const ae = document.activeElement;
@@ -1272,6 +1290,7 @@ export default function ViewerCanvas() {
       const q = local(e);
       const g = gesture;
       if (g.kind === 'pinch') {
+        if (pointers.size < 2) showOverlayAfterPinch();
         // continue panning with the remaining finger (no click)
         const [rest] = [...pointers.entries()];
         gesture = rest

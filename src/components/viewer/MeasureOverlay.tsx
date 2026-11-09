@@ -1,3 +1,4 @@
+import { useLab } from '../../diag/lab';
 import { memo, useMemo, type ReactNode, type Ref } from 'react';
 import type { AreaMeasurement, Calibration, Point, Rect, ToolId } from '../../core/types';
 import {
@@ -399,6 +400,10 @@ function SelectBox({ r }: { r: Rect }) {
 
 /** One markup / annotation (note, text, rect, cloud, arrow, pen, highlight). */
 const MarkupShape = memo(function MarkupShape({ m, selected }: { m: AreaMeasurement; selected: boolean }) {
+  // Crash-lab switches (diag/lab.ts): selectors, so only link callouts re-render when they change.
+  const noLinkText = useLab((l) => l.noLinkText);
+  const noLinkDash = useLab((l) => l.noLinkDash);
+  const noLinkHead = useLab((l) => l.noLinkHead);
   const kind = kindOf(m);
   const pts = m.points;
   if (!pts.length) return null;
@@ -527,24 +532,28 @@ const MarkupShape = memo(function MarkupShape({ m, selected }: { m: AreaMeasurem
           {/* Bubble: dashes are explicit segments (no stroke-dasharray, see dashedPolylinePath). */}
           {selected && <path d={roundedRectPath(r)} fill={col} fillOpacity={0.1} stroke="none" />}
           <path
-            d={dashedPolylinePath(roundedRectOutline(r), hr * 0.42, hr * 0.28)}
+            d={noLinkDash ? roundedRectPath(r) : dashedPolylinePath(roundedRectOutline(r), hr * 0.42, hr * 0.28)}
             fill="none"
             stroke={col}
             strokeLinecap="round"
             style={{ strokeWidth: px(2.25) }}
           />
-          {leader && <line x1={leader[0].x} y1={leader[0].y} x2={leader[1].x} y2={leader[1].y} stroke={col} style={{ strokeWidth: px(1.25) }} />}
+          {!noLinkHead && leader && <line x1={leader[0].x} y1={leader[0].y} x2={leader[1].x} y2={leader[1].y} stroke={col} style={{ strokeWidth: px(1.25) }} />}
+          {!noLinkHead && (
           <g data-testid="link-head">
             <circle cx={head.x} cy={head.y} r={hr} fill="#fff" stroke={col} style={{ strokeWidth: px(1.5) }} />
             <line x1={head.x - hr} y1={head.y} x2={head.x + hr} y2={head.y} stroke={col} style={{ strokeWidth: px(1.1) }} />
+            {!noLinkText && (<>
             <text x={head.x} y={head.y - hr * 0.2} textAnchor="middle" fill="#111827" fontSize={nameFs} fontWeight={600} style={{ fontFamily: FONT, unicodeBidi: 'plaintext', ...PAGE_TEXT }} data-testid="link-name">
               {name || '?'}
             </text>
             <text x={head.x} y={head.y + hr * 0.58} textAnchor="middle" fill={t ? '#334155' : WARN} fontSize={hr * 0.46} style={{ fontFamily: FONT, unicodeBidi: 'plaintext', ...PAGE_TEXT }} data-testid="link-badge">
               {t ? `עמ׳ ${t}` : 'ללא יעד'}
             </text>
+            </>)}
           </g>
-          {ref && (
+          )}
+          {!noLinkHead && !noLinkText && ref && (
             <text
               x={head.x + (refRight ? hr * 1.25 : -hr * 1.25)}
               y={head.y - hr * 0.55}

@@ -19,6 +19,7 @@ import { useViewer } from '../state/store';
 import { subscribeZoom } from '../components/viewer/commands';
 import { RingBuffer } from './ring';
 import { HEARTBEAT_MS, LIVE_CHECK_MS, classifyMarker, isBenignError, isMarker, type AliveMarker, type DiagState, type Verdict } from './crash';
+import { labSummary } from './lab';
 import { fileLabel, scrubText, sessionDump, type Crumb, type CrumbValue, type SessionDump } from './report';
 
 export const RING_SIZE = 300;
@@ -176,6 +177,7 @@ function refreshState(): void {
   }
   state.orient = screen.orientation?.type ?? (window.innerWidth > window.innerHeight ? 'landscape' : 'portrait');
   state.workers = workerCount;
+  state.lab = labSummary() || undefined;
   const mem = (performance as unknown as { memory?: { usedJSHeapSize: number } }).memory;
   if (mem) state.heapMB = Math.round(mem.usedJSHeapSize / 1048576);
 }
