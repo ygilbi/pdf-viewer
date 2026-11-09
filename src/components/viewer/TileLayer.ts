@@ -33,12 +33,85 @@ import type { PageSize, PdfClient, Rect, RenderResult, RenderTask } from '../../
  * first, so background work pauses while a visible render runs).
  */
 
-const MAX_TILES = 8;
-const TILE_PIXEL_BUDGET = 36 * 1024 * 1024;
+const MP = 1024 * 1024;
 const MAX_SIDE = 4096;
-const MAX_PIXELS = 16 * 1024 * 1024;
-const HALO_PIXELS = 12 * 1024 * 1024;
-const BASE_CACHE_PAGES = 5;
+
+/**
+ * Raster memory budget. Phones / tablets get a much smaller one: iOS Safari kills the whole tab
+ * (it reloads to the start screen) once canvas + ImageBitmap memory passes a few hundred MB, and
+ * repeated pinch-zooming fills the caches with bitmaps at many scales. Desktop keeps the generous
+ * budget. The phone budget renders at most 2× device pixels (a 3× screen is still crisp at 2×).
+ */
+export interface MemProfile {
+  maxTiles: number;
+  tileBudget: number; // px, all sharp region bitmaps together
+  maxPixels: number; // px, one sharp render
+  haloPixels: number; // px, background halo render (0 = off)
+  baseCachePages: number;
+  baseLongSide: number; // px cap for the full-page base bitmap
+  dprCap: number;
+  prefetchNeighbours: 0 | 1 | 2;
+}
+
+export const DESKTOP_PROFILE: MemProfile = {
+  maxTiles: 8,
+  tileBudget: 36 * MP,
+  maxPixels: 16 * MP,
+  haloPixels: 12 * MP,
+  baseCachePages: 5,
+  baseLongSide: 3072,
+  dprCap: 4,
+  prefetchNeighbours: 2,
+};
+
+export const MOBILE_PROFILE: MemProfile = {
+  maxTiles: 3,
+  tileBudget: 10 * MP, // ≈ 40 MB
+  maxPixels: 6 * MP, // ≈ 24 MB per render
+  haloPixels: 0,
+  baseCachePages: 2,
+  baseLongSide: 2048,
+  dprCap: 2,
+  prefetchNeighbours: 1,
+};
+
+/** Phone / tablet / low-memory device → the small budget. */
+export function isConstrainedDevice(
+  nav: { userAgent?: string; platform?: string; maxTouchPoints?: number; deviceMemory?: number } | undefined = typeof navigator !== 'undefined'
+    ? (navigator as Navigator & { deviceMemory?: number })
+    : undefined,
+  coarse: boolean = typeof matchMedia === 'function' && matchMedia('(pointer: coarse)').matches,
+): boolean {
+  if (!nav) return false;
+  const ua = nav.userAgent ?? '';
+  const ios = /iPhone|iPad|iPod/.test(ua) || (nav.platform === 'MacIntel' && (nav.maxTouchPoints ?? 0) > 1);
+  const android = /Android/.test(ua);
+  const lowMem = typeof nav.deviceMemory === 'number' && nav.deviceMemory <= 4;
+  return ios || android || lowMem || coarse;
+}
+
+let profile: MemProfile | null = null;
+export function memProfile(): MemProfile {
+  if (profile) return profile;
+  let forced: string | null = null;
+  try {
+    forced = localStorage.getItem('pdfv-mem-profile'); // 'desktop' | 'mobile' (diagnostics / tests)
+  } catch {
+    /* ignore */
+  }
+  profile = forced === 'desktop' ? DESKTOP_PROFILE : forced === 'mobile' ? MOBILE_PROFILE : isConstrainedDevice() ? MOBILE_PROFILE : DESKTOP_PROFILE;
+  return profile;
+}
+
+/** Live raster layers (for the crash reporter's memory figure). */
+const liveLayers = new Set<PageLayers>();
+/** Total raster memory held by the viewer, in MB (sharp tiles + base canvas + cached base bitmaps). */
+export function rasterMemoryMB(): number {
+  let px = 0;
+  for (const l of liveLayers) px += l.pixelsHeld();
+  return Math.round((px * 4) / MP);
+}
+if (typeof window !== 'undefined') (window as unknown as { __pvRasterMB?: () => number }).__pvRasterMB = rasterMemoryMB;
 
 const PRIO_SHARP = 90;
 const PRIO_BASE = 80;
@@ -133,6 +206,11 @@ class LRU<V extends CachedBitmap> {
   has(k: number): boolean {
     return this.map.has(k);
   }
+  pixels(): number {
+    let px = 0;
+    for (const v of this.map.values()) px += v.bitmap.width * v.bitmap.height;
+    return px;
+  }
   clear(): void {
     for (const v of this.map.values()) v.bitmap.close();
     this.map.clear();
@@ -141,7 +219,7 @@ class LRU<V extends CachedBitmap> {
 
 export function baseLongSide(): number {
   const dpr = typeof window !== 'undefined' ? window.devicePixelRatio || 1 : 1;
-  return Math.round(Math.min(3072, 2048 * Math.max(1, Math.min(dpr, 1.5))));
+  return Math.round(Math.min(memProfile().baseLongSide, 2048 * Math.max(1, Math.min(dpr, 1.5))));
 }
 
 function snapToGrid(region: Rect, scale: number, pw: number, ph: number): Rect {
@@ -152,7 +230,7 @@ function snapToGrid(region: Rect, scale: number, pw: number, ph: number): Rect {
   return { x: x0, y: y0, width: x1 - x0, height: y1 - y0 };
 }
 
-const fitsCanvas = (r: Rect, s: number, maxPixels = MAX_PIXELS) =>
+const fitsCanvas = (r: Rect, s: number, maxPixels = memProfile().maxPixels) =>
   r.width * s <= MAX_SIDE && r.height * s <= MAX_SIDE && r.width * r.height * s * s <= maxPixels;
 
 export class PageLayers {
@@ -165,7 +243,7 @@ export class PageLayers {
   private baseLevel = 0;
   /** Base renders in flight, by page (the current page and prefetches). */
   private baseInflight = new Map<number, { task: RenderTask; scale: number }>();
-  private baseCache = new LRU<CachedBitmap>(BASE_CACHE_PAGES);
+  private baseCache = new LRU<CachedBitmap>(memProfile().baseCachePages);
   private tiles: Tile[] = [];
   private inflight: Inflight | null = null;
   private halo: Inflight | null = null;
@@ -180,6 +258,7 @@ export class PageLayers {
     private baseCanvas: HTMLCanvasElement,
     private tileHost: HTMLElement,
   ) {
+    liveLayers.add(this);
     baseCanvas.style.visibility = 'hidden';
   }
 
@@ -351,8 +430,15 @@ export class PageLayers {
 
   destroy(): void {
     this.destroyed = true;
+    liveLayers.delete(this);
     this.clear();
     this.baseCache.clear();
+  }
+
+  /** Raster pixels this layer holds right now (sharp tiles, base canvas, cached base bitmaps). */
+  pixelsHeld(): number {
+    const tiles = this.tiles.reduce((a, t) => a + t.pixels, 0);
+    return tiles + this.baseCanvas.width * this.baseCanvas.height + this.baseCache.pixels();
   }
 
   // ---- internals ------------------------------------------------------------
@@ -374,7 +460,7 @@ export class PageLayers {
     if (!fitsCanvas(region, scale)) {
       region = need; // drop the margin before dropping resolution
       if (!fitsCanvas(region, scale)) {
-        scale = Math.min(scale, MAX_SIDE / region.width, MAX_SIDE / region.height, Math.sqrt(MAX_PIXELS / (region.width * region.height)));
+        scale = Math.min(scale, MAX_SIDE / region.width, MAX_SIDE / region.height, Math.sqrt(memProfile().maxPixels / (region.width * region.height)));
         scale *= 0.999;
       }
     }
@@ -390,6 +476,7 @@ export class PageLayers {
   /** After a sharp tile: render a larger region at the same scale in the background. */
   private startHalo(scale: number, view: View | null = this.lastView): void {
     const v = view;
+    if (!memProfile().haloPixels) return; // phones: no background halo (memory)
     if (!v || this.halo || this.inflight) return;
     const plan = this.plan(v.zoom, v.visible);
     if (!plan || Math.abs(plan.scale / scale - 1) > 0.02) return;
@@ -404,7 +491,7 @@ export class PageLayers {
         { x: vis.x - vis.width * f, y: vis.y - vis.height * f, width: vis.width * (1 + 2 * f), height: vis.height * (1 + 2 * f) },
         pageRect,
       );
-      if (region && fitsCanvas(region, scale, HALO_PIXELS)) break;
+      if (region && fitsCanvas(region, scale, memProfile().haloPixels)) break;
       region = null;
       f -= 0.1;
     }
@@ -460,7 +547,7 @@ export class PageLayers {
   /** Low-priority work once the visible page's base is up: prefetch the neighbours' bases. */
   private startBackground(): void {
     const page = this.page;
-    for (const p of [page + 1, page - 1]) {
+    for (const p of [page + 1, page - 1].slice(0, memProfile().prefetchNeighbours)) {
       const sz = this.sizes[p - 1];
       if (!sz || this.baseInflight.has(p) || this.baseCache.has(p)) continue;
       const longest = Math.max(sz.width, sz.height);
@@ -526,7 +613,7 @@ export class PageLayers {
     this.tileHost.appendChild(canvas);
     // Budget: evict least-recently-used (never the new one).
     let total = this.tiles.reduce((a, t) => a + t.pixels, 0);
-    while (this.tiles.length > MAX_TILES || total > TILE_PIXEL_BUDGET) {
+    while (this.tiles.length > memProfile().maxTiles || total > memProfile().tileBudget) {
       // Prefer tiles that others already cover (e.g. overlapping slivers left by
       // renders during a pan), so a distinct view the user may return to survives.
       const candidates = this.tiles.filter((t) => t !== tile).sort((a, b) => a.used - b.used);
@@ -626,7 +713,7 @@ function releaseCanvas(c: HTMLCanvasElement): void {
 }
 
 function dpr(): number {
-  return (typeof window !== 'undefined' && window.devicePixelRatio) || 1;
+  return Math.min(memProfile().dprCap, (typeof window !== 'undefined' && window.devicePixelRatio) || 1);
 }
 
 function mark(name: string): void {

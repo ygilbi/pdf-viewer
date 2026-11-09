@@ -256,6 +256,10 @@ yieldChannel.port1.onmessage = () => slices.runNext();
 const scheduler = new RenderScheduler<Job>(runJob);
 
 async function runJob(job: Job): Promise<void> {
+  // Released in `finally` on EVERY path. A render cancelled mid-way (every pinch/zoom step cancels
+  // the previous one) used to keep its OffscreenCanvas alive until GC — on iOS canvas memory is
+  // only reclaimed then, so quick zooming piled up hundreds of MB and Safari killed the tab.
+  let canvas: OffscreenCanvas | null = null;
   try {
     if (job.active.cancelled) throw makeCancelError();
     const { pages } = await job.doc.ready;
@@ -264,13 +268,12 @@ async function runJob(job: Job): Promise<void> {
     if (job.active.cancelled) throw makeCancelError();
     const vp = page.getViewport({ scale: 1 });
     const plan = planRender(vp.width, vp.height, job.scale, job.region);
-    const canvas = new OffscreenCanvas(plan.width, plan.height);
+    canvas = new OffscreenCanvas(plan.width, plan.height);
     const ctx = canvas.getContext('2d', { alpha: false });
     if (!ctx) throw new Error(UNSUPPORTED_PREFIX + 'OffscreenCanvas 2D context is not available');
     await renderInto(page, ctx, plan, job.active, slices.forJob(() => job.priority));
     if (job.active.cancelled) throw makeCancelError();
     const bitmap = canvas.transferToImageBitmap();
-    canvas.width = canvas.height = 0;
     post({ type: 'rendered', id: job.id, page: job.page, bitmap, scale: plan.scale, region: plan.region }, [bitmap]);
   } catch (e) {
     const cancelled = job.active.cancelled || isCancelError(e);
@@ -281,6 +284,7 @@ async function runJob(job: Job): Promise<void> {
       cancelled: cancelled || undefined,
     });
   } finally {
+    if (canvas) canvas.width = canvas.height = 0;
     jobs.delete(job.id);
   }
 }

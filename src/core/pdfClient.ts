@@ -215,6 +215,7 @@ class MainThreadRenderer {
 
   private async run(job: MainJob): Promise<void> {
     const { rq, slices } = await this.libP;
+    let canvas: OffscreenCanvas | HTMLCanvasElement | null = null; // released in finally (also when cancelled)
     try {
       const d = this.docs.get(job.docId);
       if (!d) throw rq.makeCancelError();
@@ -223,7 +224,6 @@ class MainThreadRenderer {
       const page = await pages.get(job.localPage);
       const vp = page.getViewport({ scale: 1 });
       const plan = rq.planRender(vp.width, vp.height, job.opts.scale, job.opts.region);
-      let canvas: OffscreenCanvas | HTMLCanvasElement;
       if (typeof OffscreenCanvas !== 'undefined') {
         canvas = new OffscreenCanvas(plan.width, plan.height);
       } else {
@@ -236,7 +236,6 @@ class MainThreadRenderer {
       await rq.renderInto(page, ctx, plan, job.active, slices.forJob(() => job.priority));
       if (job.active.cancelled) throw rq.makeCancelError();
       const bitmap = await createImageBitmap(canvas);
-      canvas.width = canvas.height = 0;
       if (job.active.cancelled) {
         bitmap.close();
         throw rq.makeCancelError();
@@ -245,6 +244,7 @@ class MainThreadRenderer {
     } catch (e) {
       job.done.reject(rq.isCancelError(e) ? abortError('Render cancelled') : e instanceof Error ? e : new Error(String(e)));
     } finally {
+      if (canvas) canvas.width = canvas.height = 0;
       this.jobs.delete(job.id);
     }
   }

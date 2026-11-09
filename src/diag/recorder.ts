@@ -191,6 +191,9 @@ function sampleCanvases(): void {
   const mb = Math.round(bytes / 1048576);
   state.canvases = list.length;
   state.canvasMB = mb;
+  // Viewer raster memory incl. ImageBitmaps that are not <canvas> elements (cached base pages).
+  const raster = (window as unknown as { __pvRasterMB?: () => number }).__pvRasterMB;
+  if (raster) state.rasterMB = raster();
   if (list.length !== lastCanvasCount || Math.abs(mb - lastCanvasMB) > Math.max(4, lastCanvasMB * 0.1)) {
     lastCanvasCount = list.length;
     lastCanvasMB = mb;

@@ -27,6 +27,8 @@ export interface DiagState {
   vvH?: number;
   canvases?: number;
   canvasMB?: number;
+  /** Viewer raster memory (tiles + base + cached base bitmaps), MB. */
+  rasterMB?: number;
   heapMB?: number;
   workers?: number;
   orient?: string;
