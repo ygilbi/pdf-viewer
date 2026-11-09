@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { useViewer } from '../../state/store';
-import { buildItemTable, formatSubtotal, isItem, type ItemRow } from '../../core/itemTable';
+import { buildItemTable, formatM2, formatQtySubtotal, isItem, type ItemRow, type ItemSubtotal } from '../../core/itemTable';
 import { KIND_LABELS, kindOf, takeoffOnly } from '../../core/measurementEngine';
 import { MeasurementCategorySelect } from '../CategorySelect';
 import { startNewCountItem } from '../shell/CountFinishButton';
@@ -62,6 +62,12 @@ function Cell({
   return multiline ? <textarea rows={1} {...common} style={{ resize: 'vertical' }} /> : <input type="text" {...common} />;
 }
 
+/** "12 יח׳ · 45.20 מ״ר" for summary lines (quantity units, then the m² total). */
+function totals(t: ItemSubtotal): string {
+  const m2 = formatM2(t.m2);
+  return [formatQtySubtotal(t), m2 && `${m2} מ״ר`].filter(Boolean).join(' · ') || '—';
+}
+
 function goTo(r: ItemRow) {
   const s = useViewer.getState();
   if (s.currentPage !== r.page) s.setPage(r.page);
@@ -79,17 +85,18 @@ function RowActions({ r }: { r: ItemRow }) {
       >
         עמ׳ {r.page}
       </button>
-      {r.kind !== 'count' && (
-        <button
-          type="button"
-          onClick={() => useViewer.getState().updateMeasurement(r.id, { asItem: undefined })}
-          title="הוצא מטבלת הפריטים (המדידה נשארת)"
-          aria-label="הוצא מהטבלה"
-          className="rounded px-1.5 py-1 text-slate-500 hover:bg-slate-700 hover:text-red-300"
-        >
-          ×
-        </button>
-      )}
+      <button
+        type="button"
+        onClick={() => useViewer.getState().removeMeasurement(r.id)}
+        title="מחק את הפריט והסימון שלו בשרטוט (Ctrl+Z לביטול)"
+        aria-label="מחק פריט"
+        data-testid="item-delete"
+        className="rounded px-1.5 py-1 text-slate-500 hover:bg-slate-700 hover:text-red-300"
+      >
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+          <path d="M4 7h16M10 11v6M14 11v6M6 7l1 12a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-12M9 7V4h6v3" />
+        </svg>
+      </button>
     </div>
   );
 }
@@ -155,13 +162,13 @@ export default function ItemsPanel({ headerActions }: { onHide?: () => void; hea
           <div className="space-y-2 p-4 text-sm leading-relaxed text-slate-400">
             <p>אין עדיין פריטים.</p>
             <p>• פריטים נספרים (חלונות, דלתות…) נוצרים בכלי הספירה — "+ פריט חדש".</p>
-            <p>• שטח מדוד (למשל קיר מסך) נכנס לטבלה דרך "+ שטח / אורך כפריט", או בכפתור "כפריט" ברשימת המדידות.</p>
+            <p>• שטח או אורך שמודדים (למשל קיר מסך) נכנס לטבלה אוטומטית.</p>
           </div>
         ) : wide ? (
           <table className="w-full border-collapse text-[13px]">
             <thead className="sticky top-0 z-10 bg-slate-900 text-[11px] text-slate-400">
               <tr>
-                {['שם פריט', 'קטגוריה', 'מערכת', 'גודל', 'כמות', 'מידע נוסף', ''].map((h, i) => (
+                {['שם פריט', 'קטגוריה', 'מערכת', 'גודל', 'כמות', 'מ״ר', 'מידע נוסף', ''].map((h, i) => (
                   <th key={i} className="border-b border-slate-700 px-1.5 py-1 text-start font-semibold">
                     {h}
                   </th>
@@ -174,9 +181,10 @@ export default function ItemsPanel({ headerActions }: { onHide?: () => void; hea
                   <tr key={r.id} className="border-b border-slate-700/60 align-top" data-testid="items-row">
                     <td className="w-[16%] p-1"><Cell m={r.id} field="itemName" value={r.name} custom={r.custom.name} label="שם פריט" /></td>
                     <td className="w-[13%] p-1"><MeasurementCategorySelect id={r.id} value={r.categoryKey} /></td>
-                    <td className="w-[16%] p-1"><Cell m={r.id} field="system" value={r.system} custom={!!r.system} label="מערכת" /></td>
-                    <td className="w-[11%] p-1"><Cell m={r.id} field="sizeText" value={r.size} custom={r.custom.size} label="גודל" className="text-center" dir="ltr" /></td>
+                    <td className="w-[14%] p-1"><Cell m={r.id} field="system" value={r.system} custom={!!r.system} label="מערכת" /></td>
+                    <td className="w-[15%] p-1"><Cell m={r.id} field="sizeText" value={r.size} custom={r.custom.size} label="גודל" className="text-center" dir="ltr" /></td>
                     <td className="w-[11%] p-1"><Cell m={r.id} field="qtyText" value={r.qtyText} custom={r.custom.qty} label="כמות" className="text-center" /></td>
+                    <td className="w-[8%] p-1 pt-2 text-center font-mono tabular-nums text-slate-300" data-testid="item-m2">{formatM2(r.m2) || '—'}</td>
                     <td className="p-1"><Cell m={r.id} field="extra" value={r.extra} custom={r.custom.extra} label="מידע נוסף" multiline /></td>
                     <td className="w-px p-1"><RowActions r={r} /></td>
                   </tr>
@@ -186,9 +194,9 @@ export default function ItemsPanel({ headerActions }: { onHide?: () => void; hea
                     <span className="me-1.5 inline-block h-2.5 w-2.5 rounded-full border border-slate-500 align-middle" style={{ background: g.color ?? 'transparent' }} />
                     סה״כ {g.name}
                   </td>
-                  <td className="px-2 py-1.5 text-center font-mono tabular-nums" colSpan={3}>
-                    {formatSubtotal(g.subtotal)}
-                  </td>
+                  <td className="px-2 py-1.5 text-center font-mono tabular-nums">{formatQtySubtotal(g.subtotal) || '—'}</td>
+                  <td className="px-2 py-1.5 text-center font-mono tabular-nums" data-testid="subtotal-m2">{formatM2(g.subtotal.m2) || '—'}</td>
+                  <td colSpan={2} />
                 </tr>
               </tbody>
             ))}
@@ -209,6 +217,11 @@ export default function ItemsPanel({ headerActions }: { onHide?: () => void; hea
                       <Cell m={r.id} field="sizeText" value={r.size} custom={r.custom.size} label="גודל" dir="ltr" />
                       <Cell m={r.id} field="qtyText" value={r.qtyText} custom={r.custom.qty} label="כמות" />
                     </div>
+                    {r.m2 ? (
+                      <div className="px-1 text-[12px] text-slate-400" data-testid="item-m2">
+                        שטח: <span className="font-mono tabular-nums text-slate-200">{formatM2(r.m2)} מ״ר</span>
+                      </div>
+                    ) : null}
                     <Cell m={r.id} field="extra" value={r.extra} custom={r.custom.extra} label="מידע נוסף" multiline />
                   </div>
                 ))}
@@ -217,7 +230,7 @@ export default function ItemsPanel({ headerActions }: { onHide?: () => void; hea
                     <span className="me-1.5 inline-block h-2.5 w-2.5 rounded-full border border-slate-500 align-middle" style={{ background: g.color ?? 'transparent' }} />
                     סה״כ {g.name}
                   </span>
-                  <span className="font-mono tabular-nums">{formatSubtotal(g.subtotal)}</span>
+                  <span className="font-mono tabular-nums" data-testid="subtotal-m2">{totals(g.subtotal)}</span>
                 </div>
               </div>
             ))}
@@ -226,7 +239,7 @@ export default function ItemsPanel({ headerActions }: { onHide?: () => void; hea
         {rowsCount > 0 && (
           <div className="sticky bottom-0 flex items-center justify-between border-t border-slate-700 bg-slate-900 px-2 py-1.5 text-xs font-bold text-white" data-testid="items-total">
             <span>סה״כ כללי</span>
-            <span className="font-mono tabular-nums">{formatSubtotal(table.total)}</span>
+            <span className="font-mono tabular-nums">{totals(table.total)}</span>
           </div>
         )}
         {table.uncalibrated > 0 && (

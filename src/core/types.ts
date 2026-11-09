@@ -269,6 +269,8 @@ export interface TextItem {
   str: string;
   rect: Rect;
   q: [number, number, number, number, number, number];
+  /** Right-to-left run (Hebrew / Arabic): `str` is in logical order, so character 0 sits at the quad's far end. */
+  rtl?: boolean;
 }
 
 /** Extra worker request (handled by its own listener in pdfWorker.ts; not part of WorkerRequest). */

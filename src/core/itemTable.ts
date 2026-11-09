@@ -15,10 +15,11 @@ import {
 
 /**
  * טבלת פריטים — the owner's summary table: one row per item, grouped by category with a subtotal
- * per category. Columns (in this order): שם פריט · קטגוריה · מערכת · גודל · כמות · מידע נוסף.
+ * per category. Columns (in this order): שם פריט · קטגוריה · מערכת · גודל · כמות · מ״ר · מידע נוסף.
+ * מ״ר = the row's total area: a counted item's n × width × height, an area's net m² (lengths: none).
  * Every column except the category is free text; an empty field shows the automatic value.
  */
-export const ITEM_COLUMNS = ['שם פריט', 'קטגוריה', 'מערכת', 'גודל', 'כמות', 'מידע נוסף'] as const;
+export const ITEM_COLUMNS = ['שם פריט', 'קטגוריה', 'מערכת', 'גודל', 'כמות', 'מ״ר', 'מידע נוסף'] as const;
 
 export type ItemUnit = 'יח׳' | 'מ״ר' | 'מ׳';
 
@@ -36,6 +37,8 @@ export interface ItemRow {
   unit: ItemUnit;
   /** Display text of the quantity cell ("12", "45.20 מ״ר", or the user's own text). */
   qtyText: string;
+  /** Total area of the row in m² (null when unknown / not an area). */
+  m2: number | null;
   extra: string;
   /** Which cells hold user text (vs automatic values) — the editor shows automatic ones as hints. */
   custom: { name: boolean; size: boolean; qty: boolean; extra: boolean };
@@ -62,10 +65,10 @@ export interface ItemTable {
   uncalibrated: number;
 }
 
-/** Count groups are items; areas / lengths when marked `asItem`. */
+/** Count groups, areas and lengths are items (an area / length can be left out with `asItem: false`). */
 export function isItem(m: AreaMeasurement): boolean {
   const k = kindOf(m);
-  return k === 'count' || ((k === 'area' || k === 'length') && m.asItem === true);
+  return k === 'count' || ((k === 'area' || k === 'length') && m.asItem !== false);
 }
 
 const trim = (s: unknown) => (typeof s === 'string' ? s.trim() : '');
@@ -94,6 +97,15 @@ function bboxSize(m: AreaMeasurement, ppm: number): string {
   if (!Number.isFinite(x0)) return '';
   return `${fix2((x1 - x0) / ppm)}×${fix2((y1 - y0) / ppm)}`;
 }
+
+/** Quantity-column subtotal: units and meters (m² has its own column). */
+export const formatQtySubtotal = (t: ItemSubtotal): string => {
+  const parts: string[] = [];
+  if (t.units) parts.push(`${t.units} יח׳`);
+  if (t.m) parts.push(`${fix2(t.m)} מ׳`);
+  return parts.join(' · ');
+};
+export const formatM2 = (v: number | null | undefined): string => (v ? fix2(v) : '');
 
 export const formatSubtotal = (t: ItemSubtotal): string => {
   const parts: string[] = [];
@@ -164,6 +176,7 @@ export function buildItemTable(
       qty,
       unit,
       qtyText,
+      m2: kind === 'count' ? (extraM2 ? extraM2 : null) : kind === 'area' ? qty : null,
       extra: userExtra || formatDetails(m),
       custom: { name: !!userName, size: !!userSize, qty: !!userQty, extra: !!userExtra },
     };
@@ -199,9 +212,9 @@ export function buildItemTable(
 export function itemTableRows(t: ItemTable): string[][] {
   const out: string[][] = [[...ITEM_COLUMNS]];
   for (const g of t.groups) {
-    for (const r of g.rows) out.push([r.name, r.categoryName, r.system, r.size, r.qtyText, r.extra]);
-    out.push([`סה״כ ${g.name}`, g.name, '', '', formatSubtotal(g.subtotal), '']);
+    for (const r of g.rows) out.push([r.name, r.categoryName, r.system, r.size, r.qtyText, formatM2(r.m2), r.extra]);
+    out.push([`סה״כ ${g.name}`, g.name, '', '', formatQtySubtotal(g.subtotal), formatM2(g.subtotal.m2), '']);
   }
-  if (t.groups.length > 1) out.push(['סה״כ כללי', '', '', '', formatSubtotal(t.total), '']);
+  if (t.groups.length > 1) out.push(['סה״כ כללי', '', '', '', formatQtySubtotal(t.total), formatM2(t.total.m2), '']);
   return out;
 }

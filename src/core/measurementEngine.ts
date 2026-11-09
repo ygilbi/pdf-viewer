@@ -438,11 +438,11 @@ export function itemOf(m: { kind?: unknown; item?: unknown }): ItemDims | null {
 }
 
 /** Derived quantities of a count group with item dimensions: n×w×h (m²) and n×2(w+h) (m). */
-export function itemQuantities(m: AreaMeasurement): { areaM2: number; perimeterM: number; n: number } | null {
+export function itemQuantities(m: AreaMeasurement): { areaM2: number; n: number } | null {
   const it = itemOf(m);
   if (!it) return null;
   const n = m.points.length;
-  return { areaM2: n * it.width * it.height, perimeterM: n * 2 * (it.width + it.height), n };
+  return { areaM2: n * it.width * it.height, n };
 }
 
 /** "W1 150×140" (centimetres, as on a window schedule); '' without dimensions. */
@@ -539,7 +539,6 @@ export interface MeasurementSummary {
   /** Count groups with item dimensions: Σ n×w×h (m²; needs no calibration). */
   itemAreaM2: number;
   /** Count groups with item dimensions: Σ n×2(w+h) — frame / profile length (m). */
-  itemPerimeterM: number;
 }
 
 const emptySummary = (): MeasurementSummary => ({
@@ -552,7 +551,6 @@ const emptySummary = (): MeasurementSummary => ({
   count: 0,
   openingsM2: 0,
   itemAreaM2: 0,
-  itemPerimeterM: 0,
 });
 
 /**
@@ -579,7 +577,6 @@ function summarize(
         const iq = itemQuantities(m);
         if (iq) {
           s.itemAreaM2 += iq.areaM2;
-          s.itemPerimeterM += iq.perimeterM;
         }
       }
       continue;
@@ -673,7 +670,6 @@ export const MEASUREMENT_COLUMNS = [
   'שייך ל',
   'מידות פריט (ס״מ)',
   'שטח פריטים (מ״ר)',
-  'היקף פרופיל (מ׳)',
   'פרטים',
 ] as const;
 
@@ -733,14 +729,12 @@ export function buildMeasurementRows(
     let qty = '';
     let dims = '';
     let itemArea = '';
-    let itemPerim = '';
     if (kind === 'count') {
       qty = String(m.points.length);
       const iq = itemQuantities(m);
       if (iq) {
         dims = formatItemDims(itemOf(m));
         itemArea = iq.areaM2.toFixed(2);
-        itemPerim = iq.perimeterM.toFixed(2);
       }
     } else if (ppm !== null) {
       if (kind === 'length') len = polylineLengthMeters(m.points, ppm).toFixed(2);
@@ -754,11 +748,11 @@ export function buildMeasurementRows(
     const cat = key ? categoryName(key, categories) : '';
     const parentId = assignment.get(m.id);
     const parent = parentId ? (byId.get(parentId)?.label ?? '') : '';
-    rows.push([i + 1, KIND_LABELS[kind], m.label, cat, m.page, area, perim, len, qty, m.points.length, parent, dims, itemArea, itemPerim, formatDetails(m)]);
+    rows.push([i + 1, KIND_LABELS[kind], m.label, cat, m.page, area, perim, len, qty, m.points.length, parent, dims, itemArea, formatDetails(m)]);
   });
   const anyItems = measurements.some((m) => itemOf(m));
   const itemCells = (t: MeasurementSummary): string[] =>
-    anyItems ? ['', t.itemAreaM2.toFixed(2), t.itemPerimeterM.toFixed(2), ''] : ['', '', '', ''];
+    anyItems ? ['', t.itemAreaM2.toFixed(2), ''] : ['', '', ''];
   if (measurements.some((m) => categoryKey(m))) {
     for (const c of computeCategorySummaries(measurements, calibrations, categories)) {
       const t = c.summary;
@@ -767,7 +761,7 @@ export function buildMeasurementRows(
   }
   const s = computeDocumentSummary(measurements, calibrations);
   const total = (label: string, col: number, v: string | number) => {
-    const r: (string | number)[] = ['', '', label, '', '', '', '', '', '', '', '', '', '', '', ''];
+    const r: (string | number)[] = ['', '', label, '', '', '', '', '', '', '', '', '', '', ''];
     r[col] = v;
     rows.push(r);
     return r;
@@ -777,16 +771,16 @@ export function buildMeasurementRows(
   total('נטו', 5, s.netM2.toFixed(2));
   total('סה״כ אורך', 7, s.lengthM.toFixed(2));
   const countRow = total('סה״כ כמות', 8, s.count);
-  if (anyItems) countRow.splice(11, 4, ...itemCells(s));
+  if (anyItems) countRow.splice(11, 3, ...itemCells(s));
   // Notes / text labels (not quantities) in their own section after the totals.
   const notes = all.filter((m) => (m.kind === 'note' || m.kind === 'text') && (m.text ?? '').trim());
   if (notes.length) {
-    rows.push(['', '', '', '', '', '', '', '', '', '', '', '', '', '', '']);
-    rows.push(['', 'הערות', 'שם', 'קטגוריה', 'עמוד', 'טקסט', '', '', '', '', '', '', '', '', '']);
+    rows.push(['', '', '', '', '', '', '', '', '', '', '', '', '', '']);
+    rows.push(['', 'הערות', 'שם', 'קטגוריה', 'עמוד', 'טקסט', '', '', '', '', '', '', '', '']);
     notes.forEach((m, i) => {
       const key = categoryKey(m);
       const text = (m.text ?? '').trim().replace(/\s*\r?\n\s*/g, ' / ');
-      rows.push([i + 1, KIND_LABELS[kindOf(m)], m.label, key ? categoryName(key, categories) : '', m.page, text, '', '', '', '', '', '', '', '', '']);
+      rows.push([i + 1, KIND_LABELS[kindOf(m)], m.label, key ? categoryName(key, categories) : '', m.page, text, '', '', '', '', '', '', '', '']);
     });
   }
   return rows.map((r) => r.map(String));

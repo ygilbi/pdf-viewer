@@ -246,3 +246,21 @@ describe('result context', () => {
     expect(findInItems(items, 1, buildMatcher('D1', DEFAULT_SEARCH_OPTIONS)!)[0].after).toBeUndefined();
   });
 });
+
+import { substringRect as subRect, startsRtl } from './textGeometry';
+describe('RTL text highlight position', () => {
+  // "חזית צפונית" drawn left→right on screen from x=100 to x=210 (11 chars, 10 units each)
+  const item = { str: 'חזית צפונית', q: [100, 50, 110, 0, 0, -12] as [number, number, number, number, number, number], rect: { x: 100, y: 38, width: 110, height: 12 }, rtl: true };
+  it('maps logical indices from the right end for Hebrew runs', () => {
+    const r = subRect(item, 5, 11); // "צפונית" = the visually LEFT word
+    expect(r.x).toBeCloseTo(100, 6);
+    expect(r.width).toBeCloseTo(60, 6);
+    const r2 = subRect(item, 0, 4); // "חזית" = the visually RIGHT word
+    expect(r2.x + r2.width).toBeCloseTo(210, 6);
+  });
+  it('detects RTL from the first strong character', () => {
+    expect(startsRtl('חזית צפונית')).toBe(true);
+    expect(startsRtl('12 W1 חלון')).toBe(false);
+    expect(startsRtl('1:100 קנ״מ')).toBe(true);
+  });
+});

@@ -46,7 +46,7 @@ function useShellKeys() {
           } else handled = false;
           break;
         case 'KeyM':
-          if (!e.shiftKey) toggleLeftTab('measurements');
+          if (!e.shiftKey) toggleLeftTab();
           else handled = false;
           break;
         case 'Escape':

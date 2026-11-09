@@ -26,7 +26,6 @@ import { InstallButton, currentOs, openDefaultAppDialog } from '../../pwa';
 import { WINDOWS_DOWNLOAD_URL, showWindowsDownload } from '../../pwa/desktopDownload';
 import { signOut, useAuthUser } from '../../auth/session';
 import { toggleLeftTab } from '../../pricing/LeftDrawer';
-import { usePricingUi } from '../../pricing/pricingUi';
 import { DriveOpenButton } from '../../drive/DriveUi';
 import { formatPaper } from '../../text/scaleDetect';
 import { IconSearch, openSearch } from '../text/SearchPanel';
@@ -52,7 +51,6 @@ export function TopMenu({ onOpenFile }: { onOpenFile(file: File): void }) {
   const thumbsOpen = useUi((s) => s.thumbsOpen);
   const measOpen = useUi((s) => s.measurementsOpen);
   const toggleDrawer = useUi((s) => s.toggleDrawer);
-  const leftTab = usePricingUi((s) => s.tab);
 
   const fileName = useViewer((s) => s.fileName);
   const numPages = useViewer((s) => s.numPages);
@@ -318,11 +316,11 @@ export function TopMenu({ onOpenFile }: { onOpenFile(file: File): void }) {
             <IconPages />
           </ToolButton>
           <ToolButton
-            label="רשימת מדידות"
+            label="טבלת פריטים"
             shortcut="M"
-            active={measOpen && leftTab === 'measurements'}
+            active={measOpen}
             disabled={!hasDoc}
-            onClick={() => toggleLeftTab('measurements')}
+            onClick={() => toggleLeftTab()}
           >
             <IconList />
           </ToolButton>

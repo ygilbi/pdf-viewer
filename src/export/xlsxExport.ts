@@ -33,7 +33,8 @@ async function loadExcel(): Promise<typeof import('exceljs')> {
 export const ITEMS_HEADER_ROW = 4;
 const SUBTOTAL_FILL: Fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFE6EEF8' } };
 const UNIT_FIELD: Record<ItemUnit, keyof ItemSubtotal> = { 'יח׳': 'units', 'מ״ר': 'm2', 'מ׳': 'm' };
-const UNITS: ItemUnit[] = ['יח׳', 'מ״ר', 'מ׳'];
+/** Columns of the items sheet (A…H). */
+const COLS = 8;
 /** Drops float noise (1.5 × 1.4 × 2 = 4.199999…) from the cached results. */
 const round6 = (v: number) => Math.round(v * 1e6) / 1e6;
 
@@ -51,21 +52,22 @@ function itemsSheet(wb: Workbook, input: XlsxInput, table: ItemTable) {
     views: [{ rightToLeft: true, state: 'frozen', ySplit: ITEMS_HEADER_ROW }],
     pageSetup: { orientation: 'landscape', fitToPage: true, fitToWidth: 1, fitToHeight: 0, paperSize: 9 },
   });
-  ws.columns = [{ width: 26 }, { width: 16 }, { width: 22 }, { width: 14 }, { width: 11 }, { width: 7 }, { width: 40 }];
-  ws.mergeCells('A1:G1');
+  ws.columns = [{ width: 26 }, { width: 16 }, { width: 22 }, { width: 16 }, { width: 11 }, { width: 7 }, { width: 11 }, { width: 40 }];
+  ws.mergeCells('A1:H1');
   const t = ws.getCell('A1');
   t.value = 'טבלת פריטים';
   t.font = { bold: true, size: 16 };
   t.alignment = { horizontal: 'right' };
-  ws.mergeCells('A2:G2');
+  ws.mergeCells('A2:H2');
   const meta = ws.getCell('A2');
   meta.value = [input.title, input.files.join(', '), input.dateText && `תאריך: ${input.dateText}`].filter(Boolean).join(' · ');
   meta.font = { color: { argb: 'FF64748B' } };
   meta.alignment = { horizontal: 'right' };
 
   const head = ws.getRow(ITEMS_HEADER_ROW);
-  const [cName, cCat, cSys, cSize, cQty, cExtra] = ITEM_COLUMNS;
-  head.values = [cName, cCat, cSys, cSize, cQty, 'יחידה', cExtra];
+  const [cName, cCat, cSys, cSize, cQty, cM2, cExtra] = ITEM_COLUMNS;
+  // A name · B category · C system · D size · E quantity · F unit · G m² · H additional info
+  head.values = [cName, cCat, cSys, cSize, cQty, 'יחידה', cM2, cExtra];
   head.font = { bold: true };
   head.height = 22;
   head.eachCell((c) => {
@@ -76,20 +78,20 @@ function itemsSheet(wb: Workbook, input: XlsxInput, table: ItemTable) {
 
   let r = ITEMS_HEADER_ROW + 1;
   const style = (row: ReturnType<Worksheet['getRow']>, fill?: Fill) => {
-    for (let c = 1; c <= 7; c++) {
+    for (let c = 1; c <= COLS; c++) {
       const cell = row.getCell(c);
       cell.border = BORDER;
-      cell.alignment = { vertical: 'middle', wrapText: true, horizontal: c === 5 || c === 6 ? 'center' : 'right' };
+      cell.alignment = { vertical: 'middle', wrapText: true, horizontal: c >= 5 && c <= 7 ? 'center' : 'right' };
       if (fill) cell.fill = fill;
     }
   };
   const fmtQty = (v: number) => (Number.isInteger(v) ? '#,##0' : NUM);
-  /** Subtotal cells per unit, for the grand total. */
-  const subCells: Record<ItemUnit, string[]> = { 'יח׳': [], 'מ״ר': [], 'מ׳': [] };
+  /** Subtotal cells for the grand total: quantity per unit (יח׳ / מ׳) and the m² column. */
+  const subCells: Record<'יח׳' | 'מ׳' | 'm2', string[]> = { 'יח׳': [], 'מ׳': [], m2: [] };
 
   if (!table.groups.length) {
-    ws.mergeCells(r, 1, r, 7);
-    ws.getCell(r, 1).value = 'אין פריטים בדפים שנבחרו (פריט = ספירה, או שטח / אורך שסומן כפריט)';
+    ws.mergeCells(r, 1, r, COLS);
+    ws.getCell(r, 1).value = 'אין פריטים בדפים שנבחרו';
     return ws;
   }
   for (const g of table.groups) {
@@ -109,39 +111,48 @@ function itemsSheet(wb: Workbook, input: XlsxInput, table: ItemTable) {
         row.getCell(5).numFmt = it.kind === 'count' && Number.isInteger(it.qty) ? '#,##0' : NUM;
       } else row.getCell(5).value = it.qtyText;
       row.getCell(6).value = it.unit;
-      row.getCell(7).value = it.extra || null;
+      if (it.m2) {
+        row.getCell(7).value = round6(it.m2);
+        row.getCell(7).numFmt = NUM;
+      }
+      row.getCell(8).value = it.extra || null;
       style(row);
       r++;
     }
     const last = r - 1;
-    // Area of counted items with measured dims (n × w × h): part of the m² subtotal (buildItemTable)
-    // but not of any m² row — added to the SUMIF as a constant so Excel's total matches.
-    const rowSum = (u: ItemUnit) => g.rows.reduce((acc, x) => acc + (x.unit === u && x.qty !== null ? x.qty : 0), 0);
-    const extraM2 = round6(g.subtotal.m2 - rowSum('מ״ר'));
     const hasRows = (u: ItemUnit) => g.rows.some((x) => x.unit === u && x.qty !== null);
-    const used = UNITS.filter((u) => hasRows(u) || (u === 'מ״ר' && extraM2 > 0));
-    for (const u of used.length ? used : [null]) {
+    const qtyUnits = (['יח׳', 'מ׳'] as const).filter((u) => hasRows(u));
+    const m2 = round6(g.subtotal.m2);
+    // One subtotal row per quantity unit; the m² sum sits on the first of them.
+    const n = Math.max(1, qtyUnits.length);
+    for (let i = 0; i < n; i++) {
+      const u = qtyUnits[i];
       const row = ws.getRow(r);
       row.getCell(1).value = `סה״כ ${g.name}`;
       if (u) {
         const v = round6(g.subtotal[UNIT_FIELD[u]]);
-        const extra = u === 'מ״ר' && extraM2 > 0 ? `+${extraM2}` : '';
-        row.getCell(5).value =
-          textQty.has(u) || !hasRows(u)
-            ? v
-            : { formula: `SUMIF(F${first}:F${last},"${u.replace(/"/g, '""')}",E${first}:E${last})${extra}`, result: v };
+        row.getCell(5).value = textQty.has(u)
+          ? v
+          : { formula: `SUMIF(F${first}:F${last},"${u.replace(/"/g, '""')}",E${first}:E${last})`, result: v };
         row.getCell(5).numFmt = u === 'יח׳' ? fmtQty(v) : NUM;
         row.getCell(6).value = u;
         subCells[u].push(`E${r}`);
-      } else row.getCell(5).value = '—';
+      }
+      if (i === 0) {
+        row.getCell(7).value = { formula: `SUM(G${first}:G${last})`, result: m2 };
+        row.getCell(7).numFmt = NUM;
+        subCells.m2.push(`G${r}`);
+      }
       row.font = { bold: true };
       style(row, SUBTOTAL_FILL);
       r++;
     }
   }
   if (table.groups.length > 1) {
-    const used = UNITS.filter((u) => subCells[u].length);
-    for (const u of used.length ? used : [null]) {
+    const qtyUnits = (['יח׳', 'מ׳'] as const).filter((u) => subCells[u].length);
+    const n = Math.max(1, qtyUnits.length);
+    for (let i = 0; i < n; i++) {
+      const u = qtyUnits[i];
       const row = ws.getRow(r);
       row.getCell(1).value = 'סה״כ כללי';
       if (u) {
@@ -149,7 +160,11 @@ function itemsSheet(wb: Workbook, input: XlsxInput, table: ItemTable) {
         row.getCell(5).value = { formula: subCells[u].join('+'), result: v };
         row.getCell(5).numFmt = u === 'יח׳' ? fmtQty(v) : NUM;
         row.getCell(6).value = u;
-      } else row.getCell(5).value = '—';
+      }
+      if (i === 0) {
+        row.getCell(7).value = { formula: subCells.m2.join('+'), result: round6(table.total.m2) };
+        row.getCell(7).numFmt = NUM;
+      }
       row.font = { bold: true, size: 12 };
       style(row, TOTAL_FILL);
       r++;
@@ -157,7 +172,7 @@ function itemsSheet(wb: Workbook, input: XlsxInput, table: ItemTable) {
   }
   if (table.uncalibrated) {
     r++;
-    ws.mergeCells(r, 1, r, 7);
+    ws.mergeCells(r, 1, r, COLS);
     const c = ws.getCell(r, 1);
     c.value = `⚠ ${table.uncalibrated} שורות בדף לא מכויל — הכמות שלהן אינה נכללת בסיכומים`;
     c.font = { color: { argb: 'FFB45309' } };

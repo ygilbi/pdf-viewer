@@ -11,7 +11,7 @@ import {
   type MeasurementSummary,
 } from '../core/measurementEngine';
 import { BLACK, GREY, drawShaped, ellipsize, hexColor, shape, wrapCell, wrapText, type FontPair } from './pdfCommon';
-import { ITEM_COLUMNS, formatSubtotal, type ItemTable } from '../core/itemTable';
+import { ITEM_COLUMNS, formatM2, formatQtySubtotal, type ItemTable } from '../core/itemTable';
 import type { PdfBuildInput } from './types';
 
 const W = 595.28;
@@ -274,18 +274,19 @@ export function writeItems(doc: PDFDocument, fonts: FontPair, input: PdfBuildInp
   w.para(`דפים בייצוא: ${input.pages.length}${input.dateText ? ` · תאריך: ${input.dateText}` : ''}`, 9, GREY);
   w.y += 6;
   if (!table.groups.length) {
-    w.para('אין פריטים בדפים שנבחרו. פריט הוא ספירה, או שטח / אורך שסומן כפריט.', 10);
+    w.para('אין פריטים בדפים שנבחרו.', 10);
     return;
   }
 
-  const [cName, cCat, cSys, cSize, cQty, cExtra] = ITEM_COLUMNS;
+  const [cName, cCat, cSys, cSize, cQty, cM2, cExtra] = ITEM_COLUMNS;
   const cols: Col[] = [
-    { title: cName, width: 112 },
-    { title: cCat, width: 74 },
-    { title: cSys, width: 86 },
-    { title: cSize, width: 62, align: 'center', wrap: true, ltr: true },
-    { title: cQty, width: 62, align: 'center', wrap: true, ltr: true },
-    { title: cExtra, width: W - 2 * M - 396 },
+    { title: cName, width: 104 },
+    { title: cCat, width: 68 },
+    { title: cSys, width: 80 },
+    { title: cSize, width: 70, align: 'center', wrap: true, ltr: true },
+    { title: cQty, width: 52, align: 'center', wrap: true, ltr: true },
+    { title: cM2, width: 46, align: 'center', ltr: true },
+    { title: cExtra, width: W - 2 * M - 420 },
   ];
   const rows: Cell[][] = [];
   const kind: ('row' | 'sub' | 'grand')[] = [];
@@ -293,14 +294,14 @@ export function writeItems(doc: PDFDocument, fonts: FontPair, input: PdfBuildInp
   for (const g of table.groups) {
     const swatch = g.color ?? '#94a3b8';
     g.rows.forEach((r) => {
-      rows.push([{ t: r.name }, { t: r.categoryName, swatch }, { t: r.system }, { t: r.size }, { t: r.qtyText }, { t: r.extra }]);
+      rows.push([{ t: r.name }, { t: r.categoryName, swatch }, { t: r.system }, { t: r.size }, { t: r.qtyText }, { t: formatM2(r.m2) }, { t: r.extra }]);
       kind.push('row');
     });
-    rows.push([{ t: `סה״כ ${g.name}`, bold: true }, { t: '' }, { t: '' }, { t: '' }, { t: lines(formatSubtotal(g.subtotal)), bold: true }, { t: '' }]);
+    rows.push([{ t: `סה״כ ${g.name}`, bold: true }, { t: '' }, { t: '' }, { t: '' }, { t: lines(formatQtySubtotal(g.subtotal)), bold: true }, { t: formatM2(g.subtotal.m2), bold: true }, { t: '' }]);
     kind.push('sub');
   }
   if (table.groups.length > 1) {
-    rows.push([{ t: 'סה״כ כללי', bold: true }, { t: '' }, { t: '' }, { t: '' }, { t: lines(formatSubtotal(table.total)), bold: true }, { t: '' }]);
+    rows.push([{ t: 'סה״כ כללי', bold: true }, { t: '' }, { t: '' }, { t: '' }, { t: lines(formatQtySubtotal(table.total)), bold: true }, { t: formatM2(table.total.m2), bold: true }, { t: '' }]);
     kind.push('grand');
   }
   let zebra = 0;

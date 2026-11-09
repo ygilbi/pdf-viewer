@@ -56,7 +56,7 @@ export function viewportTransform(view: readonly number[], rotation = 0, scale =
  */
 export function toTextItem(
   vt: Matrix,
-  item: { str: string; transform: Matrix; width: number; height: number },
+  item: { str: string; transform: Matrix; width: number; height: number; dir?: string },
 ): TextItem | null {
   const str = item.str;
   if (!str || !str.trim()) return null;
@@ -82,7 +82,14 @@ export function toTextItem(
   const [ux, uy] = lin(bx * w, by * w);
   const [vx, vy] = lin(upx * h, upy * h);
   const q: TextItem['q'] = [ox, oy, ux, uy, vx, vy];
-  return { str, rect: quadRect(q, 0, 1), q };
+  const rtl = item.dir ? item.dir === 'rtl' : startsRtl(str);
+  return rtl ? { str, rect: quadRect(q, 0, 1), q, rtl } : { str, rect: quadRect(q, 0, 1), q };
+}
+
+/** First strong character is Hebrew / Arabic (fallback when pdf.js gives no `dir`). */
+export function startsRtl(s: string): boolean {
+  const m = /[A-Za-z\u00C0-\u024F\u0590-\u08FF\uFB1D-\uFDFF\uFE70-\uFEFF]/.exec(s);
+  return !!m && /[\u0590-\u08FF\uFB1D-\uFDFF\uFE70-\uFEFF]/.test(m[0]);
 }
 
 /** Axis-aligned bounds of the part [t0, t1] (fractions of the baseline) of a text quad. */
@@ -102,7 +109,10 @@ export function quadRect(q: TextItem['q'], t0: number, t1: number): Rect {
 /** Bounds of characters [start, end) of an item (proportional along the baseline). */
 export function substringRect(item: TextItem, start: number, end: number): Rect {
   const n = item.str.length || 1;
-  return quadRect(item.q, Math.max(0, start) / n, Math.min(n, end) / n);
+  const a = Math.max(0, start) / n;
+  const b = Math.min(n, end) / n;
+  // RTL: logical character 0 is drawn at the END of the baseline (right side of a Hebrew line).
+  return item.rtl ? quadRect(item.q, 1 - b, 1 - a) : quadRect(item.q, a, b);
 }
 
 export function rectCenter(r: Rect): { x: number; y: number } {
@@ -113,13 +123,14 @@ export function rectCenter(r: Rect): { x: number; y: number } {
 export function toTextItems(vt: Matrix, items: readonly unknown[]): TextItem[] {
   const out: TextItem[] = [];
   for (const it of items) {
-    const o = it as { str?: unknown; transform?: unknown; width?: unknown; height?: unknown };
+    const o = it as { str?: unknown; transform?: unknown; width?: unknown; height?: unknown; dir?: unknown };
     if (typeof o.str !== 'string' || !Array.isArray(o.transform)) continue;
     const t = toTextItem(vt, {
       str: o.str,
       transform: o.transform as number[],
       width: Number(o.width) || 0,
       height: Number(o.height) || 0,
+      ...(typeof o.dir === 'string' ? { dir: o.dir } : {}),
     });
     if (t) out.push(t);
   }

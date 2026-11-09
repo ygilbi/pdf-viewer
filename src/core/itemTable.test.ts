@@ -16,8 +16,8 @@ const ms: AreaMeasurement[] = [
   // curtain wall: 4 m × 9.4 m area marked as an item, with a 1×1 m opening inside
   { id: 'a1', page: 1, kind: 'area', label: 'חזית 1', color: '#000', category: 'cw', points: rect(0, 0, 40, 94), asItem: true, itemName: 'CW-1', system: 'קיר מסך סטיק' },
   { id: 'd1', page: 1, kind: 'deduct', label: 'פתח 1', color: '#000', points: rect(5, 5, 10, 10) },
-  // area NOT marked as item → not in the table
-  { id: 'a2', page: 1, kind: 'area', label: 'חזית 2', color: '#000', points: rect(100, 0, 10, 10) },
+  // area explicitly left out of the table (areas / lengths are items by default)
+  { id: 'a2', page: 1, kind: 'area', label: 'חזית 2', color: '#000', points: rect(100, 0, 10, 10), asItem: false },
   // marked area on an uncalibrated page
   { id: 'a3', page: 2, kind: 'area', label: 'חזית 3', color: '#000', points: rect(0, 0, 10, 10), asItem: true },
 ];
@@ -42,16 +42,17 @@ describe('items table', () => {
     expect(cw.qtyText).toBe('36.60 מ״ר');
     expect(t.groups[1].subtotal.m2).toBeCloseTo(36.6, 5);
   });
-  it('excludes unmarked areas and flags uncalibrated ones', () => {
+  it('includes areas by default, excludes asItem:false, flags uncalibrated ones', () => {
     expect(t.groups.flatMap((g) => g.rows).some((r) => r.id === 'a2')).toBe(false);
     expect(t.uncalibrated).toBe(1);
     expect(t.groups[2].rows[0].qtyText).toBe('לא מכויל');
   });
   it('builds export rows in the owner\'s column order with category subtotals', () => {
     const rows = itemTableRows(t);
-    expect(rows[0]).toEqual(['שם פריט', 'קטגוריה', 'מערכת', 'גודל', 'כמות', 'מידע נוסף']);
-    expect(rows).toContainEqual(['סה״כ חלונות', 'חלונות', '', '', '7 יח׳ · 6.30 מ״ר', '']);
-    expect(rows).toContainEqual(['סה״כ קירות מסך', 'קירות מסך', '', '', '36.60 מ״ר', '']);
+    expect(rows[0]).toEqual(['שם פריט', 'קטגוריה', 'מערכת', 'גודל', 'כמות', 'מ״ר', 'מידע נוסף']);
+    expect(rows).toContainEqual(['סה״כ חלונות', 'חלונות', '', '', '7 יח׳', '6.30', '']);
+    expect(rows).toContainEqual(['W1', 'חלונות', 'קליל 7000', '150×140 (2.10 מ״ר)', '3', '6.30', '']);
+    expect(rows).toContainEqual(['סה״כ קירות מסך', 'קירות מסך', '', '', '', '36.60', '']);
     expect(rows[rows.length - 1][0]).toBe('סה״כ כללי');
   });
   it('parses free-text quantities', () => {

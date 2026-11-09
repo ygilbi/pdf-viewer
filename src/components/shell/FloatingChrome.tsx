@@ -242,8 +242,8 @@ export function FloatingChrome() {
           data-drawer-toggle="measurements"
           data-testid="handle-measurements"
           onClick={() => toggleDrawer('measurements')}
-          aria-label="רשימת מדידות (M)"
-          title="רשימת מדידות (M)"
+          aria-label="טבלת פריטים (M)"
+          title="טבלת פריטים (M)"
           className={
             'absolute left-2 top-2 z-20 flex h-9 w-9 items-center justify-center rounded-lg border border-slate-600/70 bg-slate-900/75 ' +
             'text-slate-300 shadow-lg backdrop-blur hover:bg-slate-800 hover:text-white focus:outline-none focus-visible:ring-1 focus-visible:ring-sky-400 ' +
