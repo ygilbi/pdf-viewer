@@ -1889,7 +1889,7 @@ function CalibrationPrompt({ p1, p2 }: { p1: Point; p2: Point }) {
     const s = useViewer.getState();
     s.setCalibration(s.currentPage, { pixelsPerMeter: computePixelsPerMeter(p1, p2, m), p1, p2, meters: m });
     s.setDraft([]);
-    s.setTool('area');
+    s.setTool('rectArea');
   };
 
   // Below the lower end of the line, in page units; scaled by 1/zoom to stay screen-sized.

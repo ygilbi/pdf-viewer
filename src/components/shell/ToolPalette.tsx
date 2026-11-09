@@ -1,4 +1,5 @@
-import { Fragment, useEffect, useRef, useState, type ReactElement } from 'react';
+import { Fragment, useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactElement } from 'react';
+import { createPortal } from 'react-dom';
 import { useViewer } from '../../state/store';
 import { useUi } from '../../state/uiStore';
 import { useMarkup } from '../../state/markupStore';
@@ -11,7 +12,6 @@ import { isMarkupKind, kindOf } from '../../core/measurementEngine';
 /** Thumbnail drawer width (ThumbnailSidebar is 184px) + gap, so the palette slides clear of it. */
 const THUMBS_OFFSET = 184 + 8;
 const LABELS_KEY = 'aluminum-palette-labels-v1';
-const MENU_KEY = (m: ToolMenuId) => `aluminum-palette-${m}-open-v1`;
 /** Header icon of each expandable menu (when no tool of it is active). */
 export const MENU_ICON: Record<ToolMenuId, ReactElement> = { area: <IconAreaManual />, shapes: <IconShapes /> };
 /** Each menu sits right after this tool. */
@@ -38,18 +38,6 @@ function loadLabels(): boolean {
   }
 }
 
-function loadMenuOpen(): Record<ToolMenuId, boolean> {
-  const get = (m: ToolMenuId, def: boolean) => {
-    try {
-      const v = localStorage.getItem(MENU_KEY(m));
-      return v === null ? def : v === '1';
-    } catch {
-      return def;
-    }
-  };
-  return { area: get('area', true), shapes: get('shapes', false) };
-}
-
 /** Palette sections, in TOOL_GROUP_LABELS order (new groups, e.g. 'document', appear automatically). */
 export const TOOL_GROUPS: ToolGroup[] = (Object.keys(TOOL_GROUP_LABELS) as ToolGroup[]).filter((g) => TOOLS.some((t) => t.group === g));
 /** Thumbnails handle (top-2 + 36px) + gap: the palette starts below it, top-anchored. */
@@ -71,23 +59,9 @@ export function ToolPalette() {
   const thumbsOpen = useUi((s) => s.thumbsOpen);
   const [labels, setLabelsState] = useState(loadLabels);
   const [styleOpen, setStyleOpen] = useState(false);
-  const [menuOpen, setMenuOpenState] = useState(loadMenuOpen);
+  const [openMenu, setOpenMenu] = useState<ToolMenuId | null>(null);
+  const closeMenu = useCallback(() => setOpenMenu(null), []);
   const active = TOOLS.find((t) => t.id === tool) ?? TOOLS[0];
-
-  // Picking a menu tool by keyboard opens its menu so the active tool is visible.
-  useEffect(() => {
-    const m = TOOLS.find((t) => t.id === tool)?.menu;
-    if (m) setMenuOpenState((o) => (o[m] ? o : { ...o, [m]: true }));
-  }, [tool]);
-
-  const setMenuOpen = (m: ToolMenuId, v: boolean) => {
-    setMenuOpenState((o) => ({ ...o, [m]: v }));
-    try {
-      localStorage.setItem(MENU_KEY(m), v ? '1' : '0');
-    } catch {
-      /* ignore */
-    }
-  };
 
   const setLabels = (v: boolean) => {
     setLabelsState(v);
@@ -157,8 +131,9 @@ export function ToolPalette() {
                         <ToolMenu
                           menu={m}
                           labels={labels}
-                          open={menuOpen[m]}
-                          onToggle={() => setMenuOpen(m, !menuOpen[m])}
+                          open={openMenu === m}
+                          onToggle={() => setOpenMenu((o) => (o === m ? null : m))}
+                          onClose={closeMenu}
                           tool={tool}
                           onPick={setTool}
                           className={btnCls}
@@ -222,14 +197,16 @@ function PaletteTool({ t, labels, active, onPick, className, indent }: { t: Tool
 }
 
 /**
- * Expandable tool menu ("חישוב שטח" / "צורות"): a header with a chevron that shows its tools.
- * Collapsed, the header shows the active tool's icon and is highlighted while one of them is in use.
+ * Tool menu ("חישוב שטח" / "צורות"): a header button that opens its tools in a flyout beside the
+ * palette (so the palette itself never grows tall). The header shows the active tool's icon and is
+ * highlighted while one of the menu's tools is in use. Picking a tool, Esc or a click outside closes it.
  */
-function ToolMenu({ menu, labels, open, onToggle, tool, onPick, className }: {
+function ToolMenu({ menu, labels, open, onToggle, onClose, tool, onPick, className }: {
   menu: ToolMenuId;
   labels: boolean;
   open: boolean;
   onToggle(): void;
+  onClose(): void;
   tool: string;
   onPick(id: ToolDef['id']): void;
   className: string;
@@ -237,26 +214,86 @@ function ToolMenu({ menu, labels, open, onToggle, tool, onPick, className }: {
   const items = TOOLS.filter((t) => t.menu === menu);
   const current = items.find((t) => t.id === tool);
   const title = TOOL_MENU_LABELS[menu];
+  const headRef = useRef<HTMLDivElement>(null);
+  const flyRef = useRef<HTMLDivElement>(null);
+  const [pos, setPos] = useState<{ top: number; right: number } | null>(null);
+
+  useLayoutEffect(() => {
+    if (!open) return;
+    const place = () => {
+      const r = headRef.current?.getBoundingClientRect();
+      const pal = headRef.current?.closest('[data-testid="tool-palette"]')?.getBoundingClientRect();
+      if (!r || !pal) return;
+      const h = flyRef.current?.offsetHeight ?? 0;
+      const top = Math.max(8, Math.min(r.top, window.innerHeight - h - 8));
+      setPos({ top, right: window.innerWidth - pal.left + 6 });
+    };
+    place();
+    const raf = requestAnimationFrame(place);
+    window.addEventListener('resize', place);
+    return () => {
+      cancelAnimationFrame(raf);
+      window.removeEventListener('resize', place);
+    };
+  }, [open]);
+
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (e: PointerEvent) => {
+      const t = e.target as Node;
+      if (flyRef.current?.contains(t) || headRef.current?.contains(t)) return;
+      onClose();
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose();
+    };
+    window.addEventListener('pointerdown', onDown, true);
+    window.addEventListener('keydown', onKey);
+    return () => {
+      window.removeEventListener('pointerdown', onDown, true);
+      window.removeEventListener('keydown', onKey);
+    };
+  }, [open, onClose]);
+
   return (
-    <div role="group" aria-label={title} data-testid={`${menu}-menu`} data-open={open ? 'true' : 'false'} className="flex shrink-0 flex-col gap-0.5">
+    <div ref={headRef} role="group" aria-label={title} data-testid={`${menu}-menu`} data-open={open ? 'true' : 'false'} className="flex shrink-0 flex-col gap-0.5">
       <ToolButton
         label={title}
         hint={open ? 'לחץ לסגירת האפשרויות' : `לחץ לפתיחת ${items.length} אפשרויות`}
-        active={!open && !!current}
+        active={open || !!current}
         tooltipSide="left"
         onClick={onToggle}
         className={className + ' shrink-0'}
       >
-        <span className="shrink-0">{!open && current ? current.icon : MENU_ICON[menu]}</span>
-        {labels && <span className="min-w-0 flex-1 truncate text-start text-[12px] font-semibold">{title}</span>}
-        <IconChevronDown size={labels ? 12 : 10} className={`shrink-0 opacity-70 ${open ? 'rotate-180' : ''} ${labels ? '' : 'absolute bottom-0.5 left-0.5'}`} />
+        <span className="shrink-0">{current ? current.icon : MENU_ICON[menu]}</span>
+        {labels && <span className="min-w-0 flex-1 truncate text-start text-[12px] font-semibold">{current ? current.short : title}</span>}
+        <IconChevronDown size={labels ? 12 : 10} className={`shrink-0 opacity-70 rotate-90 ${labels ? '' : 'absolute bottom-0.5 left-0.5'}`} />
       </ToolButton>
-      {open && (
-        <div className={labels ? 'ms-2 flex min-w-0 flex-col gap-0.5 border-s-2 border-slate-700' : 'flex flex-col items-center gap-0.5 rounded-md bg-slate-800/60 py-0.5'}>
+      {open && createPortal(
+        <div
+          ref={flyRef}
+          dir="rtl"
+          data-viewer-ui
+          data-testid={`${menu}-flyout`}
+          className="fixed z-30 flex w-[11.5rem] flex-col gap-0.5 rounded-xl border border-slate-600/70 bg-slate-900/95 p-1 text-slate-200 shadow-xl shadow-black/40 backdrop-blur"
+          style={pos ? { top: pos.top, right: pos.right } : { visibility: 'hidden', top: 0, right: 0 }}
+        >
+          <div className="select-none px-2 pb-0.5 pt-0.5 text-[10px] font-semibold text-slate-400">{title}</div>
           {items.map((t) => (
-            <PaletteTool key={t.id} t={t} labels={labels} active={tool === t.id} onPick={() => onPick(t.id)} className={className} indent />
+            <PaletteTool
+              key={t.id}
+              t={t}
+              labels
+              active={tool === t.id}
+              onPick={() => {
+                onPick(t.id);
+                onClose();
+              }}
+              className="h-8 w-full justify-start gap-2 px-2"
+            />
           ))}
-        </div>
+        </div>,
+        document.body,
       )}
     </div>
   );
