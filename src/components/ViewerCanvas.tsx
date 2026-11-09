@@ -571,55 +571,27 @@ export default function ViewerCanvas() {
       if (readout) {
         let text = '';
         let warn = false;
+        // Live VALUES only; what to do in the current step is explained by the shell's HintPanel.
         if ((active || ra) && p && (ra || rectActive(s.tool) || (rectMode && d.length === 1))) {
-          if (!ra) text = s.tool === 'count' ? 'מדוד: פינה ראשונה' : rectKind(s.tool) === 'deduct' ? 'פתח מלבני: לחץ על הפינה הראשונה' : 'לחץ על פינה ראשונה (או גרור)';
-          else if (!ppm) {
-            text = 'יש לכייל קנה מידה';
-            warn = true;
-          } else {
+          if (ra && ppm) {
             const w = Math.abs(p.x - ra.a.x) / ppm;
             const h = Math.abs(p.y - ra.a.y) / ppm;
             text = `\u2066${w.toFixed(2)} × ${h.toFixed(2)}\u2069 מ׳ · ${ra.mk === 'deduct' ? 'פתח: ' : ''}${formatArea(w * h)}`;
           }
-        } else if (active && p) {
-          if (s.tool === 'note') text = 'לחץ להוספת הערה';
-          else if (s.tool === 'text') text = 'לחץ להוספת טקסט';
-          else if (s.tool === 'arrow') text = 'גרור מהזנב לראש החץ';
-          else if (s.tool === 'pen') text = 'גרור לציור חופשי · החזק Shift לקו ישר (כל 30°)';
-          else if (s.tool === 'link') text = 'גרור אזור לחיץ · לחיצה על קישור קיים לעריכה';
-          else if (s.tool === 'line') text = 'גרור מנקודה לנקודה · Shift: כל 30°';
-          else if (isDragTool(s.tool)) text = 'גרור לציור';
-          else if (s.tool === 'count') {
-            const g = activeCount(s);
-            text = g ? 'לחץ להוספה' : 'לחץ לפריט חדש';
-          } else if (s.tool === 'length') {
-            if (!ppm) {
-              text = 'יש לכייל קנה מידה';
-              warn = true;
-            } else if (d.length === 0) text = 'לחץ על נקודת ההתחלה';
-            else {
-              text = formatLength(polylineLengthMeters([...d, p], ppm));
-              if (d.length >= 2) text += ' · לחיצה כפולה / Enter לסיום';
-            }
+        } else if (active && p && ppm) {
+          if (s.tool === 'length') {
+            if (d.length > 0) text = formatLength(polylineLengthMeters([...d, p], ppm));
           } else if (polyTool) {
-            if (!ppm) {
-              text = 'יש לכייל קנה מידה';
-              warn = true;
-            } else if (d.length >= 2) {
+            if (d.length >= 2) {
               const a = polygonAreaM2([...d, p], ppm);
               text = s.tool === 'deduct' ? `פתח: ${formatArea(a)}` : formatArea(a);
-            } else if (d.length === 0) {
-              text = 'לחץ להוספת נקודה';
             }
-            if (nearFirst) text = text ? `${text} · לחץ לסגירה` : 'לחץ לסגירה';
+            if (nearFirst && text) text += ' · סגירה';
             if (bad) {
-              text = `${text} · מצולע חותך את עצמו`;
+              text = text ? `${text} · מצולע חותך את עצמו` : 'מצולע חותך את עצמו';
               warn = true;
             }
-          } else if (s.tool === 'calibrate') {
-            if (d.length === 0) text = 'לחץ על נקודת ההתחלה';
-            else text = ppm ? `${formatLength(lengthMeters(d[d.length - 1], p, ppm))} · לחץ על נקודת הסיום` : 'לחץ על נקודת הסיום';
-          }
+          } else if (s.tool === 'calibrate' && d.length > 0) text = formatLength(lengthMeters(d[d.length - 1], p, ppm));
         }
         if (snapHit && text && (active || ra) && s.tool !== 'count') text += snapHit.kind === SNAP_MIDPOINT ? ' · אמצע' : snapHit.kind === SNAP_INTERSECTION ? ' · חיתוך' : ' · קצה';
         if (text && cursor) {

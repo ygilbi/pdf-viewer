@@ -12,6 +12,7 @@ import { TopMenu } from './TopMenu';
 import { ToolPalette } from './ToolPalette';
 import { LinkBackButton } from './LinkBackButton';
 import { CountFinishButton } from './CountFinishButton';
+import { HintPanel } from './HintPanel';
 import { ExportDialog } from '../ExportDialog';
 import { SearchPanel } from '../text/SearchPanel';
 import { openExportDialog, useExportUi } from '../../export/exportUi';
@@ -79,6 +80,7 @@ export function ViewerShell({ onOpenFile }: { onOpenFile(file: File): void }) {
       <ToolPalette />
       <LinkBackButton />
       <CountFinishButton />
+      <HintPanel />
       <Drawer id="thumbs" side="right" label="תצוגת דפים">
         {(p) => <ThumbnailSidebar {...p} />}
       </Drawer>
