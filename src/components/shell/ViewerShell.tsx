@@ -49,10 +49,6 @@ function useShellKeys() {
           if (!e.shiftKey) toggleLeftTab('measurements');
           else handled = false;
           break;
-        case 'KeyQ': // תמחור / כתב כמויות (tab of the left drawer)
-          if (!e.shiftKey) toggleLeftTab('pricing');
-          else handled = false;
-          break;
         case 'Escape':
           if (ui.menuOpen) ui.setMenuOpen(false);
           else if ((ui.thumbsOpen && !ui.thumbsPinned) || (ui.measurementsOpen && !ui.measurementsPinned)) {

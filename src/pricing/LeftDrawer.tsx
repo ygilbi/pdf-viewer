@@ -1,13 +1,12 @@
 /**
- * Content of the left drawer: tabs "מדידות" | "תמחור". M / Q open the drawer
- * on the respective tab (pressing the key of the visible tab closes it).
+ * Content of the left drawer: tabs "מדידות" | "פריטים". M opens the drawer on the
+ * measurements tab (pressing it while that tab is visible closes it).
  */
 import { lazy, Suspense, type ReactNode } from 'react';
 import { useUi } from '../state/uiStore';
 import MeasurementsPanel from '../components/MeasurementsPanel';
 import { usePricingUi, type LeftTab } from './pricingUi';
 
-const PricingPanel = lazy(() => import('./PricingPanel'));
 const ItemsPanel = lazy(() => import('../components/items/ItemsPanel'));
 
 /** Toggle the left drawer on `tab` (switches tab when the drawer shows the other one). */
@@ -24,7 +23,6 @@ export function toggleLeftTab(tab: LeftTab) {
 const TABS: { id: LeftTab; label: string; key: string }[] = [
   { id: 'measurements', label: 'מדידות', key: 'M' },
   { id: 'items', label: 'פריטים', key: '' },
-  { id: 'pricing', label: 'תמחור', key: 'Q' },
 ];
 
 export function LeftDrawerContent(props: { onHide: () => void; headerActions: ReactNode }) {
@@ -55,10 +53,6 @@ export function LeftDrawerContent(props: { onHide: () => void; headerActions: Re
         {tab === 'items' ? (
           <Suspense fallback={<div className="w-72 p-4 text-xs text-slate-400">טוען…</div>}>
             <ItemsPanel {...props} />
-          </Suspense>
-        ) : tab === 'pricing' ? (
-          <Suspense fallback={<div className="w-72 p-4 text-xs text-slate-400">טוען…</div>}>
-            <PricingPanel {...props} />
           </Suspense>
         ) : (
           <MeasurementsPanel {...props} />

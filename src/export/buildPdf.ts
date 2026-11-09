@@ -62,7 +62,7 @@ import {
 import { hatchSegments } from './hatch';
 import { pageGeometry, placement, viewportSize, viewportToPdf, type PageGeometry } from './pageTransform';
 import { BLACK, WHITE, hexColor, shape, svgNum as f, type FontPair } from './pdfCommon';
-import { writeBoq, writeItems, writeSummary } from './pdfSummary';
+import { writeItems, writeSummary } from './pdfSummary';
 import { buildItemTable } from '../core/itemTable';
 import type { PdfBuildInput, ProgressFn } from './types';
 
@@ -469,7 +469,7 @@ export async function buildExportPdf(
     if (i % 4 === 3) await yieldNow();
   }
 
-  // 3) Items table, then the generic summary / BOQ pages.
+  // 3) Items table, then the generic summary pages.
   if (o.items) {
     check();
     onProgress('summary', 0, 1);
@@ -481,10 +481,6 @@ export async function buildExportPdf(
     onProgress('summary', 0, 1);
     writeSummary(out, fonts, input, selected, notes);
     onProgress('summary', 1, 1);
-  }
-  if (o.boq && input.boq) {
-    check();
-    writeBoq(out, fonts, input, input.boq);
   }
 
   check();

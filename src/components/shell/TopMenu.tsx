@@ -12,7 +12,6 @@ import {
   IconFolderOpen,
   IconFullscreen,
   IconFullscreenExit,
-  IconCalculator,
   IconList,
   IconPages,
   IconX,
@@ -326,16 +325,6 @@ export function TopMenu({ onOpenFile }: { onOpenFile(file: File): void }) {
             onClick={() => toggleLeftTab('measurements')}
           >
             <IconList />
-          </ToolButton>
-          <ToolButton
-            label="תמחור / כתב כמויות"
-            shortcut="Q"
-            hint="מחירון, פחת, הנחה ומע״מ — סה״כ חי"
-            active={measOpen && leftTab === 'pricing'}
-            disabled={!hasDoc}
-            onClick={() => toggleLeftTab('pricing')}
-          >
-            <IconCalculator />
           </ToolButton>
           {fullscreenSupported() && (
             <ToolButton label={isFs ? 'צא ממסך מלא' : 'מסך מלא'} shortcut="Shift+F" active={isFs} onClick={toggleFullscreen}>

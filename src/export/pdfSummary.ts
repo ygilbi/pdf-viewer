@@ -13,7 +13,6 @@ import {
 import { BLACK, GREY, drawShaped, ellipsize, hexColor, shape, wrapCell, wrapText, type FontPair } from './pdfCommon';
 import { ITEM_COLUMNS, formatSubtotal, type ItemTable } from '../core/itemTable';
 import type { PdfBuildInput } from './types';
-import { UNIT_LABELS, describeQuantity, type Boq } from '../pricing/boq';
 
 const W = 595.28;
 const H = 841.89;
@@ -312,53 +311,4 @@ export function writeItems(doc: PDFDocument, fonts: FontPair, input: PdfBuildInp
     keepWithNext: (i) => i + 1 < kind.length && kind[i + 1] !== 'row',
   });
   if (table.uncalibrated) w.para(`* ${table.uncalibrated} שורות בדף לא מכויל — הכמות שלהן אינה נכללת בסיכומים.`, 8, GREY);
-}
-
-/** Priced bill of quantities (כתב כמויות עם מחירים) — its own A4 page(s). */
-export function writeBoq(doc: PDFDocument, fonts: FontPair, input: PdfBuildInput, boq: Boq) {
-  const w = new Writer(doc, fonts, `כתב כמויות — ${boq.projectName || input.title}`);
-  w.title('כתב כמויות ומחירים', 16);
-  if (boq.projectName) w.para(`פרויקט: ${boq.projectName}`, 9, GREY);
-  if (boq.client) w.para(`לקוח: ${boq.client}`, 9, GREY);
-  if (input.dateText) w.para(`תאריך: ${input.dateText}`, 9, GREY);
-  w.y += 6;
-  const cur = boq.currency;
-  const money = (v: number) => `${n2(v)} ${cur}`;
-  const cols: Col[] = [
-    { title: 'קטגוריה', width: 105 },
-    { title: 'יחידה', width: 34, align: 'center' },
-    { title: 'כמות', width: 56, align: 'center' },
-    { title: 'פחת', width: 34, align: 'center' },
-    { title: 'כמות כולל פחת', width: 60, align: 'center' },
-    { title: 'מחיר ליח׳', width: 64, align: 'center' },
-    { title: 'עבודה ליח׳', width: 64, align: 'center' },
-    { title: 'סה״כ', width: 98, align: 'center' },
-  ];
-  const rows: Cell[][] = boq.lines.map((l) => [
-    { t: l.name, swatch: l.color ?? '#94a3b8' },
-    { t: UNIT_LABELS[l.unit] },
-    { t: n2(l.quantity) },
-    { t: l.wastePct ? `${l.wastePct}%` : '—' },
-    { t: n2(l.quantityWithWaste) },
-    { t: money(l.unitPrice) },
-    { t: l.labourPrice ? money(l.labourPrice) : '—' },
-    { t: money(l.total), bold: true },
-  ]);
-  if (!rows.length) rows.push([{ t: 'אין כמויות בדפים שנבחרו' }, { t: '' }, { t: '' }, { t: '' }, { t: '' }, { t: '' }, { t: '' }, { t: '' }]);
-  w.table(cols, rows);
-
-  const label = 515 - 98;
-  const totals: Cell[][] = [
-    [{ t: 'סה״כ לפני הנחה' }, { t: money(boq.subtotal) }],
-    ...(boq.discount ? [[{ t: `הנחה (${boq.discountPct}%)` }, { t: `-${money(boq.discount)}` }], [{ t: 'סה״כ אחרי הנחה' }, { t: money(boq.afterDiscount) }]] : []),
-    [{ t: `מע״מ (${boq.vatPct}%)` }, { t: money(boq.vat) }],
-    [{ t: 'סה״כ לתשלום', bold: true }, { t: money(boq.total), bold: true }],
-  ];
-  w.table([{ title: 'סיכום', width: label }, { title: '', width: 98, align: 'center' }], totals, { totalRow: true });
-  const details = boq.lines.map((l) => `${l.name}: ${describeQuantity(l.unit, l.breakdown) || '—'} ${UNIT_LABELS[l.unit]}`);
-  if (details.length) {
-    w.para('פירוט כמויות: ' + details.join(' · '), 8, GREY);
-    w.y += 4;
-  }
-  for (const warn of boq.warnings) w.para(`* ${warn}`, 8, GREY);
 }

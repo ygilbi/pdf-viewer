@@ -1,6 +1,6 @@
 # PDF Viewer ב-Google Drive — מדריך הגדרה (Google Workspace Marketplace)
 
-אחרי ההגדרה: ב-Google Drive לוחצים לחיצה ימנית על קובץ PDF ← **פתיחה באמצעות** (Open with) ← **PDF Viewer**, והקובץ נפתח באפליקציה (https://pdf-viewer-lemon.vercel.app) עם כל כלי המדידה והתמחור. בנוסף, באפליקציה עצמה מופיע כפתור **„פתח מ-Google Drive”** (מסך הפתיחה ותפריט ☰) לבחירת קבצים מ-Drive.
+אחרי ההגדרה: ב-Google Drive לוחצים לחיצה ימנית על קובץ PDF ← **פתיחה באמצעות** (Open with) ← **PDF Viewer**, והקובץ נפתח באפליקציה (https://pdf-viewer-lemon.vercel.app) עם כל כלי המדידה. בנוסף, באפליקציה עצמה מופיע כפתור **„פתח מ-Google Drive”** (מסך הפתיחה ותפריט ☰) לבחירת קבצים מ-Drive.
 
 ## מה אפשר ומה אי אפשר — בכנות
 
@@ -81,7 +81,7 @@ APIs & Services ← **Google Drive API** ← **Manage** ← לשונית **Drive
 |---|---|
 | Application name | `PDF Viewer` |
 | Short description | `צפייה ומדידה בתוכניות PDF` / `View and measure PDF drawings` |
-| Long description | `מציג תוכניות PDF לאדריכלות ואלומיניום: כיול קנה מידה, מדידת שטחים, אורכים וספירות, תמחור וייצוא ל-PDF/Excel. הקובץ נפתח בדפדפן בלבד.` |
+| Long description | `מציג תוכניות PDF לאדריכלות ואלומיניום: כיול קנה מידה, מדידת שטחים, אורכים וספירות, טבלת פריטים וייצוא ל-PDF/Excel. הקובץ נפתח בדפדפן בלבד.` |
 | Application icons | העלו מ-`public/icons/`: `drive-32.png`, `drive-48.png`, `drive-96.png`, `drive-128.png`, `drive-256.png` (וגם `drive-16.png` אם נדרש) |
 | **Open URL** | `https://pdf-viewer-lemon.vercel.app/drive/open` |
 | **Default MIME types** | `application/pdf` |
@@ -108,8 +108,8 @@ APIs & Services ← **Google Workspace Marketplace SDK** ← **Manage** ← **Ap
 | שדה | ערך |
 |---|---|
 | App name | `PDF Viewer` |
-| Short description (עברית / English) | `צפייה, מדידה ותמחור של תוכניות PDF ישירות מ-Google Drive.` / `View, measure and price PDF drawings straight from Google Drive.` |
-| Detailed description | עברית: `PDF Viewer פותח תוכניות PDF כבדות (חזיתות, חתכים, תוכניות) בדפדפן ומאפשר לכייל קנה מידה, למדוד שטחי חזית עם ניכוי פתחים, אורכים וספירת פריטים, לתמחר כתב כמויות ולייצא ל-PDF, Excel ו-CSV. לחצו לחיצה ימנית על PDF ב-Drive ← פתיחה באמצעות ← PDF Viewer. הקבצים מעובדים בדפדפן בלבד ואינם נשמרים בשרת.` English: `PDF Viewer opens heavy PDF drawings (elevations, sections, plans) in your browser: calibrate the scale, measure façade areas with openings deducted, lengths and item counts, price a bill of quantities and export to PDF, Excel and CSV. Right-click a PDF in Drive → Open with → PDF Viewer. Files are processed in your browser only and are never stored on our server.` |
+| Short description (עברית / English) | `צפייה ומדידה של תוכניות PDF ישירות מ-Google Drive.` / `View and measure PDF drawings straight from Google Drive.` |
+| Detailed description | עברית: `PDF Viewer פותח תוכניות PDF כבדות (חזיתות, חתכים, תוכניות) בדפדפן ומאפשר לכייל קנה מידה, למדוד שטחי חזית עם ניכוי פתחים, אורכים וספירת פריטים, לבנות טבלת פריטים ולייצא ל-PDF, Excel ו-CSV. לחצו לחיצה ימנית על PDF ב-Drive ← פתיחה באמצעות ← PDF Viewer. הקבצים מעובדים בדפדפן בלבד ואינם נשמרים בשרת.` English: `PDF Viewer opens heavy PDF drawings (elevations, sections, plans) in your browser: calibrate the scale, measure façade areas with openings deducted, lengths and item counts, build an items table and export to PDF, Excel and CSV. Right-click a PDF in Drive → Open with → PDF Viewer. Files are processed in your browser only and are never stored on our server.` |
 | Category | **Productivity** (או Business tools) |
 | Languages | Hebrew, English |
 | Icons | 128×128: `public/icons/drive-128.png`; 32×32: `public/icons/drive-32.png` |

@@ -11,16 +11,8 @@ import { downloadBlob } from '../components/ui/util';
 import { buildExportCsv } from './csvExport';
 import { docBytes, pageSizeMap, pageSpecs } from './sources';
 import type { CsvOptions, ExportFormat, PdfBuildInput, PdfContentOptions, ProgressStage } from './types';
-import { buildBoq } from '../pricing/boq';
-import { currentPricing } from '../pricing/store';
 import { buildMeasurementRows, categoryKey, categoryName, kindOf, takeoffOnly, KIND_LABELS } from '../core/measurementEngine';
-import type { ViewerState } from '../state/store';
 import { buildItemTable } from '../core/itemTable';
-
-/** Priced BOQ of the current workspace for the given (global) pages. */
-export function boqForPages(s: Pick<ViewerState, 'measurements' | 'calibrations' | 'categories'>, pages: Iterable<number>) {
-  return buildBoq({ measurements: s.measurements, calibrations: s.calibrations, categories: s.categories, pricing: currentPricing(), pages });
-}
 
 const MIME: Record<ExportFormat, string> = {
   pdf: 'application/pdf',
@@ -167,7 +159,7 @@ export function startExport(req: ExportRequest, onProgress: ProgressCb = () => {
       blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
     } else if (req.format === 'xlsx') {
       onProgress(0.2, 'טוען רכיב Excel');
-      const { buildXlsx } = await import('../pricing/xlsxExport');
+      const { buildXlsx } = await import('./xlsxExport');
       check();
       onProgress(0.5, 'יוצר גיליון Excel');
       const pageSet = new Set(req.pages);
@@ -180,7 +172,6 @@ export function startExport(req: ExportRequest, onProgress: ProgressCb = () => {
         });
       const out = await buildXlsx({
         items: buildItemTable(onPages, s.calibrations, s.categories),
-        boq: boqForPages(s, req.pages),
         measurementRows: buildMeasurementRows(takeoffOnly(onPages), s.calibrations, s.categories),
         notes,
         title: fileName.replace(/\.xlsx$/i, ''),
@@ -210,7 +201,6 @@ export function startExport(req: ExportRequest, onProgress: ProgressCb = () => {
         fonts,
         title: fileName.replace(/\.pdf$/i, ''),
         dateText: new Date().toLocaleDateString('he-IL'),
-        ...(req.pdf.boq ? { boq: boqForPages(s, req.pages) } : {}),
       };
       const onStage = (stage: ProgressStage, done: number, total: number) => {
         const [a, b] = STAGE_RANGE[stage];

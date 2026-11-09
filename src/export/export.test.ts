@@ -10,7 +10,6 @@ import { ITEM_COLUMNS } from '../core/itemTable';
 import { forPdfLib, shape, wrapCell } from './pdfCommon';
 import fontkit from '@pdf-lib/fontkit';
 import { DEFAULT_CATEGORIES } from '../core/measurementEngine';
-import { buildBoq, emptyPriceBook, resolvePricing } from '../pricing/boq';
 import { DEFAULT_CSV_OPTIONS, DEFAULT_PDF_OPTIONS, type PdfBuildInput } from './types';
 import type { AreaMeasurement, Calibration } from '../core/types';
 
@@ -268,35 +267,6 @@ describe('buildExportPdf', () => {
     expect(dest.get(0)).toBe(doc.getPage(1).ref);
   });
 
-  it('appends a priced BOQ page (Hebrew, ₪) when options.boq', async () => {
-    const boq = buildBoq({
-      measurements: ms,
-      calibrations: { 1: cal },
-      categories: DEFAULT_CATEGORIES,
-      pricing: resolvePricing(emptyPriceBook(), { categories: { windows: { price: 1000, wastePct: 5 } }, settings: { discountPct: 10, projectName: 'פרויקט בדיקה' } }),
-      pages: [1],
-    });
-    const input: PdfBuildInput = {
-      docs: [{ id: 'doc1', name: 'x.pdf' }],
-      bytes: {},
-      pages: [{ globalPage: 1, docId: 'doc1', localPage: 1 }],
-      pageSizes: { 1: { width: 595, height: 842 } },
-      measurements: ms,
-      calibrations: { 1: cal },
-      categories: DEFAULT_CATEGORIES,
-      options: { ...DEFAULT_PDF_OPTIONS, drawings: false, items: false, boq: true },
-      fonts: await fonts(),
-      title: 'x',
-      boq,
-    };
-    const out = await buildExportPdf(input);
-    expect((await PDFDocument.load(out)).getPageCount()).toBe(2);
-    const pd = await (await pdfjs()).getDocument({ data: out }).promise;
-    const text = (await (await pd.getPage(2)).getTextContent()).items.map((i: { str: string }) => i.str).join(' ');
-    expect(text).toContain('₪');
-    await pd.destroy();
-  });
-
   it('numbers notes in page order', () => {
     const m = numberNotes({
       pages: [
@@ -376,7 +346,9 @@ describe('items table export', () => {
     };
     const out = await buildExportPdf(input);
     const doc = await PDFDocument.load(out);
-    expect(doc.getPageCount()).toBe(3); // 1 drawing page + 2 items pages (42 rows + 4 subtotals + total)
+    // 1 drawing page + 3 items pages (42 rows + subtotals + total; counted items' sizes carry their unit
+    // area and their category subtotals an m² part too, so the rows are taller)
+    expect(doc.getPageCount()).toBe(4);
     expect(doc.getPage(1).getSize()).toEqual({ width: 595.28, height: 841.89 });
     const pd = await (await pdfjs()).getDocument({ data: out }).promise;
     const pageText = async (n: number) => (await (await pd.getPage(n)).getTextContent()).items.map((i: { str: string }) => i.str).join(' ');
@@ -384,20 +356,23 @@ describe('items table export', () => {
     const has = (text: string, logical: string) => text.includes(logical);
     const p2 = await pageText(2);
     const p3 = await pageText(3);
+    const p4 = await pageText(4);
     for (const h of [...ITEM_COLUMNS, 'טבלת פריטים']) expect(has(p2, h)).toBe(true);
-    expect(has(p3, 'שם פריט')).toBe(true); // header repeated on the continuation page
-    expect(has(p2 + p3, 'סה״כ דלתות')).toBe(true);
-    expect(has(p2 + p3, 'סה״כ כללי')).toBe(true);
-    expect(has(p2 + p3, 'CW-1') && has(p2 + p3, 'קיר מסך סטיק')).toBe(true);
+    expect(has(p3, 'שם פריט') && has(p4, 'שם פריט')).toBe(true); // header repeated on the continuation pages
+    const all = p2 + p3 + p4;
+    expect(has(all, 'סה״כ דלתות')).toBe(true);
+    expect(has(all, 'סה״כ כללי')).toBe(true);
+    expect(has(all, 'CW-1') && has(all, 'קיר מסך סטיק')).toBe(true);
     expect(has(p2, '120×150')).toBe(true); // dimensions stay width×height
-    expect(p2 + p3).toContain('…'); // the long note is truncated
+    expect(has(p2, '1.80')).toBe(true); // + the unit area (1.2 × 1.5 m²)
+    expect(all).toContain('…'); // the long note is truncated
     await pd.destroy();
 
     // Items + generic summary: items first.
     const both = await buildExportPdf({ ...input, options: { ...input.options, summary: true } });
     const pd2 = await (await pdfjs()).getDocument({ data: both }).promise;
-    expect(pd2.numPages).toBe(4);
-    const last = (await (await pd2.getPage(4)).getTextContent()).items.map((i: { str: string }) => i.str).join(' ');
+    expect(pd2.numPages).toBe(5);
+    const last = (await (await pd2.getPage(5)).getTextContent()).items.map((i: { str: string }) => i.str).join(' ');
     expect(has(last, 'סיכום כמויות')).toBe(true);
     await pd2.destroy();
   });
@@ -426,7 +401,8 @@ describe('items table export', () => {
     expect(onlyItems.startsWith('\ufeff')).toBe(true);
     const lines = onlyItems.slice(1).trim().split('\r\n');
     expect(lines[0]).toBe(ITEM_COLUMNS.join(','));
-    expect(lines).toContain('סה״כ כללי,,,,13 יח׳ · 73.67 מ״ר · 10.00 מ׳,');
+    // m² = the curtain wall (73.67) + the counted windows / doors' area: 13 × 1.2×1.5 = 23.40
+    expect(lines).toContain('סה״כ כללי,,,,13 יח׳ · 97.07 מ״ר · 10.00 מ׳,');
     expect(lines.some((l) => l.startsWith('סה״כ דלתות,'))).toBe(true);
     // the curtain wall's net area: 300×200 px ≈ 10.58×7.06 m = 74.67 m² minus the 1 m² opening
     expect(lines.find((l) => l.startsWith('קיר מסך CW-1'))).toBe('קיר מסך CW-1,קיר מסך,קיר מסך סטיק,10.58×7.06,73.67 מ״ר,');
