@@ -1,3 +1,4 @@
+import { scrollWithin } from '../ui/scrollWithin';
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useViewer } from '../../state/store';
 import { MAX_RESULTS, countMatchesAsItems, useSearch } from '../../text/searchStore';
@@ -147,7 +148,7 @@ function SearchPanelBody() {
 
   // Keep the active result in view.
   useEffect(() => {
-    listRef.current?.querySelector('[data-active="true"]')?.scrollIntoView({ block: 'nearest' });
+    scrollWithin(listRef.current?.querySelector('[data-active="true"]'), 'y');
   }, [s.activeIndex]);
 
   const stale = s.ranQuery !== null && s.ranQuery !== s.query;

@@ -1,3 +1,4 @@
+import { scrollWithin } from './ui/scrollWithin';
 import { Fragment, memo, type ReactNode, useEffect, useMemo, useRef, useState } from 'react';
 import { useViewer } from '../state/store';
 import type { AreaMeasurement, Calibration, MeasurementKind } from '../core/types';
@@ -84,7 +85,7 @@ const Row = memo(function Row({ m, calibration, netM2, parentLabel, selected, sh
   const rowRef = useRef<HTMLLIElement>(null);
 
   useEffect(() => {
-    if (selected) rowRef.current?.scrollIntoView({ block: 'nearest' });
+    if (selected) scrollWithin(rowRef.current, 'y');
   }, [selected]);
 
   const ppm = calibration?.pixelsPerMeter;

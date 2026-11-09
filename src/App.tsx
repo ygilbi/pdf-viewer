@@ -216,14 +216,14 @@ function Workspace() {
     // window and every other control floats over it (pill, palette, drawers, menu).
     // touch-action pan-x pan-y: panels still scroll, but the browser never pinch-zooms the whole page on top of
     // the viewer's own zoom (iOS Safari ignores user-scalable=no; a doubled zoom can exhaust its memory).
-    <div className="fixed inset-0 overflow-hidden bg-slate-900 text-slate-100 antialiased" style={{ touchAction: 'pan-x pan-y' }}>
+    <div className="fixed inset-0 overflow-hidden bg-slate-900 text-slate-100 antialiased" style={{ touchAction: 'pan-x pan-y' }} data-lock-scroll>
       {hasDoc ? (
         <>
           {/* File tabs on top; the viewer and all its floating chrome live in the region below. */}
           <FileTabBar />
-          <div className="absolute inset-x-0 bottom-0" style={{ top: TABBAR_H }} data-testid="viewer-region">
+          <div className="absolute inset-x-0 bottom-0" style={{ top: TABBAR_H }} data-testid="viewer-region" data-lock-scroll>
             <main
-              className="absolute inset-0 overflow-hidden bg-slate-950"
+              className="absolute inset-0 overflow-hidden bg-slate-950" data-lock-scroll
               aria-label={fileName ?? undefined}
               data-testid="viewer-main"
             >

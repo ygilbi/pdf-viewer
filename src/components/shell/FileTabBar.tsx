@@ -1,3 +1,4 @@
+import { scrollWithin } from '../ui/scrollWithin';
 import { useEffect, useRef, useState } from 'react';
 import { useViewer } from '../../state/store';
 import { useFileQueue } from '../../state/fileQueue';
@@ -104,7 +105,7 @@ export function FileTabBar() {
 
   // Keep the active tab in view.
   useEffect(() => {
-    strip.current?.querySelector('[data-active="true"]')?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+    scrollWithin(strip.current?.querySelector('[data-active="true"]'), 'x');
   }, [activeId, docs.length]);
 
   // Close the confirm popover on outside click / Esc.
