@@ -16,6 +16,8 @@ import { useAuthGate } from './auth/session';
 import { AuthSplash } from './auth/AuthSplash';
 import { DriveOverlay, useDriveLaunch } from './drive/DriveUi';
 import { FileTabBar, TABBAR_H } from './components/shell/FileTabBar';
+import { TopMenu, topMenuHeight } from './components/shell/TopMenu';
+import { useCompactLayout } from './components/shell/layout';
 import { CrashReportCard } from './diag/CrashReportCard';
 
 function isPdf(file: File) {
@@ -43,6 +45,7 @@ function Workspace() {
   const numPages = useViewer((s) => s.numPages);
   const fileName = useViewer((s) => s.fileName);
   const loading = useViewer((s) => s.loading);
+  const compact = useCompactLayout();
 
   const [pending, setPending] = useState<{ name: string; size: number } | null>(null);
   const openSeq = useRef(0);
@@ -218,9 +221,15 @@ function Workspace() {
     <div className="fixed inset-0 overflow-hidden bg-slate-900 text-slate-100 antialiased" style={{ touchAction: 'pan-x pan-y' }} data-lock-scroll>
       {hasDoc ? (
         <>
-          {/* File tabs on top; the viewer and all its floating chrome live in the region below. */}
+          {/* File tabs, then the permanent top bar; the viewer and all its floating chrome live in the region below. */}
           <FileTabBar />
-          <div className="absolute inset-x-0 bottom-0" style={{ top: TABBAR_H }} data-testid="viewer-region" data-lock-scroll>
+          <TopMenu onOpenFile={openFile} />
+          <div
+            className="absolute inset-x-0 bottom-0"
+            style={{ top: `calc(${TABBAR_H} + ${topMenuHeight(compact)})` }}
+            data-testid="viewer-region"
+            data-lock-scroll
+          >
             <main
               className="absolute inset-0 overflow-hidden bg-slate-950" data-lock-scroll
               aria-label={fileName ?? undefined}

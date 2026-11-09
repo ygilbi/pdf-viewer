@@ -7,6 +7,7 @@ import { useSearch } from '../../text/searchStore';
 import { IconSearch, openSearch } from '../text/searchControls';
 import { IconFilePdf, IconX } from '../ui/icons';
 import type { WorkspaceDoc } from '../../core/types';
+import { persistentMeasurements } from '../../core/tempMeasurements';
 
 /** Height of the tab bar (Tailwind h-9); the viewer region starts below it. */
 export const TABBAR_H = '2.25rem';
@@ -129,7 +130,7 @@ export function FileTabBar() {
   }, [confirm]);
 
   const askClose = (doc: WorkspaceDoc, anchor: HTMLElement) => {
-    const { measurements } = useViewer.getState();
+    const measurements = persistentMeasurements(useViewer.getState().measurements);
     const lo = doc.pageOffset;
     const hi = doc.pageOffset + doc.numPages;
     const measured = measurements.filter((m) => m.page > lo && m.page <= hi).length;

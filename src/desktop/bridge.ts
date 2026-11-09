@@ -37,6 +37,21 @@ export interface PdfDesktopApi {
   getUpdateState?(): Promise<DesktopUpdateState>;
   /** A new build was downloaded and is ready (applyUpdate, or the next launch, uses it). Returns unsubscribe. */
   onUpdateReady?(cb: (state: DesktopUpdateState) => void): () => void;
+  /**
+   * "שמור בשם": native Save dialog (default folder = where the last PDF was opened from). Resolves
+   * null when the user cancels; `token` authorises ONE saveAsWrite to the chosen path (the renderer
+   * never sees or chooses a path itself). Optional: absent in installers built before this API (main.cjs / preload.cjs need a new installer) —
+   * the web fallback (save picker / download) is used there.
+   */
+  saveAsChoose?(suggestedName: string): Promise<DesktopSaveTarget | null>;
+  /** Writes the bytes to the path chosen with saveAsChoose. */
+  saveAsWrite?(token: string, bytes: ArrayBuffer): Promise<void>;
+}
+
+export interface DesktopSaveTarget {
+  token: string;
+  /** File name (no folder) the user chose, with .pdf. */
+  name: string;
 }
 
 export interface DesktopUpdateState {

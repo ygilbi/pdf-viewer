@@ -24,8 +24,9 @@
  */
 'use strict';
 
-const { app, BrowserWindow, Menu, ipcMain, nativeTheme, net, protocol, screen, shell } = require('electron');
+const { app, BrowserWindow, Menu, dialog, ipcMain, nativeTheme, net, protocol, screen, shell } = require('electron');
 const { execFile } = require('node:child_process');
+const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
 const { pathToFileURL } = require('node:url');
@@ -66,6 +67,8 @@ let win = null;
 let rendererReady = false;
 /** PDF paths waiting for the renderer. */
 let pending = [];
+/** Folder of the last PDF opened from Explorer / the command line (default folder of "שמור בשם"). */
+let lastOpenDir = null;
 
 /** PDF paths among command-line args (Chromium switches and the app path are skipped). */
 function pdfPathsFromArgv(argv, cwd) {
@@ -100,6 +103,7 @@ async function flush() {
       if (st.size > MAX_PDF_BYTES) throw new Error('file too large');
       const buf = await fs.promises.readFile(p);
       files.push({ name: path.basename(p), bytes: buf });
+      lastOpenDir = path.dirname(p);
     } catch (err) {
       console.error('[desktop] cannot read', p, err);
     }
@@ -423,6 +427,61 @@ ipcMain.handle('pdf:update-apply', (e) => {
   }, 50);
   return true;
 });
+// "שמור בשם" (Save As): the renderer builds the PDF; main asks WHERE (native dialog) and writes it.
+// Two steps so the dialog comes before the (possibly long) build. The renderer never passes a
+// path: saveAsChoose hands out a one-time token for the path the user picked in OUR dialog.
+/** token → absolute path chosen in the Save dialog (one write each). */
+const saveTargets = new Map();
+
+/** File name without characters Windows refuses; always ends in .pdf. */
+function safePdfName(name) {
+  let base = String(name || '').split(/[\\/]/).pop() || '';
+  base = base.replace(/[:*?"<>|\u0000-\u001f]+/g, '_').replace(/[. ]+$/, '').trim();
+  if (!base) base = 'document-marked.pdf';
+  return /\.pdf$/i.test(base) ? base : `${base}.pdf`;
+}
+
+ipcMain.handle('pdf:save-as-choose', async (e, suggestedName) => {
+  if (!fromApp(e) || !win) throw new Error('not allowed');
+  let dir = lastOpenDir;
+  try {
+    if (!dir || !fs.statSync(dir).isDirectory()) dir = app.getPath('documents');
+  } catch {
+    dir = app.getPath('documents');
+  }
+  const r = await dialog.showSaveDialog(win, {
+    title: 'שמור בשם',
+    defaultPath: path.join(dir, safePdfName(suggestedName)),
+    buttonLabel: 'שמור',
+    filters: [{ name: 'PDF', extensions: ['pdf'] }],
+    properties: ['showOverwriteConfirmation', 'createDirectory'],
+  });
+  if (r.canceled || !r.filePath) return null;
+  const file = /\.pdf$/i.test(r.filePath) ? r.filePath : `${r.filePath}.pdf`;
+  const token = crypto.randomUUID();
+  saveTargets.set(token, file);
+  return { token, name: path.basename(file) };
+});
+
+ipcMain.handle('pdf:save-as-write', async (e, token, bytes) => {
+  if (!fromApp(e)) throw new Error('not allowed');
+  const file = saveTargets.get(String(token));
+  if (!file) throw new Error('unknown save target');
+  saveTargets.delete(String(token));
+  const u8 = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
+  if (!u8.byteLength || u8.byteLength > MAX_PDF_BYTES) throw new Error('bad file size');
+  // Write next to the target, then replace it: a failed write never leaves a truncated PDF behind.
+  const tmp = `${file}.${process.pid}.tmp`;
+  try {
+    await fs.promises.writeFile(tmp, u8);
+    await fs.promises.rename(tmp, file);
+  } catch (err) {
+    await fs.promises.rm(tmp, { force: true }).catch(() => {});
+    throw err;
+  }
+  lastOpenDir = path.dirname(file);
+});
+
 ipcMain.handle('pdf:open-default-apps', async () => {
   if (process.platform !== 'win32') return;
   await shell.openExternal(DEFAULT_APPS_URI);
@@ -450,7 +509,7 @@ function captureForTest(out) {
           version: window.pdfDesktop ? window.pdfDesktop.version : null,
           serviceWorker: !!(navigator.serviceWorker && navigator.serviceWorker.controller),
           openFile: (document.querySelector('[data-testid=viewer-main]') || {}).ariaLabel || null,
-          pageLabel: (document.querySelector('[data-testid=pill-page]') || {}).ariaLabel || null,
+          pageLabel: (document.querySelector('[data-testid=menu-page-input]') || {}).value || null,
           defaultAppDialog: !!document.querySelector('[data-testid=default-app-dialog]'),
           defaultAppDialogTitle: (document.querySelector('#default-app-title') || {}).textContent || null,
           defaultPdfPrompt: window.pdfDesktop && window.pdfDesktop.getPref ? await window.pdfDesktop.getPref('defaultPdfPrompt').catch(() => 'error') : null,

@@ -7,14 +7,13 @@
  *   "Remind me later" (and Esc / ×) postpones it by a day.
  * - A launch that came from opening a PDF never shows it (probably already default).
  * - Browser tab: after `appinstalled`, a toast says to open the installed app.
- * - `openDefaultAppDialog()` opens it on demand (TopMenu entry).
- * - Windows desktop app (Electron, `window.pdfDesktop`): asks ONCE, on the first
- *   launch after install — "make PDF Viewer the default for PDF files?" Yes / No
- *   thanks — unless the registry already says we are the default. The answer is
- *   stored by the desktop shell (userData/prefs.json) and it is never asked again
- *   automatically (no polling, no "remind me later"). "Yes" opens PDF Viewer's own
- *   page in Settings › Default apps with a 2-step guide that closes by itself once
- *   Windows reports the change (or on "סיימתי"). The menu entry opens it on demand.
+ * - `openDefaultAppDialog()` opens it on demand (no caller left since the top bar lost its entry).
+ * - Windows desktop app (Electron, `window.pdfDesktop`): on EVERY start, unless the
+ *   registry says PDF Viewer already is the default PDF app, a popup asks
+ *   "להגדיר את PDF Viewer כתוכנה שפותחת קובצי PDF?" — הגדר / לא עכשיו. "הגדר" opens
+ *   PDF Viewer's own page in Settings › Default apps with a 2-step guide that closes by
+ *   itself once Windows reports the change (or on "סיימתי").
+ * - Web / PWA: no automatic popup any more (owner's decision); the installed toast stays.
  *
  * No app can make itself the default programmatically; this only guides the user.
  */
@@ -25,19 +24,18 @@ import {
   DESKTOP_PROMPT_PREF,
   WINDOWS_DEFAULT_APPS_URI,
   applyChoice,
-  desktopFirstRunAction,
+  desktopStartupAction,
   detectOs,
   isStandalone,
   loadState,
   recordFileLaunch,
   makeDesktopRecord,
   saveState,
-  shouldAutoPrompt,
   type DesktopAnswer,
   type Os,
   type PromptChoice,
 } from './defaultApp';
-import { lastFileLaunch, onFileLaunch } from './fileHandling';
+import { onFileLaunch } from './fileHandling';
 import { useInstallPrompt } from './installPrompt';
 import { getDesktop, type PdfDesktopApi } from '../desktop/bridge';
 import { WINDOWS_DOWNLOAD_URL, showWindowsDownload } from './desktopDownload';
@@ -78,14 +76,9 @@ export function DefaultAppPrompt() {
       let cancelled = false;
       const timer = window.setTimeout(() => {
         void (async () => {
-          // undefined = no prefs store (older shell) or read failed → never auto-ask (could not remember the answer)
-          const stored: unknown = desktop.getPref ? await desktop.getPref(DESKTOP_PROMPT_PREF).catch(() => undefined) : undefined;
-          if (cancelled || desktopFirstRunAction({ stored, isDefault: false }) === 'skip') return;
           const isDefault = await desktop.isDefaultPdfApp().catch(() => null);
           if (cancelled) return;
-          const action = desktopFirstRunAction({ stored, isDefault });
-          if (action === 'mark-already-default') recordDesktopAnswer(desktop, 'already-default');
-          else if (action === 'ask' && !useDefaultAppUi.getState().open) useDefaultAppUi.setState({ open: true, auto: true });
+          if (desktopStartupAction(isDefault) === 'ask' && !useDefaultAppUi.getState().open) useDefaultAppUi.setState({ open: true, auto: true });
         })();
       }, AUTO_PROMPT_DELAY_MS);
       return () => {
@@ -93,24 +86,17 @@ export function DefaultAppPrompt() {
         window.clearTimeout(timer);
       };
     }
-    const os = currentOs();
-    const standalone = isStandalone(window);
     const off = onFileLaunch(({ cold }) => {
       saveState(recordFileLaunch(loadState(), cold));
       // A PDF arrived while we were about to ask (or asking automatically): back off.
       if (useDefaultAppUi.getState().auto) useDefaultAppUi.setState({ open: false, auto: false });
     });
-    const timer = window.setTimeout(() => {
-      const ctx = { os, standalone, launchedWithFile: lastFileLaunch() !== null, state: loadState(), now: Date.now() };
-      if (shouldAutoPrompt(ctx) && !useDefaultAppUi.getState().open) useDefaultAppUi.setState({ open: true, auto: true });
-    }, AUTO_PROMPT_DELAY_MS);
     const onInstalled = () => {
       if (!isStandalone(window)) useDefaultAppUi.setState({ installedToast: true });
     };
     window.addEventListener('appinstalled', onInstalled);
     return () => {
       off();
-      window.clearTimeout(timer);
       window.removeEventListener('appinstalled', onInstalled);
     };
   }, []);
@@ -401,7 +387,7 @@ function DesktopDefaultDialog({ auto }: { auto: boolean }) {
     recordDesktopAnswer(desktop, a);
   };
   const dismiss = () => {
-    // Esc / × on the automatic question = "לא, תודה" (it is asked only once).
+    // Esc / × on the automatic question = "לא עכשיו" (asked again on the next start).
     if (auto && phase === 'ask') answer('no');
     close();
   };
@@ -507,7 +493,7 @@ function DesktopDefaultDialog({ auto }: { auto: boolean }) {
               <img src={`${BASE}icons/icon-192.png`} alt="" width={48} height={48} className="h-12 w-12 shrink-0 rounded-lg" />
               <div className="min-w-0">
                 <h2 id="default-app-title" className="text-base font-semibold leading-snug">
-                  להפוך את PDF Viewer לתוכנת ברירת המחדל לקובצי PDF?
+                  להגדיר את PDF Viewer כתוכנה שפותחת קובצי PDF?
                 </h2>
                 <p id="default-app-desc" className="mt-1.5 text-sm text-slate-400">
                   לחיצה כפולה על קובץ PDF תפתח אותו כאן. Windows מבקשת לאשר זאת פעם אחת בחלון ההגדרות.
@@ -531,7 +517,7 @@ function DesktopDefaultDialog({ auto }: { auto: boolean }) {
                 }}
                 className={`${btn} bg-sky-600 text-white hover:bg-sky-500`}
               >
-                כן, הגדר
+                הגדר
               </button>
               <button
                 type="button"
@@ -542,7 +528,7 @@ function DesktopDefaultDialog({ auto }: { auto: boolean }) {
                 }}
                 className={`${btn} border border-slate-600 text-slate-200 hover:bg-slate-700`}
               >
-                לא, תודה
+                לא עכשיו
               </button>
             </div>
           </>

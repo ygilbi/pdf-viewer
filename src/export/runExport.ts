@@ -13,6 +13,7 @@ import { docBytes, pageSizeMap, pageSpecs } from './sources';
 import type { CsvOptions, ExportFormat, PdfBuildInput, PdfContentOptions, ProgressStage } from './types';
 import { buildMeasurementRows, categoryKey, categoryName, kindOf, takeoffOnly, KIND_LABELS } from '../core/measurementEngine';
 import { buildItemTable } from '../core/itemTable';
+import { persistentMeasurements } from '../core/tempMeasurements';
 
 const MIME: Record<ExportFormat, string> = {
   pdf: 'application/pdf',
@@ -30,9 +31,11 @@ export interface ExportRequest {
   fileName: string;
   /** Ask where to save (showSaveFilePicker) when the browser supports it. */
   usePicker: boolean;
+  /** false: only build the file and return it in `blob` (how = 'none'); the caller saves it (Save As). Default true. */
+  deliver?: boolean;
 }
 
-export type ExportResult = { how: 'picker' | 'download'; fileName: string; bytes: number; ms: number; blob: Blob };
+export type ExportResult = { how: 'picker' | 'download' | 'none'; fileName: string; bytes: number; ms: number; blob: Blob };
 
 export interface ExportHandle {
   promise: Promise<ExportResult>;
@@ -149,13 +152,15 @@ export function startExport(req: ExportRequest, onProgress: ProgressCb = () => {
       if (signal.cancelled) throw new ExportAbort();
     };
     const s = useViewer.getState();
+    // View-mode quick checks (temp) are never exported.
+    const measurements = persistentMeasurements(s.measurements);
     const docs = s.docs;
     const pages = pageSpecs(docs, req.pages);
     if (!pages.length) throw new Error('לא נבחרו דפים לייצוא');
     let blob: Blob;
     if (req.format === 'csv') {
       onProgress(0.5, 'יוצר CSV');
-      const csv = buildExportCsv(s.measurements, s.calibrations, s.categories, req.pages, req.csv);
+      const csv = buildExportCsv(measurements, s.calibrations, s.categories, req.pages, req.csv);
       blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
     } else if (req.format === 'xlsx') {
       onProgress(0.2, 'טוען רכיב Excel');
@@ -163,7 +168,7 @@ export function startExport(req: ExportRequest, onProgress: ProgressCb = () => {
       check();
       onProgress(0.5, 'יוצר גיליון Excel');
       const pageSet = new Set(req.pages);
-      const onPages = s.measurements.filter((m) => pageSet.has(m.page));
+      const onPages = measurements.filter((m) => pageSet.has(m.page));
       const notes = onPages
         .filter((m) => (m.kind === 'note' || m.kind === 'text') && (m.text ?? '').trim())
         .map((m, i) => {
@@ -194,7 +199,7 @@ export function startExport(req: ExportRequest, onProgress: ProgressCb = () => {
         bytes,
         pages,
         pageSizes: pageSizeMap(s.pageSizes, pages),
-        measurements: s.measurements,
+        measurements,
         calibrations: s.calibrations,
         categories: s.categories,
         options: req.pdf,
@@ -223,7 +228,8 @@ export function startExport(req: ExportRequest, onProgress: ProgressCb = () => {
     }
     check();
     let how: ExportResult['how'] = 'download';
-    if (target) {
+    if (req.deliver === false) how = 'none';
+    else if (target) {
       try {
         const wr = await target.createWritable();
         await wr.write(blob);

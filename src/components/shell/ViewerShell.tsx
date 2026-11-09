@@ -12,16 +12,14 @@ import { CountFinishButton } from './CountFinishButton';
 import { HintPanel } from './HintPanel';
 import { SearchHost } from '../text/searchControls';
 import { openExportDialog, useExportUi } from '../../export/exportUi';
-import { addedDocIds, EDIT_MODE_KEY } from '../../state/editMode';
-import { afterFirstPaint, useAfterFirstPaint } from '../../state/firstPaint';
-import { applyModeEvent, loadEditChrome, toggleEditMode } from './modeActions';
-import { BottomSlot, CleanDock, EditDockStub, EditModeToggle } from './ModeDock';
+import { addedDocIds, docIdAtPage } from '../../state/editMode';
+import { afterFirstPaint } from '../../state/firstPaint';
+import { applyModeEvent, loadEditChrome } from './modeActions';
+import { BottomSlot, CleanDock } from './ModeDock';
 import { useCompactLayout } from './layout';
 
 // Lazy chunks: none of these is needed to show the first page of a file.
 const EditChrome = lazy(loadEditChrome);
-const loadTopMenu = () => import('./TopMenu');
-const TopMenu = lazy(() => loadTopMenu().then((m) => ({ default: m.TopMenu })));
 const ExportDialog = lazy(() => import('../ExportDialog').then((m) => ({ default: m.ExportDialog })));
 const ThumbnailSidebar = lazy(() => import('../ThumbnailSidebar'));
 
@@ -55,11 +53,8 @@ function useShellKeys() {
           } else handled = false;
           break;
         case 'KeyM':
-          if (!e.shiftKey) toggleLeftTab();
-          else handled = false;
-          break;
-        case EDIT_MODE_KEY:
-          if (!e.shiftKey && !e.repeat) toggleEditMode();
+          // The items table is an edit-mode panel: M does nothing in the view mode.
+          if (!e.shiftKey && ui.editMode) toggleLeftTab();
           else handled = false;
           break;
         case 'Escape':
@@ -84,7 +79,9 @@ function useShellKeys() {
 
 /**
  * Mode bookkeeping: every opened file (first file, added tab, restored workspace) starts in the
- * clean mode; a tool that is not in the clean dock (shortcut, "+ פריט חדש"…) switches to edit mode.
+ * clean view mode. Nothing but the "מצב עריכה" button opens edit mode (store.setTool refuses
+ * non-clean tools in the view mode). The view mode's temporary measurements are dropped when a
+ * file is opened / closed or the current tab (file under the current page) changes.
  */
 function useEditModeSync() {
   useEffect(() => {
@@ -92,18 +89,18 @@ function useEditModeSync() {
     applyModeEvent({ type: 'fileOpened', tool: useViewer.getState().tool });
     const unsub = useViewer.subscribe((s, prev) => {
       if (s.docs !== prev.docs) {
-        const added = addedDocIds(
-          prev.docs.map((d) => d.id),
-          s.docs.map((d) => d.id),
-        );
-        if (added.length) applyModeEvent({ type: 'fileOpened', tool: s.tool });
+        const prevIds = prev.docs.map((d) => d.id);
+        const ids = s.docs.map((d) => d.id);
+        if (addedDocIds(prevIds, ids).length) applyModeEvent({ type: 'fileOpened', tool: s.tool });
+        else if (addedDocIds(ids, prevIds).length) s.discardTempMeasurements(); // a file was closed
       }
+      if (s.currentPage !== prev.currentPage && docIdAtPage(s.docs, s.currentPage) !== docIdAtPage(prev.docs, prev.currentPage))
+        useViewer.getState().discardTempMeasurements(); // another tab
       if (s.tool !== prev.tool) applyModeEvent({ type: 'toolChanged', tool: s.tool });
     });
     // Warm the chunks the user is likely to need next, once the drawing is on screen.
     const cancel = afterFirstPaint(() => {
       void loadEditChrome();
-      void loadTopMenu();
     });
     return () => {
       unsub();
@@ -113,16 +110,14 @@ function useEditModeSync() {
 }
 
 /** All floating chrome over the full-screen viewer (rendered as a sibling of the viewer). */
-export function ViewerShell({ onOpenFile }: { onOpenFile(file: File): void }) {
+// The top bar (TopMenu) is mounted by App, between the file tabs and the viewer region.
+export function ViewerShell(_props: { onOpenFile(file: File): void }) {
   useToolShortcuts();
   useShellKeys();
   useEditModeSync();
   const editMode = useUi((s) => s.editMode);
   const compact = useCompactLayout();
-  const menuMounted = useUi((s) => s.menuMounted);
-  const idle = useAfterFirstPaint();
   const exportOpen = useExportUi((s) => s.open);
-  const toggle = <EditModeToggle compact />;
 
   return (
     <>
@@ -139,12 +134,10 @@ export function ViewerShell({ onOpenFile }: { onOpenFile(file: File): void }) {
         {!editMode ? (
           <CleanDock compact={compact} />
         ) : compact ? (
-          <Suspense fallback={<EditDockStub compact />}>
-            <EditChrome variant="bar" toggle={toggle} />
+          <Suspense fallback={null}>
+            <EditChrome variant="bar" />
           </Suspense>
-        ) : (
-          <EditDockStub compact={false} />
-        )}
+        ) : null}
       </BottomSlot>
       <Drawer id="thumbs" side="right" label="תצוגת דפים">
         {(p) => (
@@ -157,11 +150,6 @@ export function ViewerShell({ onOpenFile }: { onOpenFile(file: File): void }) {
         <Drawer id="measurements" side="left" label="רשימת מדידות">
           {(p) => <LeftDrawerContent {...p} />}
         </Drawer>
-      )}
-      {(menuMounted || idle) && (
-        <Suspense fallback={null}>
-          <TopMenu onOpenFile={onOpenFile} />
-        </Suspense>
       )}
       <SearchHost />
       {exportOpen && (
@@ -184,7 +172,7 @@ export function ErrorToast() {
       role="alert"
       data-testid="error-toast"
       className={
-        (hasDocs ? 'top-[5.5rem] ' : 'top-14 ') +
+        (hasDocs ? 'top-[8.5rem] ' : 'top-14 ') +
         'absolute left-1/2 z-50 flex w-max max-w-[calc(100vw-2rem)] -translate-x-1/2 items-center gap-2 rounded-md border border-red-800 bg-red-950/90 px-3 py-2 text-sm text-red-200 shadow-xl backdrop-blur'
       }
     >

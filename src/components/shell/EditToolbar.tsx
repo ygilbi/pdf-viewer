@@ -26,9 +26,10 @@ function BarTool({ t, active, onPick }: { t: ToolDef; active: boolean; onPick():
  * Edit mode on a phone / tablet: one bottom toolbar instead of the right palette — group tabs
  * (מדידה · סימון · מסמך, from TOOLS / TOOL_GROUP_LABELS) over a horizontally scrolling row of the
  * group's tools. The expandable menus ("חישוב שטח", "צורות") and the style swatch open as popovers
- * above the toolbar. `toggle` ("✓ סיום עריכה") stays pinned at the row's end.
+ * above the toolbar. There is no "סיום עריכה": edit mode lasts until another file is opened.
+ * The "?" hints toggle sits at the end of the group-tabs row.
  */
-export function EditToolbar({ toggle }: { toggle: ReactNode }) {
+export function EditToolbar() {
   const tool = useViewer((s) => s.tool);
   const setTool = useViewer((s) => s.setTool);
   const [group, setGroup] = useState<ToolGroup>(() => groupOf(tool) ?? TOOL_GROUPS[0]);
@@ -152,8 +153,6 @@ export function EditToolbar({ toggle }: { toggle: ReactNode }) {
         <div role="toolbar" aria-label="כלים" className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto overscroll-contain [scrollbar-width:none]">
           {row}
         </div>
-        <span className="h-10 w-px shrink-0 bg-slate-700" aria-hidden="true" />
-        {toggle}
       </div>
     </div>
   );

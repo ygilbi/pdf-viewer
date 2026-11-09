@@ -1,14 +1,10 @@
 import { useEffect, useRef, useState } from 'react';
 import { useViewer } from '../../state/store';
 import { useUi } from '../../state/uiStore';
-import { useZoom, viewerCommands } from '../viewer/commands';
-import { IconList, IconMenu, IconPages, IconDownload } from '../ui/icons';
-import { openExportDialog } from '../../export/exportUi';
+import { IconList, IconPages } from '../ui/icons';
 import { TOOLS } from '../toolActions';
 import { PillEditButtons } from './PillEditButtons';
 import { ScaleChip } from '../text/ScaleChip';
-import { IconSearch, openSearch } from '../text/searchControls';
-import { formatPaper } from '../../text/scaleDetect';
 import { useCompactLayout } from './layout';
 
 const IDLE_MS = 2500;
@@ -81,36 +77,21 @@ function useAwake(hold: boolean) {
 const fadeCls = (awake: boolean) =>
   'transition-opacity motion-reduce:transition-none ' + (awake ? 'opacity-100 duration-150' : 'opacity-25 duration-700');
 
-const chipBtn =
-  'flex h-8 min-w-8 items-center justify-center gap-1 rounded-full px-2 text-xs text-slate-200 transition-colors ' +
-  'hover:bg-slate-700/80 hover:text-white focus:outline-none focus-visible:ring-1 focus-visible:ring-sky-400';
-
 /**
- * Translucent status pill (top-centre) + the two drawer edge handles.
- * Clean mode: ☰ · undo/redo/snap · page (desktop adds zoom, export, search) — the scale state
- * lives in the bottom dock. Edit mode on desktop: today's full pill (tool chip, scale chips).
- * Phones: ☰ · undo/redo/snap · page only (zoom / search / export are in ☰), so the pill always
- * fits between the two corner handles.
+ * Translucent status pill (top-centre, under the permanent top bar) + the two drawer edge handles.
+ * The pill holds only what the top bar does not: undo / redo / snap; edit mode on desktop adds
+ * the active-tool chip and the scale chips. Pages, zoom, search and export live in the top bar.
  */
 export function FloatingChrome() {
   const menuOpen = useUi((s) => s.menuOpen);
   const thumbsOpen = useUi((s) => s.thumbsOpen);
   const measOpen = useUi((s) => s.measurementsOpen);
-  const setMenuOpen = useUi((s) => s.setMenuOpen);
   const toggleDrawer = useUi((s) => s.toggleDrawer);
 
-  const numPages = useViewer((s) => s.numPages);
-  const currentPage = useViewer((s) => s.currentPage);
-  // Multi-file workspace: "file · local/total" (null with a single file).
-  const fileDoc = useViewer((s) =>
-    s.docs.length > 1 ? s.docs.find((d) => s.currentPage > d.pageOffset && s.currentPage <= d.pageOffset + d.numPages) : undefined,
-  );
   const tool = useViewer((s) => s.tool);
   const setTool = useViewer((s) => s.setTool);
   const calibrated = useViewer((s) => !!s.calibrations[s.currentPage]);
   const measurementCount = useViewer((s) => s.measurements.length);
-  const zoom = useZoom().percent;
-  const paper = formatPaper(useViewer((s) => s.pageSizes[s.currentPage - 1]));
 
   const editMode = useUi((s) => s.editMode);
   const compact = useCompactLayout();
@@ -134,93 +115,17 @@ export function FloatingChrome() {
           fade
         }
       >
-        <button
-          type="button"
-          data-menu-toggle
-          aria-label="תפריט"
-          aria-expanded={menuOpen}
-          aria-controls="top-menu"
-          title="תפריט"
-          onClick={() => setMenuOpen(!menuOpen)}
-          className={chipBtn}
-        >
-          <IconMenu />
-        </button>
         {full && (
-          <>
-            <span className="mx-0.5 h-4 w-px bg-slate-600" aria-hidden="true" />
-            <span
-              className="flex h-8 items-center gap-1 rounded-full bg-sky-600/90 px-2 text-xs text-white"
-              title={`${t.label} (${t.shortcut})`}
-              data-testid="pill-tool"
-            >
-              {t.icon}
-              <span className="hidden whitespace-nowrap sm:inline">{t.label}</span>
-            </span>
-          </>
-        )}
-        <PillEditButtons />
-        <button
-          type="button"
-          data-drawer-toggle="thumbs"
-          onClick={() => toggleDrawer('thumbs')}
-          title={`דפים (T)${paper ? ` · ${paper}` : ''}`}
-          aria-label={
-            fileDoc
-              ? `${fileDoc.name}, דף ${currentPage - fileDoc.pageOffset} מתוך ${fileDoc.numPages} (דף ${currentPage} מתוך ${numPages} בסך הכול)`
-              : `דף ${currentPage} מתוך ${numPages}`
-          }
-          className={chipBtn + ' shrink-0 whitespace-nowrap font-mono tabular-nums'}
-          data-testid="pill-page"
-        >
-          {fileDoc && (
-            <>
-              <span className="max-w-[4.5rem] truncate font-sans text-slate-400 sm:max-w-[9rem]" dir="auto" title={fileDoc.name} data-testid="pill-file">
-                {fileDoc.name.replace(/\.pdf$/i, '')}
-              </span>
-              <span className="text-slate-500" aria-hidden="true">
-                ·
-              </span>
-            </>
-          )}
-          <span dir="ltr">
-            {fileDoc ? currentPage - fileDoc.pageOffset : currentPage} / {fileDoc ? fileDoc.numPages : numPages}
+          <span
+            className="flex h-8 items-center gap-1 rounded-full bg-sky-600/90 px-2 text-xs text-white"
+            title={`${t.label} (${t.shortcut})`}
+            data-testid="pill-tool"
+          >
+            {t.icon}
+            <span className="hidden whitespace-nowrap sm:inline">{t.label}</span>
           </span>
-        </button>
-        {!compact && (
-          <>
-        <button
-          type="button"
-          onClick={() => viewerCommands.fit()}
-          title="זום — לחץ להתאמה לדף (0)"
-          aria-label={`זום ${Math.round(zoom)}%, התאם לדף`}
-          className={chipBtn + ' w-14 font-mono tabular-nums'}
-          data-testid="pill-zoom"
-        >
-          <span dir="ltr">{Math.round(zoom)}%</span>
-        </button>
-        <button
-          type="button"
-          onClick={() => openExportDialog()}
-          title="ייצוא PDF / CSV (E)"
-          aria-label="ייצוא"
-          className={chipBtn}
-          data-testid="pill-export"
-        >
-          <IconDownload />
-        </button>
-        <button
-          type="button"
-          onClick={() => openSearch()}
-          title="חיפוש וספירה בטקסט השרטוט (F3 / Ctrl+F)"
-          aria-label="חיפוש וספירה"
-          className={chipBtn}
-          data-testid="pill-search"
-        >
-          <IconSearch />
-        </button>
-          </>
         )}
+        <PillEditButtons dividers={full} />
         {full && !calibrated && (
           <button
             type="button"

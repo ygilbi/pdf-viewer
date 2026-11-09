@@ -181,6 +181,12 @@ export interface AreaMeasurement {
    * net m² / m, additional info ← details.
    */
   asItem?: boolean;
+  /**
+   * Quick check made in the clean VIEW mode: never saved, exported, listed in the items table or
+   * written by Save-As; discarded when the file / tab changes or edit mode starts. Read
+   * collections through `persistentMeasurements()` (core/tempMeasurements) for anything durable.
+   */
+  temp?: boolean;
   itemName?: string;
   system?: string;
   sizeText?: string;

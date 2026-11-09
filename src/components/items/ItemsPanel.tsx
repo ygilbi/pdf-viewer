@@ -6,6 +6,7 @@ import { MeasurementCategorySelect } from '../CategorySelect';
 import { startNewCountItem } from '../shell/CountFinishButton';
 import { openExportDialog } from '../../export/exportUi';
 import type { AreaMeasurement } from '../../core/types';
+import { persistentMeasurements } from '../../core/tempMeasurements';
 
 type TextField = 'itemName' | 'system' | 'sizeText' | 'qtyText' | 'extra';
 
@@ -102,7 +103,7 @@ function RowActions({ r }: { r: ItemRow }) {
 }
 
 export default function ItemsPanel({ headerActions }: { onHide?: () => void; headerActions?: ReactNode }) {
-  const measurements = useViewer((s) => s.measurements);
+  const measurements = useViewer((s) => persistentMeasurements(s.measurements));
   const calibrations = useViewer((s) => s.calibrations);
   const categories = useViewer((s) => s.categories);
   const wide = useWide();

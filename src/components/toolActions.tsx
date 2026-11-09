@@ -26,6 +26,8 @@ import {
 import { IconSignature, IconTextEdit } from './doc/docIcons';
 import { isTypingTarget } from './ui/util';
 import { useSnap } from '../state/snapStore';
+import { useUi } from '../state/uiStore';
+import { toolShortcutAllowed } from '../state/editMode';
 
 export const DOWNLOAD_HINT = "אם ההורדה חסומה, השתמש ב'העתק טבלה'";
 
@@ -125,6 +127,8 @@ export function useToolShortcuts() {
       }
       const t = (e.shiftKey ? SHIFT_TOOL_KEYS[e.code] : undefined) ?? TOOL_KEYS[e.code];
       if (t) {
+        // View mode: only the clean-dock tools (hand, C, A/B/D/O, L) — the others do nothing (no mode switch).
+        if (!toolShortcutAllowed(useUi.getState().editMode, t)) return;
         s.setTool(t);
         e.preventDefault();
         return;

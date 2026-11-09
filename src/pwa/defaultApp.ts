@@ -115,14 +115,14 @@ export function shouldAutoPrompt({ os, standalone, launchedWithFile, state, now 
 // ---------------------------------------------------------------- desktop app (Electron, Windows)
 
 /**
- * Desktop app: the question "make PDF Viewer the default for PDF files?" is asked
- * ONCE per Windows user — on the first launch after install — and never again
- * automatically (the TopMenu entry still opens it on demand). The answer lives in
- * the desktop shell's userData/prefs.json (pref key below), not in localStorage.
+ * Desktop app: on EVERY start, while PDF Viewer is not the default PDF app, a popup asks
+ * "להגדיר את PDF Viewer כתוכנה שפותחת קובצי PDF?" (הגדר / לא עכשיו). The last answer is still
+ * recorded in the desktop shell's userData/prefs.json (pref key below) for diagnostics, but it
+ * no longer suppresses the question — only "already the default" does.
  */
 export const DESKTOP_PROMPT_PREF = 'defaultPdfPrompt' as const;
 
-/** yes = "כן, הגדר"; no = "לא, תודה" (also Esc / ×); already-default = registry said so at first launch. */
+/** yes = "הגדר"; no = "לא עכשיו" (also Esc / ×); already-default = the registry said so (older shells' record). */
 export type DesktopAnswer = 'yes' | 'no' | 'already-default';
 
 export interface DesktopPromptRecord {
@@ -150,31 +150,20 @@ export function parseDesktopRecord(v: unknown): DesktopPromptRecord | null {
   };
 }
 
-export type DesktopFirstRunAction =
-  /** Nothing to do (already answered, or the answer could not be persisted). */
+export type DesktopStartupAction =
+  /** PDF Viewer already opens PDF files: say nothing. */
   | 'skip'
-  /** Show the one-time question. */
-  | 'ask'
-  /** Already the default: don't ask, just remember that the question is settled. */
-  | 'mark-already-default';
-
-export interface DesktopFirstRunContext {
-  /** The stored pref (getPref result); `undefined` = prefs unavailable / unreadable. */
-  stored: unknown;
-  /** From the registry (UserChoice ProgId): true = PDF Viewer, false = another app, null = unknown. */
-  isDefault: boolean | null;
-}
+  /** Show the popup. */
+  | 'ask';
 
 /**
- * First-launch decision. Never asks when the answer could not be read (no prefs
- * store → we could not remember the answer, and asking on every launch is
- * exactly what we must not do). Unknown default (no UserChoice yet) asks.
+ * Startup decision (desktop app, Windows). `isDefault` comes from the registry (the .pdf
+ * UserChoice / UserChoiceLatest ProgId): true = PDF Viewer, false = another app, null = no user
+ * choice at all (Windows then falls back to its built-in default, i.e. not us) or the query
+ * failed — asked as well, since we cannot tell that we are the default.
  */
-export function desktopFirstRunAction({ stored, isDefault }: DesktopFirstRunContext): DesktopFirstRunAction {
-  if (stored === undefined) return 'skip';
-  if (parseDesktopRecord(stored)) return 'skip';
-  if (isDefault === true) return 'mark-already-default';
-  return 'ask';
+export function desktopStartupAction(isDefault: boolean | null): DesktopStartupAction {
+  return isDefault === true ? 'skip' : 'ask';
 }
 
 export function applyChoice(state: PromptState, choice: PromptChoice, now: number): PromptState {

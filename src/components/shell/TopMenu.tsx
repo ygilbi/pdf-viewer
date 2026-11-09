@@ -1,13 +1,11 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { useViewer } from '../../state/store';
 import { useUi } from '../../state/uiStore';
 import { useZoom, viewerCommands } from '../viewer/commands';
-import { ToolButton, ToolbarDivider } from '../ui/ToolButton';
 import {
   IconChevronLeft,
   IconChevronRight,
   IconDownload,
-  IconFilePdf,
   IconFit,
   IconFolderOpen,
   IconFullscreen,
@@ -18,82 +16,122 @@ import {
   IconZoomIn,
   IconZoomOut,
 } from '../ui/icons';
-import { CopyTableButton } from '../CopyTableButton';
 import { openExportDialog } from '../../export/exportUi';
 import { ActiveCategorySelect } from '../CategorySelect';
 import { fullscreenSupported, toggleFullscreen, useIsFullscreen } from '../toolActions';
-import { InstallButton, currentOs, openDefaultAppDialog } from '../../pwa';
-import { WINDOWS_DOWNLOAD_URL, showWindowsDownload } from '../../pwa/desktopDownload';
 import { signOut, useAuthUser } from '../../auth/session';
 import { toggleLeftTab } from '../../pricing/LeftDrawer';
-import { DriveOpenButton } from '../../drive/DriveUi';
-import { formatPaper } from '../../text/scaleDetect';
 import { IconSearch, openSearch } from '../text/searchControls';
-import { sendManualReport } from '../../diag/diagUi';
-import { VersionTag } from '../../pwa/VersionTag';
+import { cancelSaveAs, dismissSaveAs, saveAsMarked, useSaveAs } from '../../export/saveAs';
+import { useCompactLayout } from './layout';
+import { TABBAR_H } from './FileTabBar';
+import { visibleTopMenu, type TopMenuItemId } from './topMenuItems';
 
-function Group({ children, label }: { children: React.ReactNode; label: string }) {
+/** Bar height: slim on desktop, 44px touch targets (+ padding) on phones / touch. */
+export const TOPMENU_H = '2.5rem';
+export const TOPMENU_H_COMPACT = '3rem';
+export const topMenuHeight = (compact: boolean) => (compact ? TOPMENU_H_COMPACT : TOPMENU_H);
+
+const isMac = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent);
+const SAVE_AS_KEYS = `${isMac ? '⌘' : 'Ctrl'}+Shift+S`;
+
+const IconSave = ({ size = 16 }: { size?: number }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+    <path d="M5 3h11l3 3v13a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z" />
+    <path d="M7 3v5h8V3" />
+    <path d="M7 21v-7h10v7" />
+  </svg>
+);
+
+const IconLogout = ({ size = 16 }: { size?: number }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+    <path d="M14 4h4a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2h-4" />
+    <path d="M9 16l-4-4 4-4" />
+    <path d="M5 12h11" />
+  </svg>
+);
+
+interface BarButtonProps {
+  label: string;
+  /** Shown in the native tooltip (title) after the label. */
+  shortcut?: string;
+  icon: ReactNode;
+  onClick(): void;
+  disabled?: boolean;
+  active?: boolean;
+  /** Show the label next to the icon (wide desktop only; phones are icons only). */
+  showLabel?: boolean;
+  compact: boolean;
+  testId: string;
+}
+
+function BarButton({ label, shortcut, icon, onClick, disabled, active, showLabel, compact, testId }: BarButtonProps) {
   return (
-    <div className="flex items-center gap-0.5" role="group" aria-label={label}>
-      {children}
-    </div>
+    <button
+      type="button"
+      aria-label={label}
+      aria-pressed={active}
+      title={shortcut ? `${label} (${shortcut})` : label}
+      disabled={disabled}
+      onClick={onClick}
+      data-testid={testId}
+      className={
+        'flex shrink-0 items-center justify-center gap-1.5 rounded text-xs transition-colors ' +
+        'focus:outline-none focus-visible:ring-1 focus-visible:ring-sky-400 disabled:cursor-not-allowed disabled:opacity-40 ' +
+        (compact ? 'h-11 min-w-11 px-2.5 ' : 'h-8 min-w-8 px-2 ') +
+        (active ? 'bg-sky-600 text-white shadow-inner' : 'text-slate-300 hover:bg-slate-700 hover:text-white')
+      }
+    >
+      {icon}
+      {showLabel && !compact && <span className="hidden whitespace-nowrap xl:inline">{label}</span>}
+    </button>
   );
 }
 
+const Divider = () => <div className="mx-1 h-5 w-px shrink-0 bg-slate-700" aria-hidden="true" />;
+
 /**
- * Slide-down top bar with everything that is not a drawing tool. Always
- * mounted (hidden when closed) so the copy-table toast / fallback survive
- * closing it; `inert` keeps it out of the tab order while hidden.
+ * The permanent top bar under the file tabs (no ☰ dropdown): the essentials only — file (open,
+ * Save As), pages, zoom, search, export, [category — edit mode], view, user. Desktop: one slim
+ * row (icons + labels on wide windows). Phones: one row of 44px icons that scrolls sideways.
+ * Light on purpose (visible at first paint): the export dialog / search panel are opened through
+ * their stores and stay lazy chunks; Save As loads the export pipeline on click.
  */
 export function TopMenu({ onOpenFile }: { onOpenFile(file: File): void }) {
-  const open = useUi((s) => s.menuOpen);
-  const setMenuOpen = useUi((s) => s.setMenuOpen);
   const thumbsOpen = useUi((s) => s.thumbsOpen);
   const measOpen = useUi((s) => s.measurementsOpen);
   const toggleDrawer = useUi((s) => s.toggleDrawer);
+  const editMode = useUi((s) => s.editMode);
 
-  const fileName = useViewer((s) => s.fileName);
   const numPages = useViewer((s) => s.numPages);
   const currentPage = useViewer((s) => s.currentPage);
   const setPage = useViewer((s) => s.setPage);
-  const setTool = useViewer((s) => s.setTool);
-  const calibration = useViewer((s) => s.calibrations[s.currentPage]);
-  const measurementCount = useViewer((s) => s.measurements.length);
   const zoom = useZoom().percent;
   const isFs = useIsFullscreen();
   const authUser = useAuthUser((s) => s.user);
+  const saving = useSaveAs((s) => s.status?.phase === 'running');
+  const compact = useCompactLayout();
   const hasDoc = numPages > 0;
-  const paperLabel = formatPaper(useViewer((s) => s.pageSizes[s.currentPage - 1]));
 
-  const ref = useRef<HTMLElement>(null);
   const fileInput = useRef<HTMLInputElement>(null);
+  const row = useRef<HTMLDivElement>(null);
 
-  // Click outside closes.
-  useEffect(() => {
-    if (!open) return;
-    const onDown = (e: PointerEvent) => {
-      const t = e.target as Element | null;
-      if (!t || ref.current?.contains(t)) return;
-      if (t.closest?.('[data-menu-toggle]') || t.closest?.('[role="dialog"]')) return;
-      setMenuOpen(false);
-    };
-    document.addEventListener('pointerdown', onDown, true);
-    return () => document.removeEventListener('pointerdown', onDown, true);
-  }, [open, setMenuOpen]);
+  useSaveAsKey();
 
-  // Move focus into the menu when it opens (keyboard users), back out when it closes.
+  // Vertical wheel over an overflowing bar scrolls it sideways (narrow desktop windows).
   useEffect(() => {
-    if (!open) return;
-    const prev = document.activeElement as HTMLElement | null;
-    // Next frame: `inert` / visibility must be cleared before focus() is accepted.
-    const raf = requestAnimationFrame(() =>
-      ref.current?.querySelector<HTMLElement>('button:not([disabled])')?.focus({ preventScroll: true }),
-    );
-    return () => {
-      cancelAnimationFrame(raf);
-      if (ref.current?.contains(document.activeElement)) prev?.focus?.({ preventScroll: true });
+    const el = row.current;
+    if (!el) return;
+    const onWheel = (e: WheelEvent) => {
+      if (el.scrollWidth <= el.clientWidth) return;
+      const d = Math.abs(e.deltaX) > Math.abs(e.deltaY) ? e.deltaX : e.deltaY;
+      if (!d) return;
+      e.preventDefault();
+      el.scrollLeft -= d; // RTL: forward = toward the end (left)
     };
-  }, [open]);
+    el.addEventListener('wheel', onWheel, { passive: false });
+    return () => el.removeEventListener('wheel', onWheel);
+  }, []);
 
   // null while not editing → the input mirrors currentPage.
   const [pageText, setPageText] = useState<string | null>(null);
@@ -104,71 +142,51 @@ export function TopMenu({ onOpenFile }: { onOpenFile(file: File): void }) {
     setPageText(null);
   };
 
-  return (
-    <header
-      ref={ref}
-      id="top-menu"
-      data-testid="top-menu"
-      data-open={open ? 'true' : 'false'}
-      aria-label="תפריט"
-      aria-hidden={!open}
-      inert={!open}
-      className={
-        'absolute inset-x-0 top-0 z-40 border-b border-slate-700/80 bg-slate-800/95 text-slate-200 shadow-xl shadow-black/40 backdrop-blur ' +
-        'duration-200 ease-out motion-reduce:transition-none ' +
-        // Opening: visible at once (so focus() works); closing: stay visible until the slide ends.
-        (open ? 'visible translate-y-0 transition-transform' : 'invisible -translate-y-full transition-[transform,visibility]')
-      }
-    >
-      <input
-        ref={fileInput}
-        type="file"
-        accept="application/pdf,.pdf"
-        className="hidden"
-        onChange={(e) => {
-          const f = e.target.files?.[0];
-          if (f) {
-            setMenuOpen(false);
-            onOpenFile(f);
-          }
-          e.target.value = '';
-        }}
-      />
-      <div className="flex flex-wrap items-center gap-x-1 gap-y-1.5 px-2 py-1.5">
-        {/* file */}
-        <Group label="קובץ">
-          <ToolButton label="פתח קובץ (החלף)" onClick={() => fileInput.current?.click()} showLabel>
-            <IconFolderOpen />
-          </ToolButton>
-          <DriveOpenButton variant="menu" onBeforeOpen={() => setMenuOpen(false)} />
-          {fileName && (
-            <div className="flex max-w-[14rem] items-center gap-1 truncate px-1 text-xs text-slate-400" title={fileName}>
-              <IconFilePdf size={14} className="shrink-0 text-red-400" />
-              <span className="truncate" dir="auto">
-                {fileName}
-              </span>
-            </div>
-          )}
-        </Group>
+  const groups = visibleTopMenu({ editMode, fullscreen: fullscreenSupported(), signedIn: !!authUser });
 
-        <ToolbarDivider />
-
-        {/* pages */}
-        <Group label="דפים">
-          <ToolButton
+  const render = (id: TopMenuItemId): ReactNode => {
+    const common = { compact };
+    switch (id) {
+      case 'open':
+        return (
+          <BarButton key={id} {...common} testId="menu-open" label="פתח קובץ" icon={<IconFolderOpen />} showLabel onClick={() => fileInput.current?.click()} />
+        );
+      case 'saveAs':
+        return (
+          <BarButton
+            key={id}
+            {...common}
+            testId="menu-save-as"
+            label="שמור בשם"
+            shortcut={SAVE_AS_KEYS}
+            icon={<IconSave />}
+            showLabel
+            disabled={!hasDoc || saving}
+            onClick={saveAsMarked}
+          />
+        );
+      case 'prevPage':
+        return (
+          <BarButton
+            key={id}
+            {...common}
+            testId="menu-prev-page"
             label="הדף הקודם"
             shortcut="PageUp"
+            icon={<IconChevronRight />}
             disabled={!hasDoc || currentPage <= 1}
             onClick={() => setPage(currentPage - 1)}
-          >
-            <IconChevronRight />
-          </ToolButton>
-          <div className="flex items-center gap-1 text-xs text-slate-400">
-            <span>דף</span>
+          />
+        );
+      case 'page':
+        return (
+          <div key={id} className="flex shrink-0 items-center gap-1 px-0.5 text-xs text-slate-400" data-testid="menu-page">
+            <span className={compact ? 'sr-only' : ''}>דף</span>
             <input
               type="text"
               inputMode="numeric"
               aria-label="מספר דף"
+              data-testid="menu-page-input"
               disabled={!hasDoc}
               value={hasDoc ? (pageText ?? String(currentPage)) : ''}
               onChange={(e) => setPageText(e.target.value.replace(/[^\d]/g, ''))}
@@ -184,215 +202,202 @@ export function TopMenu({ onOpenFile }: { onOpenFile(file: File): void }) {
               }}
               onBlur={commitPage}
               onFocus={(e) => e.target.select()}
-              className="h-6 w-12 rounded border border-slate-600 bg-slate-900 text-center font-mono text-xs text-slate-100 focus:border-sky-500 focus:outline-none disabled:opacity-40"
+              className={
+                'rounded border border-slate-600 bg-slate-900 text-center font-mono text-slate-100 focus:border-sky-500 focus:outline-none disabled:opacity-40 ' +
+                // 16px on phones: iOS zooms the page into smaller inputs.
+                (compact ? 'h-9 w-12 text-base' : 'h-6 w-11 text-xs')
+              }
             />
             <span className="whitespace-nowrap">מתוך {hasDoc ? numPages : '—'}</span>
-            {hasDoc && paperLabel && (
-              <span className="whitespace-nowrap text-[11px] text-slate-500" title="גודל הגיליון לפי מידות הדף" data-testid="menu-paper">
-                · {paperLabel}
-              </span>
-            )}
           </div>
-          <ToolButton
+        );
+      case 'nextPage':
+        return (
+          <BarButton
+            key={id}
+            {...common}
+            testId="menu-next-page"
             label="הדף הבא"
             shortcut="PageDown"
+            icon={<IconChevronLeft />}
             disabled={!hasDoc || currentPage >= numPages}
             onClick={() => setPage(currentPage + 1)}
-          >
-            <IconChevronLeft />
-          </ToolButton>
-        </Group>
-
-        <ToolbarDivider />
-
-        {/* zoom */}
-        <Group label="זום">
-          <ToolButton label="הקטן" shortcut="-" disabled={!hasDoc} onClick={() => viewerCommands.zoomOut()}>
-            <IconZoomOut />
-          </ToolButton>
-          <div className="w-12 text-center font-mono text-xs tabular-nums text-slate-300" aria-label="זום">
+          />
+        );
+      case 'zoomOut':
+        return <BarButton key={id} {...common} testId="menu-zoom-out" label="הקטן" shortcut="-" icon={<IconZoomOut />} disabled={!hasDoc} onClick={() => viewerCommands.zoomOut()} />;
+      case 'zoomLevel':
+        return (
+          <div key={id} className="w-11 shrink-0 text-center font-mono text-xs tabular-nums text-slate-300" aria-label="זום" data-testid="menu-zoom" dir="ltr">
             {hasDoc ? `${Math.round(zoom)}%` : '—'}
           </div>
-          <ToolButton label="הגדל" shortcut="+" disabled={!hasDoc} onClick={() => viewerCommands.zoomIn()}>
-            <IconZoomIn />
-          </ToolButton>
-          <ToolButton label="התאם לדף" shortcut="0 / F" disabled={!hasDoc} onClick={() => viewerCommands.fit()}>
-            <IconFit />
-          </ToolButton>
-        </Group>
-
-        <ToolbarDivider />
-
-        {/* calibration + category */}
-        <Group label="כיול וקטגוריה">
-          {hasDoc &&
-            (calibration ? (
-              <div
-                className="flex h-6 items-center gap-1 whitespace-nowrap rounded-full border border-emerald-700/70 bg-emerald-900/40 px-2 text-[11px] text-emerald-300"
-                title={
-                  calibration.auto
-                    ? `כיול אוטומטי לפי ${calibration.source ?? 'קנ״מ שבשרטוט'} (הדפסה ב‑100%) בדף ${currentPage} — מומלץ לאמת מול מידה ידועה`
-                    : `כויל לפי ${calibration.meters} מ׳ בדף ${currentPage}`
-                }
-                data-testid="menu-calibration"
-              >
-                <span className="h-1.5 w-1.5 rounded-full bg-emerald-400" />
-                {calibration.auto && calibration.source ? (
-                  <>
-                    קנ״מ <span dir="ltr">{calibration.source}</span> (אוטומטי)
-                  </>
-                ) : (
-                  <>קנ״מ: 1 מ׳ = {calibration.pixelsPerMeter.toFixed(2)} יח׳</>
-                )}
-              </div>
-            ) : (
-              <button
-                type="button"
-                onClick={() => {
-                  setTool('calibrate');
-                  setMenuOpen(false);
-                }}
-                className="flex h-6 items-center gap-1 whitespace-nowrap rounded-full border border-amber-600/70 bg-amber-900/30 px-2 text-[11px] text-amber-300 hover:bg-amber-900/60"
-                title="לחץ כדי לכייל את קנה המידה של הדף"
-              >
-                <span className="h-1.5 w-1.5 rounded-full bg-amber-400" />
-                לא מכויל
-              </button>
-            ))}
-          <span className="w-1" />
-          {hasDoc && <ActiveCategorySelect />}
-        </Group>
-
-        <ToolbarDivider />
-
-        {/* text search */}
-        <Group label="חיפוש">
-          <ToolButton
-            label="חיפוש וספירה"
-            shortcut="F3"
-            hint="חיפוש בטקסט השרטוט וספירת תגיות (W1, D2…)"
-            disabled={!hasDoc}
-            onClick={() => {
-              setMenuOpen(false);
-              openSearch();
-            }}
+        );
+      case 'zoomIn':
+        return <BarButton key={id} {...common} testId="menu-zoom-in" label="הגדל" shortcut="+" icon={<IconZoomIn />} disabled={!hasDoc} onClick={() => viewerCommands.zoomIn()} />;
+      case 'fit':
+        return <BarButton key={id} {...common} testId="menu-fit" label="התאם" shortcut="0 / F" icon={<IconFit />} showLabel disabled={!hasDoc} onClick={() => viewerCommands.fit()} />;
+      case 'search':
+        return <BarButton key={id} {...common} testId="menu-search" label="חיפוש" shortcut="F3" icon={<IconSearch />} showLabel disabled={!hasDoc} onClick={() => openSearch()} />;
+      case 'export':
+        return <BarButton key={id} {...common} testId="menu-export" label="ייצוא" shortcut="E" icon={<IconDownload />} showLabel disabled={!hasDoc} onClick={() => openExportDialog()} />;
+      case 'category':
+        return (
+          <div key={id} className="shrink-0" data-testid="menu-category">
+            <ActiveCategorySelect />
+          </div>
+        );
+      case 'thumbs':
+        return (
+          <BarButton key={id} {...common} testId="menu-thumbs" label="תצוגת דפים" shortcut="T" icon={<IconPages />} showLabel active={thumbsOpen} disabled={!hasDoc} onClick={() => toggleDrawer('thumbs')} />
+        );
+      case 'items':
+        return (
+          <BarButton key={id} {...common} testId="menu-items" label="טבלת פריטים" shortcut="M" icon={<IconList />} showLabel active={measOpen} disabled={!hasDoc} onClick={() => toggleLeftTab()} />
+        );
+      case 'fullscreen':
+        return (
+          <BarButton
+            key={id}
+            {...common}
+            testId="menu-fullscreen"
+            label={isFs ? 'צא ממסך מלא' : 'מסך מלא'}
+            shortcut="Shift+F"
+            icon={isFs ? <IconFullscreenExit /> : <IconFullscreen />}
             showLabel
-          >
-            <IconSearch />
-          </ToolButton>
-        </Group>
-
-        <ToolbarDivider />
-
-        {/* export */}
-        <Group label="ייצוא">
-          <ToolButton
-            label="ייצוא"
-            shortcut="E"
-            hint="PDF או CSV — בחירת דפים, קבצים ותוכן"
-            disabled={!hasDoc}
-            onClick={() => {
-              setMenuOpen(false);
-              openExportDialog();
-            }}
-            showLabel
-          >
-            <IconDownload />
-          </ToolButton>
-          <CopyTableButton disabled={!hasDoc || measurementCount === 0} />
-        </Group>
-
-        <div className="flex-1" />
-
-        {/* view */}
-        <Group label="תצוגה">
-          <ToolButton
-            label="תצוגת דפים"
-            shortcut="T"
-            active={thumbsOpen}
-            disabled={!hasDoc}
-            onClick={() => toggleDrawer('thumbs')}
-          >
-            <IconPages />
-          </ToolButton>
-          <ToolButton
-            label="טבלת פריטים"
-            shortcut="M"
-            active={measOpen}
-            disabled={!hasDoc}
-            onClick={() => toggleLeftTab()}
-          >
-            <IconList />
-          </ToolButton>
-          {fullscreenSupported() && (
-            <ToolButton label={isFs ? 'צא ממסך מלא' : 'מסך מלא'} shortcut="Shift+F" active={isFs} onClick={toggleFullscreen}>
-              {isFs ? <IconFullscreenExit /> : <IconFullscreen />}
-            </ToolButton>
-          )}
-          {currentOs() !== 'other' && (
-            <button
-              type="button"
-              data-testid="menu-default-app"
-              title="הגדרת PDF Viewer כתוכנה שפותחת קובצי PDF במחשב"
-              onClick={() => {
-                setMenuOpen(false);
-                openDefaultAppDialog();
-              }}
-              className="flex h-8 items-center gap-1.5 whitespace-nowrap rounded px-2 text-xs text-slate-300 hover:bg-slate-700 hover:text-white focus:outline-none focus-visible:ring-1 focus-visible:ring-sky-400"
-            >
-              <IconFilePdf size={14} className="text-red-400" />
-              הגדר כברירת מחדל ל‑PDF
-            </button>
-          )}
-          {showWindowsDownload() && (
-            <a
-              href={WINDOWS_DOWNLOAD_URL}
-              data-testid="menu-download-windows"
-              title="מתקין לשולחן העבודה של Windows"
-              className="flex h-8 items-center gap-1.5 whitespace-nowrap rounded px-2 text-xs text-sky-300 hover:bg-slate-700 hover:text-white focus:outline-none focus-visible:ring-1 focus-visible:ring-sky-400"
-            >
-              הורד גרסת Windows
-            </a>
-          )}
-          <button
-            type="button"
-            data-testid="menu-diag-report"
-            title="שליחת נתונים טכניים על הפעולות האחרונות (ללא תוכן קבצים) כדי שנוכל לאתר תקלה"
-            onClick={() => {
-              setMenuOpen(false);
-              sendManualReport();
-            }}
-            className="flex h-8 items-center whitespace-nowrap rounded px-2 text-xs text-slate-300 hover:bg-slate-700 hover:text-white focus:outline-none focus-visible:ring-1 focus-visible:ring-sky-400"
-          >
-            שלח דוח תקלה
-          </button>
-          <VersionTag className="flex h-8 items-center whitespace-nowrap px-2 text-[11px] text-slate-500" />
-          <InstallButton
-            label="התקן"
-            className="flex h-8 items-center gap-1.5 rounded px-2 text-xs text-sky-300 hover:bg-slate-700 hover:text-white focus:outline-none focus-visible:ring-1 focus-visible:ring-sky-400"
+            active={isFs}
+            onClick={toggleFullscreen}
           />
-          {authUser && (
-            <>
-              <ToolbarDivider />
-              <span className="max-w-[10rem] truncate px-1 text-xs text-slate-400" dir="auto" title={authUser.email} data-testid="menu-user">
-                {authUser.name || authUser.email}
-              </span>
-              <button
-                type="button"
-                data-testid="menu-logout"
-                onClick={() => void signOut()}
-                className="flex h-8 items-center whitespace-nowrap rounded px-2 text-xs text-slate-300 hover:bg-slate-700 hover:text-white focus:outline-none focus-visible:ring-1 focus-visible:ring-sky-400"
-              >
-                התנתק
-              </button>
-            </>
-          )}
-          <ToolbarDivider />
-          <ToolButton label="סגור תפריט" shortcut="Esc" onClick={() => setMenuOpen(false)}>
-            <IconX />
-          </ToolButton>
-        </Group>
+        );
+      case 'user':
+        return authUser ? (
+          <span
+            key={id}
+            className={'shrink-0 truncate px-1 text-xs text-slate-400 ' + (compact ? 'max-w-[6rem]' : 'max-w-[10rem]')}
+            dir="auto"
+            title={authUser.email}
+            data-testid="menu-user"
+          >
+            {authUser.name || authUser.email}
+          </span>
+        ) : null;
+      case 'logout':
+        return <BarButton key={id} {...common} testId="menu-logout" label="התנתק" icon={<IconLogout />} showLabel onClick={() => void signOut()} />;
+    }
+  };
+
+  return (
+    <header
+      id="top-menu"
+      data-testid="top-menu"
+      data-open="true"
+      data-compact={compact ? 'true' : 'false'}
+      aria-label="סרגל כלים"
+      dir="rtl"
+      className="absolute inset-x-0 z-[44] border-b border-slate-700/80 bg-slate-800 text-slate-200 shadow-md shadow-black/30"
+      style={{
+        top: TABBAR_H,
+        height: topMenuHeight(compact),
+        paddingLeft: 'env(safe-area-inset-left, 0px)',
+        paddingRight: 'env(safe-area-inset-right, 0px)',
+      }}
+    >
+      <input
+        ref={fileInput}
+        type="file"
+        accept="application/pdf,.pdf"
+        className="hidden"
+        data-testid="menu-open-input"
+        onChange={(e) => {
+          const f = e.target.files?.[0];
+          if (f) onOpenFile(f);
+          e.target.value = '';
+        }}
+      />
+      <div
+        ref={row}
+        role="toolbar"
+        aria-label="סרגל כלים"
+        className="flex h-full flex-nowrap items-center gap-0.5 overflow-x-auto overflow-y-hidden px-1.5 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+      >
+        {groups.map((g, i) => (
+          <div key={g.id} className={'flex shrink-0 items-center' + (g.id === 'view' && !compact ? ' ms-auto' : '')}>
+            {i > 0 && !(g.id === 'view' && !compact) && <Divider />}
+            <div className="flex items-center gap-0.5" role="group" aria-label={g.label} data-group={g.id}>
+              {g.items.map(render)}
+            </div>
+            {g.id === 'view' && !compact && i < groups.length - 1 && <Divider />}
+          </div>
+        ))}
       </div>
+      <SaveAsToast />
     </header>
+  );
+}
+
+/** Ctrl+Shift+S (⌘+Shift+S): Save As. Capture phase, so it wins over the tool shortcuts. */
+function useSaveAsKey() {
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (!(e.ctrlKey || e.metaKey) || !e.shiftKey || e.altKey || e.code !== 'KeyS') return;
+      if (useViewer.getState().numPages === 0) return;
+      e.preventDefault();
+      e.stopPropagation();
+      saveAsMarked();
+    };
+    window.addEventListener('keydown', onKey, true);
+    return () => window.removeEventListener('keydown', onKey, true);
+  }, []);
+}
+
+/** Progress / result of Save As (bottom centre, above the dock). */
+function SaveAsToast() {
+  const status = useSaveAs((s) => s.status);
+  useEffect(() => {
+    if (status?.phase !== 'done') return;
+    const t = window.setTimeout(dismissSaveAs, 6000);
+    return () => window.clearTimeout(t);
+  }, [status]);
+  if (!status) return null;
+  const tone =
+    status.phase === 'error'
+      ? 'border-red-800 bg-red-950/95 text-red-100'
+      : status.phase === 'done'
+        ? 'border-emerald-700 bg-emerald-950/95 text-emerald-100'
+        : 'border-slate-600 bg-slate-800/95 text-slate-100';
+  const size = status.phase === 'done' ? (status.bytes > 1024 * 1024 ? `${(status.bytes / 1024 / 1024).toFixed(1)} MB` : `${Math.max(1, Math.round(status.bytes / 1024))} KB`) : '';
+  return (
+    <div
+      role={status.phase === 'error' ? 'alert' : 'status'}
+      data-testid="save-as-toast"
+      data-phase={status.phase}
+      style={{ bottom: 'calc(var(--bottom-slot-h, 0px) + 0.75rem)' }}
+      className={`fixed left-1/2 z-[55] flex w-max max-w-[calc(100vw-2rem)] -translate-x-1/2 items-center gap-2 rounded-md border px-3 py-2 text-sm shadow-xl backdrop-blur ${tone}`}
+    >
+      {status.phase === 'running' && (
+        <>
+          <span className="h-3.5 w-3.5 shrink-0 animate-spin rounded-full border-2 border-slate-500 border-t-sky-400" aria-hidden="true" />
+          <span className="min-w-0 truncate">
+            שומר <span dir="auto">{status.name}</span> — {status.text}
+          </span>
+          <span className="shrink-0 font-mono text-xs tabular-nums text-slate-400" dir="ltr">
+            {Math.round(status.frac * 100)}%
+          </span>
+          <button type="button" onClick={cancelSaveAs} className="shrink-0 rounded px-1.5 text-xs text-slate-300 hover:bg-slate-700 hover:text-white">
+            ביטול
+          </button>
+        </>
+      )}
+      {status.phase === 'done' && (
+        <span className="min-w-0 truncate">
+          ✓ <span dir="auto">{status.name}</span> {status.how === 'download' ? 'הורד' : 'נשמר'} (<span dir="ltr">{size}</span>)
+        </span>
+      )}
+      {status.phase === 'error' && <span className="min-w-0">{status.text}</span>}
+      {status.phase !== 'running' && (
+        <button type="button" onClick={dismissSaveAs} aria-label="סגור הודעה" className="shrink-0 rounded p-0.5 opacity-80 hover:opacity-100">
+          <IconX size={14} />
+        </button>
+      )}
+    </div>
   );
 }

@@ -5,8 +5,7 @@ import type { ToolId } from '../../core/types';
 import { TOOLS, type ToolDef } from '../toolActions';
 import { IconChevronDown, IconEdit } from '../ui/icons';
 import { ScaleChip } from '../text/ScaleChip';
-import { EDIT_MODE_KEY_LABEL } from '../../state/editMode';
-import { loadEditChrome, toggleEditMode } from './modeActions';
+import { enterEditMode, loadEditChrome } from './modeActions';
 import { HintsToggle } from './HintPanel';
 
 /** Thumbnail drawer width (ThumbnailSidebar is 184px) + gap. */
@@ -90,37 +89,28 @@ const dockCls =
   'pointer-events-auto relative flex max-w-[calc(100vw-2.5rem)] flex-col items-stretch gap-1 rounded-2xl border border-slate-600/70 ' +
   'bg-slate-900/90 p-1 text-slate-200 shadow-lg shadow-black/40 backdrop-blur';
 
-/** "✎ מצב עריכה" (clean) ↔ "✓ סיום עריכה" (edit): the same button in the same place. */
+/**
+ * "✎ מצב עריכה": the only way from the clean view mode into edit mode. One way — edit mode lasts
+ * until another file is opened (there is no "סיום עריכה"). Quick checks measured in the view mode are dropped.
+ */
 export function EditModeToggle({ compact }: { compact: boolean }) {
-  const edit = useUi((s) => s.editMode);
-  const label = edit ? 'סיום עריכה' : 'מצב עריכה';
   return (
     <button
       type="button"
       data-testid="edit-mode-toggle"
-      aria-pressed={edit}
-      onClick={toggleEditMode}
+      onClick={enterEditMode}
       onPointerEnter={() => void loadEditChrome()}
       onFocus={() => void loadEditChrome()}
-      title={`${edit ? 'סיום עריכה — חזרה לתצוגה נקייה' : 'מצב עריכה — כל הכלים (סימון, צורות, ספירה, אורך, מסמך…)'} (${EDIT_MODE_KEY_LABEL})`}
+      title={'מצב עריכה — כל הכלים (סימון, צורות, ספירה, מסמך, טבלת פריטים…)\nמדידות שנעשו בתצוגה הן בדיקה זמנית ולא נשמרות'}
       className={
         'flex shrink-0 items-center justify-center gap-1.5 rounded-xl border font-semibold transition-colors ' +
         'focus:outline-none focus-visible:ring-2 focus-visible:ring-sky-400 ' +
         (compact ? 'h-12 min-w-[4.5rem] flex-col gap-0.5 px-2 text-[11px] ' : 'h-10 px-3 text-[13px] ') +
-        (edit
-          ? 'border-violet-400 bg-violet-600 text-white hover:bg-violet-500'
-          : 'border-violet-400/70 text-violet-200 hover:bg-violet-900/50 hover:text-white')
+        'border-violet-400/70 text-violet-200 hover:bg-violet-900/50 hover:text-white'
       }
     >
-      {edit ? (
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={3} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-          <path d="M5 12.5 10 17 19 7" />
-        </svg>
-      ) : (
-        <IconEdit />
-      )}
-      <span className="whitespace-nowrap">{label}</span>
-      {!compact && <kbd className="font-mono text-[10px] font-normal opacity-60">{EDIT_MODE_KEY_LABEL}</kbd>}
+      <IconEdit />
+      <span className="whitespace-nowrap">מצב עריכה</span>
     </button>
   );
 }
@@ -319,18 +309,6 @@ export function CleanDock({ compact }: { compact: boolean }) {
           />
         )}
         <span className="mx-0.5 w-px shrink-0 self-stretch bg-slate-600/80" aria-hidden="true" />
-        <EditModeToggle compact={compact} />
-        <HintsToggle />
-      </div>
-    </div>
-  );
-}
-
-/** Desktop edit mode: the dock shrinks to "✓ סיום עריכה" in the same place (tools are in the right palette). */
-export function EditDockStub({ compact }: { compact: boolean }) {
-  return (
-    <div className={dockCls} data-testid="mode-dock" data-mode="edit">
-      <div className="flex items-stretch justify-center gap-1">
         <EditModeToggle compact={compact} />
         <HintsToggle />
       </div>
