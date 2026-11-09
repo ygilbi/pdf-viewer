@@ -37,7 +37,7 @@ describe('items table', () => {
   it('turns a measured area into an item with net m² and its size', () => {
     const cw = t.groups[1].rows[0];
     expect(cw.name).toBe('CW-1');
-    expect(cw.size).toBe('4.00×9.40');
+    expect(cw.size).toBe('400×940'); // size column is always in cm
     expect(cw.qty).toBeCloseTo(37.6 - 1, 5); // 4×9.4 minus the 1×1 opening
     expect(cw.qtyText).toBe('36.60 מ״ר');
     expect(t.groups[1].subtotal.m2).toBeCloseTo(36.6, 5);

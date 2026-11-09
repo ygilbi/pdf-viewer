@@ -79,9 +79,9 @@ export interface SnapLimits {
 
 export const DEFAULT_SNAP_LIMITS: Required<SnapLimits> = {
   maxSegments: 400_000,
-  maxPoints: 200_000,
+  maxPoints: 300_000,
   maxIntersections: 60_000,
-  budgetMs: 600,
+  budgetMs: 3000, // phones + heavy drawings: 600 ms left parts of the sheet without snap points
   minFeatureLen: 1,
 };
 

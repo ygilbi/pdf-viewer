@@ -405,7 +405,7 @@ describe('items table export', () => {
     expect(lines).toContain('סה״כ כללי,,,,13 יח׳ · 10.00 מ׳,97.07,');
     expect(lines.some((l) => l.startsWith('סה״כ דלתות,'))).toBe(true);
     // the curtain wall's net area: 300×200 px ≈ 10.58×7.06 m = 74.67 m² minus the 1 m² opening
-    expect(lines.find((l) => l.startsWith('קיר מסך CW-1'))).toBe('קיר מסך CW-1,קיר מסך,קיר מסך סטיק,10.58×7.06,73.67 מ״ר,73.67,');
+    expect(lines.find((l) => l.startsWith('קיר מסך CW-1'))).toBe('קיר מסך CW-1,קיר מסך,קיר מסך סטיק,1058×706,73.67 מ״ר,73.67,');
     // kind / category filters select items; deductions still apply
     const cwOnly = buildExportCsv(all, { 1: cal }, DEFAULT_CATEGORIES, [1], {
       ...DEFAULT_CSV_OPTIONS, items: true, rows: false, categoryTotals: false, totals: false, notes: false, kinds: ['area'],

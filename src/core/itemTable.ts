@@ -85,7 +85,7 @@ export function parseQty(text: string): number | null {
   return Number.isFinite(v) ? v : null;
 }
 
-/** Bounding box of a polygon in meters: "4.00×9.40". */
+/** Bounding box of a polygon in CENTIMETRES (the size column is always cm): "400×940". */
 function bboxSize(m: AreaMeasurement, ppm: number): string {
   let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
   for (const p of m.points) {
@@ -95,7 +95,8 @@ function bboxSize(m: AreaMeasurement, ppm: number): string {
     y1 = Math.max(y1, p.y);
   }
   if (!Number.isFinite(x0)) return '';
-  return `${fix2((x1 - x0) / ppm)}×${fix2((y1 - y0) / ppm)}`;
+  const cm = (v: number) => Math.round((v / ppm) * 100);
+  return `${cm(x1 - x0)}×${cm(y1 - y0)}`;
 }
 
 /** Quantity-column subtotal: units and meters (m² has its own column). */

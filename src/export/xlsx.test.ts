@@ -70,7 +70,7 @@ describe('buildXlsx', () => {
     expect(row(h + 4).slice(0, 3)).toEqual(['D1', 'דלתות', 'קליל']);
     expect(ws.getCell(`E${h + 5}`).value).toMatchObject({ formula: `SUMIF(F${h + 4}:F${h + 4},"יח׳",E${h + 4}:E${h + 4})`, result: 1 });
     // cladding: curtain wall area (m² quantity and m² column) + counted panels with dims
-    expect(row(h + 6)).toEqual(['קיר מסך CW-1', 'חיפוי', 'סטיק', '24.00×14.00', 336, 'מ״ר', 336, 'זכוכית 8.8.2']);
+    expect(row(h + 6)).toEqual(['קיר מסך CW-1', 'חיפוי', 'סטיק', '2400×1400', 336, 'מ״ר', 336, 'זכוכית 8.8.2']);
     expect(row(h + 7).slice(0, 7)).toEqual(['P1', 'חיפוי', undefined, '200×100 (2.00 מ״ר)', 3, 'יח׳', 6]);
     expect(ws.getCell(`E${h + 8}`).value).toMatchObject({ formula: `SUMIF(F${h + 6}:F${h + 7},"יח׳",E${h + 6}:E${h + 7})`, result: 3 });
     expect(ws.getCell(`G${h + 8}`).value).toMatchObject({ formula: `SUM(G${h + 6}:G${h + 7})`, result: 342 });
