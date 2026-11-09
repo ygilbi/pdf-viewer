@@ -16,6 +16,7 @@
  *   sessionStorage ss.marker / ss.crumbs — same data for this tab (fallback when localStorage is full)
  */
 import { useViewer } from '../state/store';
+import { useUi } from '../state/uiStore';
 import { subscribeZoom } from '../components/viewer/commands';
 import { RingBuffer } from './ring';
 import { HEARTBEAT_MS, LIVE_CHECK_MS, classifyMarker, isBenignError, isMarker, type AliveMarker, type DiagState, type Verdict } from './crash';
@@ -467,6 +468,23 @@ function installListeners(): void {
     prev = next;
   });
 
+  // UI mode + which control was clicked (test id / aria label only — UI strings, never document text).
+  let prevEdit = useUi.getState().editMode;
+  useUi.subscribe((u) => {
+    if (u.editMode !== prevEdit) crumb('mode', { edit: u.editMode });
+    prevEdit = u.editMode;
+  });
+  window.addEventListener(
+    'click',
+    (e) => {
+      const el = (e.target as HTMLElement | null)?.closest?.('button,a,[role="button"],[role="menuitemradio"],input,label') as HTMLElement | null;
+      if (!el) return;
+      const id = el.getAttribute('data-testid') || el.getAttribute('aria-label') || el.tagName.toLowerCase();
+      crumb('click', { el: scrubText(id, 40) });
+    },
+    { capture: true, passive: true },
+  );
+
   // Zoom (also fires every frame during pinch): state always, crumb at most every 250 ms.
   const zoomCrumb = throttle((z: number) => crumb('zoom', { z }), 250);
   subscribeZoom((percent) => {
@@ -498,6 +516,23 @@ function wrapWorker(): void {
         crumb('worker', { n: workerCount });
         this.addEventListener('error', (e) => recordError('workerError', (e as ErrorEvent).message || 'worker error'));
         this.addEventListener('messageerror', () => crumb('workerMsgError'));
+        const sent = new Map<string, number>();
+        const origPost = this.postMessage.bind(this) as (m: unknown, t?: Transferable[] | StructuredSerializeOptions) => void;
+        (this as unknown as { postMessage: typeof origPost }).postMessage = (m: unknown, t?: Transferable[] | StructuredSerializeOptions) => {
+          try {
+            const type = (m as { type?: unknown } | null)?.type;
+            if (typeof type === 'string') {
+              const now = Date.now();
+              if (now - (sent.get(type) ?? 0) > 400) {
+                sent.set(type, now);
+                crumb('wpost', { t: type.slice(0, 24) });
+              }
+            }
+          } catch {
+            /* never break postMessage */
+          }
+          origPost(m, t as Transferable[]);
+        };
       }
       terminate(): void {
         workerCount = Math.max(0, workerCount - 1);
