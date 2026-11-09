@@ -8,6 +8,7 @@ import MeasurementsPanel from '../components/MeasurementsPanel';
 import { usePricingUi, type LeftTab } from './pricingUi';
 
 const PricingPanel = lazy(() => import('./PricingPanel'));
+const ItemsPanel = lazy(() => import('../components/items/ItemsPanel'));
 
 /** Toggle the left drawer on `tab` (switches tab when the drawer shows the other one). */
 export function toggleLeftTab(tab: LeftTab) {
@@ -22,6 +23,7 @@ export function toggleLeftTab(tab: LeftTab) {
 
 const TABS: { id: LeftTab; label: string; key: string }[] = [
   { id: 'measurements', label: 'מדידות', key: 'M' },
+  { id: 'items', label: 'פריטים', key: '' },
   { id: 'pricing', label: 'תמחור', key: 'Q' },
 ];
 
@@ -39,18 +41,22 @@ export function LeftDrawerContent(props: { onHide: () => void; headerActions: Re
             aria-selected={tab === t.id}
             data-testid={`left-tab-${t.id}`}
             onClick={() => setTab(t.id)}
-            title={`${t.label} (${t.key})`}
+            title={t.key ? `${t.label} (${t.key})` : t.label}
             className={
               'flex-1 px-3 py-1.5 transition-colors ' +
               (tab === t.id ? 'border-b-2 border-sky-500 font-semibold text-white' : 'text-slate-400 hover:bg-slate-800 hover:text-slate-200')
             }
           >
-            {t.label} <kbd className="ms-1 rounded bg-slate-700/70 px-1 font-mono text-[10px] text-slate-400">{t.key}</kbd>
+            {t.label} {t.key && <kbd className="ms-1 rounded bg-slate-700/70 px-1 font-mono text-[10px] text-slate-400">{t.key}</kbd>}
           </button>
         ))}
       </div>
       <div className="flex min-h-0 flex-1">
-        {tab === 'pricing' ? (
+        {tab === 'items' ? (
+          <Suspense fallback={<div className="w-72 p-4 text-xs text-slate-400">טוען…</div>}>
+            <ItemsPanel {...props} />
+          </Suspense>
+        ) : tab === 'pricing' ? (
           <Suspense fallback={<div className="w-72 p-4 text-xs text-slate-400">טוען…</div>}>
             <PricingPanel {...props} />
           </Suspense>

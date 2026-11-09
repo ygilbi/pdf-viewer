@@ -174,6 +174,18 @@ export interface AreaMeasurement {
   refLabel?: string;
   /** Free-form item details (count groups): e.g. [{k:'זכוכית', v:'6.6.2'}, {k:'צבע', v:'RAL 7016'}]. */
   details?: ItemDetail[];
+  /**
+   * Items table (טבלת פריטים). Count groups are always items; an area / length becomes one when
+   * `asItem` is set (e.g. a curtain wall measured as an area). Free-text columns — empty means the
+   * automatic value: name ← item code / label, size ← item dims / bounding box, quantity ← count /
+   * net m² / m, additional info ← details.
+   */
+  asItem?: boolean;
+  itemName?: string;
+  system?: string;
+  sizeText?: string;
+  qtyText?: string;
+  extra?: string;
 }
 
 /** One free-form detail line of an item ("key: value"). */

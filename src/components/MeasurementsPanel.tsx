@@ -188,6 +188,24 @@ const Row = memo(function Row({ m, calibration, netM2, parentLabel, selected, sh
             </span>
           </>
         )}
+        {(kind === 'area' || kind === 'length') && (
+          <button
+            type="button"
+            data-testid="as-item-toggle"
+            aria-pressed={!!m.asItem}
+            title={m.asItem ? 'מופיע בטבלת הפריטים — לחץ להוצאה' : 'הוסף לטבלת הפריטים (למשל קיר מסך)'}
+            onClick={(e) => {
+              e.stopPropagation();
+              useViewer.getState().updateMeasurement(m.id, { asItem: m.asItem ? undefined : true });
+            }}
+            className={
+              'rounded border px-1 font-sans text-[10px] ' +
+              (m.asItem ? 'border-emerald-700/70 bg-emerald-900/40 text-emerald-200' : 'border-dashed border-slate-600 text-slate-400 hover:text-slate-200')
+            }
+          >
+            {m.asItem ? '✓ פריט' : '+ כפריט'}
+          </button>
+        )}
         <span className="ms-auto font-sans">
           <MeasurementCategorySelect id={m.id} value={categoryKey(m)} />
         </span>
