@@ -49,10 +49,18 @@ export function PillEditButtons() {
         aria-pressed={snap}
         title={`הצמדה לשרטוט: ${snap ? 'פעילה' : 'כבויה'} (S · החזק Ctrl לביטול זמני)`}
         aria-label="הצמדה לקווי השרטוט"
-        className={btn + (snap ? ' text-emerald-300' : ' text-slate-400')}
+        className={btn + (snap ? ' text-emerald-300' : ' bg-amber-500/20 text-amber-400')}
         data-testid="pill-snap"
       >
-        <IconSnap />
+        <span className="relative inline-flex">
+          <IconSnap />
+          {!snap && (
+            // Off: a clear diagonal strike-through (grey alone was easy to miss on a phone).
+            <svg className="absolute inset-0" width="16" height="16" viewBox="0 0 16 16" aria-hidden="true">
+              <path d="M2 14 14 2" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+            </svg>
+          )}
+        </span>
       </button>
       <span className="mx-0.5 h-4 w-px bg-slate-600" aria-hidden="true" />
     </>

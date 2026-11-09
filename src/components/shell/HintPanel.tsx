@@ -2,6 +2,9 @@ import { useEffect, useState, useSyncExternalStore } from 'react';
 import { useViewer } from '../../state/store';
 import { useUi } from '../../state/uiStore';
 import { useSnap } from '../../state/snapStore';
+
+/** Tools whose clicks snap to the drawing (keep in sync with ViewerCanvas isSnapTool). */
+const SNAP_TOOLS = new Set<string>(['area', 'deduct', 'length', 'calibrate', 'rectArea', 'rectDeduct', 'count']);
 import { useMarkup } from '../../state/markupStore';
 import { useCountFlow } from '../../state/countFlow';
 import { useLinkHistory } from '../../state/linkHistory';
@@ -147,7 +150,8 @@ export function HintPanel() {
   // A phone-width drawer covers the corner: hide (the drawer is what the user is looking at).
   if (drawerOpen && narrow) return null;
   // The count-measure step carries its skip button here, so it shows even when hints are off.
-  const forced = hint?.action === 'countSkip';
+  // Shown even when the user hid hints: the count-measure step (skip button) and snapping switched off.
+  const forced = hint?.action === 'countSkip' || (!snapEnabled && SNAP_TOOLS.has(tool));
   const bottomButton = activeCountLabel !== null || linkBack;
   const left = (drawerOpen ? drawerEdge : 0) + 8;
   const style = {
@@ -205,6 +209,19 @@ export function HintPanel() {
               {l}
             </div>
           ))}
+          {!snapEnabled && SNAP_TOOLS.has(tool) && (
+            <div className="pointer-events-auto mt-1 flex flex-wrap items-center gap-1.5 text-amber-300" data-testid="hint-snap-off">
+              <span>ההצמדה לפינות ולאמצעים כבויה</span>
+              <button
+                type="button"
+                onClick={() => useSnap.getState().setEnabled(true)}
+                data-testid="hint-snap-on"
+                className="rounded bg-amber-500 px-2 py-0.5 text-[11px] font-semibold text-slate-900 hover:bg-amber-400 [@media(pointer:coarse)]:px-3 [@media(pointer:coarse)]:py-1"
+              >
+                הפעל הצמדה
+              </button>
+            </div>
+          )}
           {hint.action === 'countSkip' && (
             <button
               type="button"
