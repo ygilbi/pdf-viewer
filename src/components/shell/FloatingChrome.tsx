@@ -255,7 +255,8 @@ export function FloatingChrome() {
           <IconPages />
         </button>
       )}
-      {!measOpen && (
+      {/* The items table is an edit-mode panel: no handle in the clean view. */}
+      {editMode && !measOpen && (
         <button
           {...bind}
           type="button"

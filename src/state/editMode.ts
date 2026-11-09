@@ -7,7 +7,7 @@ import type { ToolId } from '../core/types';
  */
 
 /** Tools reachable from the clean dock: hand, calibrate and the area menu (rectangle / polygon, add / deduct). */
-export const CLEAN_TOOLS: ReadonlySet<ToolId> = new Set<ToolId>(['pan', 'calibrate', 'rectArea', 'rectDeduct', 'area', 'deduct']);
+export const CLEAN_TOOLS: ReadonlySet<ToolId> = new Set<ToolId>(['pan', 'calibrate', 'rectArea', 'rectDeduct', 'area', 'deduct', 'length']);
 
 export const isCleanTool = (tool: ToolId): boolean => CLEAN_TOOLS.has(tool);
 

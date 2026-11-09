@@ -51,7 +51,8 @@ function useLeftDrawerEdge(open: boolean): number {
 export function BottomSlot({ children, flush, compact }: { children: ReactNode; flush?: boolean; compact: boolean }) {
   const thumbsOpen = useUi((s) => s.thumbsOpen);
   const measOpen = useUi((s) => s.measurementsOpen);
-  const leftEdge = useLeftDrawerEdge(measOpen && !compact);
+  const editMode = useUi((s) => s.editMode);
+  const leftEdge = useLeftDrawerEdge(measOpen && editMode && !compact);
   const ref = useRef<HTMLDivElement>(null);
 
   useLayoutEffect(() => {
@@ -77,7 +78,7 @@ export function BottomSlot({ children, flush, compact }: { children: ReactNode; 
       style={{
         left: leftEdge,
         right: thumbsOpen && !compact ? THUMBS_OFFSET : 0,
-        paddingBottom: flush ? 0 : 'calc(0.5rem + env(safe-area-inset-bottom, 0px))',
+        paddingBottom: flush ? 0 : compact ? 'max(1.25rem, calc(0.5rem + env(safe-area-inset-bottom, 0px)))' : 'calc(0.5rem + env(safe-area-inset-bottom, 0px))',
       }}
     >
       {children}
@@ -86,7 +87,7 @@ export function BottomSlot({ children, flush, compact }: { children: ReactNode; 
 }
 
 const dockCls =
-  'pointer-events-auto relative flex max-w-[calc(100vw-1rem)] flex-col items-stretch gap-1 rounded-2xl border border-slate-600/70 ' +
+  'pointer-events-auto relative flex max-w-[calc(100vw-2.5rem)] flex-col items-stretch gap-1 rounded-2xl border border-slate-600/70 ' +
   'bg-slate-900/90 p-1 text-slate-200 shadow-lg shadow-black/40 backdrop-blur';
 
 /** "✎ מצב עריכה" (clean) ↔ "✓ סיום עריכה" (edit): the same button in the same place. */
@@ -297,28 +298,26 @@ export function ScaleStatus() {
   );
 }
 
-/** Clean mode: the small window at the bottom — כיול · שטח ▾ · מצב עריכה. */
+/** Clean mode: the small window at the bottom — שטח ▾ · מרחק · מצב עריכה (calibrate: the "הדף לא מכויל" chip / C). */
 export function CleanDock({ compact }: { compact: boolean }) {
   const tool = useViewer((s) => s.tool);
   const setTool = useViewer((s) => s.setTool);
-  const calibrated = useViewer((s) => !!s.calibrations[s.currentPage]);
-  const cal = TOOLS.find((t) => t.id === 'calibrate');
+  const len = TOOLS.find((t) => t.id === 'length');
   return (
     <div className={dockCls} data-testid="mode-dock" data-mode="clean">
       <ScaleStatus />
-      <div role="toolbar" aria-label="כיול ומדידת שטח" className="flex items-stretch justify-center gap-1">
-        {cal && (
+      <div role="toolbar" aria-label="מדידת שטח ומרחק" className="flex items-stretch justify-center gap-1">
+        <AreaSplit compact={compact} />
+        {len && (
           <DockButton
-            t={cal}
-            label="כיול"
-            active={tool === 'calibrate'}
+            t={len}
+            label="מרחק"
+            active={tool === 'length'}
             compact={compact}
-            dot={!calibrated}
-            testId="dock-calibrate"
-            onClick={() => setTool(tool === 'calibrate' ? 'pan' : 'calibrate')}
+            testId="dock-length"
+            onClick={() => setTool(tool === 'length' ? 'pan' : 'length')}
           />
         )}
-        <AreaSplit compact={compact} />
         <span className="mx-0.5 w-px shrink-0 self-stretch bg-slate-600/80" aria-hidden="true" />
         <EditModeToggle compact={compact} />
         <HintsToggle />

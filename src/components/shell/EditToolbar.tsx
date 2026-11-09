@@ -105,7 +105,8 @@ export function EditToolbar({ toggle }: { toggle: ReactNode }) {
       data-variant="bar"
       data-viewer-ui
       className="pointer-events-auto relative w-full border-t border-slate-600/70 bg-slate-900/95 text-slate-200 shadow-[0_-4px_16px_rgba(0,0,0,0.35)] backdrop-blur"
-      style={{ paddingBottom: 'env(safe-area-inset-bottom, 0px)' }}
+      // Clear the home indicator and the rounded screen corners (iPhone Pro Max etc.).
+      style={{ paddingBottom: 'max(0.75rem, env(safe-area-inset-bottom, 0px))', paddingLeft: 'max(0.75rem, env(safe-area-inset-left, 0px))', paddingRight: 'max(0.75rem, env(safe-area-inset-right, 0px))' }}
     >
       {pop && pop !== 'style' && (
         <div className="absolute inset-x-2 bottom-full mb-1.5 flex justify-center">

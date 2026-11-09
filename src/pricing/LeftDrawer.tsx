@@ -4,13 +4,19 @@
  */
 import { lazy, Suspense, type ReactNode } from 'react';
 import { useUi } from '../state/uiStore';
+import { loadEditChrome } from '../components/shell/modeActions';
 
 const ItemsPanel = lazy(() => import('../components/items/ItemsPanel'));
 
 /** Toggle the left drawer (the items table). */
 export function toggleLeftTab(_tab: 'items' = 'items') {
   const ui = useUi.getState();
-  ui.setDrawerOpen('measurements', !ui.measurementsOpen);
+  // The items table is an edit-mode panel: opening it from the clean view switches to edit mode.
+  if (!ui.editMode) {
+    void loadEditChrome();
+    ui.setEditMode(true);
+  }
+  ui.setDrawerOpen('measurements', !useUi.getState().measurementsOpen || !ui.editMode);
 }
 
 export function LeftDrawerContent(props: { onHide: () => void; headerActions: ReactNode }) {

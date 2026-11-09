@@ -153,9 +153,11 @@ export function ViewerShell({ onOpenFile }: { onOpenFile(file: File): void }) {
           </Suspense>
         )}
       </Drawer>
-      <Drawer id="measurements" side="left" label="רשימת מדידות">
-        {(p) => <LeftDrawerContent {...p} />}
-      </Drawer>
+      {editMode && (
+        <Drawer id="measurements" side="left" label="רשימת מדידות">
+          {(p) => <LeftDrawerContent {...p} />}
+        </Drawer>
+      )}
       {(menuMounted || idle) && (
         <Suspense fallback={null}>
           <TopMenu onOpenFile={onOpenFile} />

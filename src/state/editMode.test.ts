@@ -13,7 +13,7 @@ describe('modeReducer', () => {
     expect(modeReducer(true, { type: 'toggle', tool: 'count' })).toEqual({ editMode: false, tool: 'pan' });
   });
   it('a tool outside the clean dock switches to edit mode', () => {
-    for (const t of ['note', 'text', 'rect', 'length', 'count', 'pen', 'link'] as ToolId[]) {
+    for (const t of ['note', 'text', 'rect', 'count', 'pen', 'link'] as ToolId[]) {
       expect(modeReducer(false, { type: 'toolChanged', tool: t })).toEqual({ editMode: true });
     }
   });
@@ -44,7 +44,7 @@ describe('shortcut → mode', () => {
       return t ? modeReducer(false, { type: 'toolChanged', tool: t }).editMode : null;
     };
     for (const k of ['KeyV', 'KeyH', 'KeyC', 'KeyA', 'KeyB', 'KeyD', 'KeyO']) expect(mode(k)).toBe(false);
-    for (const k of ['KeyL', 'KeyN', 'KeyK', 'KeyX', 'KeyR', 'KeyI', 'KeyJ', 'KeyY', 'KeyZ', 'KeyU', 'KeyW', 'KeyP', 'KeyG']) expect(mode(k)).toBe(true);
+    for (const k of ['KeyN', 'KeyK', 'KeyX', 'KeyR', 'KeyI', 'KeyJ', 'KeyY', 'KeyZ', 'KeyU', 'KeyW', 'KeyP', 'KeyG']) expect(mode(k)).toBe(true);
   });
   it('the edit-mode key is not taken by a tool or a shell shortcut', () => {
     expect(toolForKey(EDIT_MODE_KEY)).toBeUndefined();

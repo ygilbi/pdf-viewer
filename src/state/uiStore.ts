@@ -80,14 +80,16 @@ export const useUi = create<UiState>((set, get) => ({
   menuOpen: false,
   thumbsPinned: !!saved.thumbsPinned,
   measurementsPinned: !!saved.measurementsPinned,
-  // A pinned drawer comes back open.
+  // A pinned drawer comes back open (the items table only in edit mode: the app starts clean).
   thumbsOpen: !!saved.thumbsPinned && !isNarrow(),
-  measurementsOpen: !!saved.measurementsPinned && !isNarrow(),
+  measurementsOpen: false,
   paletteCollapsed: !!saved.paletteCollapsed,
 
   editMode: false,
   menuMounted: false,
-  setEditMode: (editMode) => set({ editMode }),
+  // The items table (left drawer) lives in edit mode only: leaving closes it, entering restores a pinned one.
+  setEditMode: (editMode) =>
+    set(editMode ? { editMode, measurementsOpen: get().measurementsOpen || (get().measurementsPinned && !isNarrow()) } : { editMode, measurementsOpen: false }),
   hintsHidden: loadHintsHidden(),
   setHintsHidden: (hintsHidden) => {
     set({ hintsHidden });
