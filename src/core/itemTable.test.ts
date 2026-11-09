@@ -28,10 +28,11 @@ describe('items table', () => {
     expect(t.groups.map((g) => g.name)).toEqual(['חלונות', 'קירות מסך', 'ללא קטגוריה']);
     const win = t.groups[0];
     expect(win.rows.map((r) => [r.name, r.size, r.qtyText, r.system, r.extra])).toEqual([
-      ['W1', '150×140', '3', 'קליל 7000', ''],
+      ['W1', '150×140 (2.10 מ״ר)', '3', 'קליל 7000', ''],
       ['W2', '', '4', '', 'זיגוג כפול'],
     ]);
     expect(win.subtotal.units).toBe(7);
+    expect(win.subtotal.m2).toBeCloseTo(3 * 1.5 * 1.4, 6); // measured windows add their glazing area
   });
   it('turns a measured area into an item with net m² and its size', () => {
     const cw = t.groups[1].rows[0];
@@ -49,7 +50,7 @@ describe('items table', () => {
   it('builds export rows in the owner\'s column order with category subtotals', () => {
     const rows = itemTableRows(t);
     expect(rows[0]).toEqual(['שם פריט', 'קטגוריה', 'מערכת', 'גודל', 'כמות', 'מידע נוסף']);
-    expect(rows).toContainEqual(['סה״כ חלונות', 'חלונות', '', '', '7 יח׳', '']);
+    expect(rows).toContainEqual(['סה״כ חלונות', 'חלונות', '', '', '7 יח׳ · 6.30 מ״ר', '']);
     expect(rows).toContainEqual(['סה״כ קירות מסך', 'קירות מסך', '', '', '36.60 מ״ר', '']);
     expect(rows[rows.length - 1][0]).toBe('סה״כ כללי');
   });

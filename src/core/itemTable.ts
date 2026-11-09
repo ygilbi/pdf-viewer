@@ -125,10 +125,14 @@ export function buildItemTable(
     let autoQty: number | null;
     let unit: ItemUnit;
     let autoSize = '';
+    let extraM2 = 0; // counted items with measured dims also add their total area to the subtotal
     if (kind === 'count') {
       autoQty = m.points.length;
       unit = 'יח׳';
-      if (it) autoSize = formatItemDims(it, false);
+      if (it) {
+        autoSize = `${formatItemDims(it, false)} (${fix2(it.width * it.height)} מ״ר)`;
+        extraM2 = it.width * it.height * m.points.length;
+      }
     } else if (kind === 'area') {
       unit = 'מ״ר';
       const net = nets.get(m.id);
@@ -175,6 +179,10 @@ export function buildItemTable(
       const field = unit === 'יח׳' ? 'units' : unit === 'מ״ר' ? 'm2' : 'm';
       g.subtotal[field] += qty;
       total[field] += qty;
+    }
+    if (extraM2) {
+      g.subtotal.m2 += extraM2;
+      total.m2 += extraM2;
     }
   }
 

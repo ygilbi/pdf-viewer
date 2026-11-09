@@ -35,6 +35,7 @@ import { TextHighlights } from './text/TextHighlights';
 import { MarkupEditor, NoteBubbles } from './viewer/MarkupHtml';
 import { createWheelPager } from './viewer/wheelPager';
 import { followLink } from '../state/linkHistory';
+import { useCountFlow } from '../state/countFlow';
 import { useMarkup } from '../state/markupStore';
 import {
   DEFAULT_STROKE_WIDTH,
@@ -127,6 +128,8 @@ const isSnapTool = (t: ToolId) =>
   t === 'area' || t === 'deduct' || t === 'length' || t === 'calibrate' || t === 'rectArea' || t === 'rectDeduct' || t === 'count';
 /** Two-corner rectangle tools (quick add / quick deduct). */
 const isRectTool = (t: ToolId) => t === 'rectArea' || t === 'rectDeduct';
+/** Rectangle input is active: the rect tools, or the count tool while it measures a new item. */
+const rectActive = (t: ToolId) => isRectTool(t) || (t === 'count' && !!useCountFlow.getState().measuringId);
 /** Measurement kind a rectangle drawn with this tool creates. */
 const rectKind = (t: ToolId): 'area' | 'deduct' => (t === 'deduct' || t === 'rectDeduct' ? 'deduct' : 'area');
 /** Rectangle from two opposite corners (clockwise on screen). */
@@ -568,8 +571,8 @@ export default function ViewerCanvas() {
       if (readout) {
         let text = '';
         let warn = false;
-        if ((active || ra) && p && (ra || isRectTool(s.tool) || (rectMode && d.length === 1))) {
-          if (!ra) text = rectKind(s.tool) === 'deduct' ? 'פתח מלבני: לחץ על הפינה הראשונה' : 'לחץ על פינה ראשונה (או גרור)';
+        if ((active || ra) && p && (ra || rectActive(s.tool) || (rectMode && d.length === 1))) {
+          if (!ra) text = s.tool === 'count' ? 'מדוד: פינה ראשונה' : rectKind(s.tool) === 'deduct' ? 'פתח מלבני: לחץ על הפינה הראשונה' : 'לחץ על פינה ראשונה (או גרור)';
           else if (!ppm) {
             text = 'יש לכייל קנה מידה';
             warn = true;
@@ -716,6 +719,21 @@ export default function ViewerCanvas() {
         if (s.draft.length) s.setDraft([]);
         return;
       }
+      // Counting: the rectangle measures the item (its width × height) instead of creating an area.
+      const flow = useCountFlow.getState();
+      if (s.tool === 'count' && flow.measuringId) {
+        const g = s.measurements.find((m) => m.id === flow.measuringId);
+        const ppm = s.calibrations[s.currentPage]?.pixelsPerMeter;
+        if (g && ppm && ppm > 0) {
+          const width = Math.round((Math.abs(b.x - a.x) / ppm) * 1000) / 1000;
+          const height = Math.round((Math.abs(b.y - a.y) / ppm) * 1000) / 1000;
+          const code = g.item?.code;
+          s.updateMeasurement(g.id, { item: { width, height, ...(code ? { code } : {}) } });
+        }
+        flow.done();
+        if (s.draft.length) s.setDraft([]);
+        return;
+      }
       s.addMeasurement({
         id: newId(),
         page: s.currentPage,
@@ -731,12 +749,12 @@ export default function ViewerCanvas() {
       const s = st();
       if (s.numPages === 0) return;
       const raw = vp.toPage(sx, sy);
-      if (isRectTool(s.tool) || (s.tool === 'deduct' && ((alt && s.draft.length === 0) || (rectMode && s.draft.length === 1)))) {
+      if (rectActive(s.tool) || (s.tool === 'deduct' && ((alt && s.draft.length === 0) || (rectMode && s.draft.length === 1)))) {
         const mk = rectKind(s.tool);
         const d0 = s.draft;
         if (d0.length === 0 || !rectMode) {
           rectMode = true;
-          if (s.selectedId) s.select(null);
+          if (s.selectedId && s.tool !== 'count') s.select(null); // count: keep the group being measured
           s.setDraft([resolvePoint(raw, null, s.tool)]);
         } else finishRect(d0[0], resolvePoint(raw, null, s.tool), mk);
         return;
@@ -780,14 +798,17 @@ export default function ViewerCanvas() {
         const cp = resolvePoint(raw, null, 'count');
         if (g) s.updateMeasurement(g.id, { points: [...g.points, cp] });
         else {
+          const id = newId();
           s.addMeasurement({
-            id: newId(),
+            id,
             page: s.currentPage,
             kind: 'count',
             label: `${KIND_LABEL_PREFIX.count} ${nextLabelNumber(s.measurements, 'count')}`,
             points: [cp],
             ...newMeasurementStyle(s, 'count'),
           });
+          // First item of a new type: measure it now (calibrated pages), then keep marking.
+          if (s.calibrations[s.currentPage]?.pixelsPerMeter) useCountFlow.getState().start(id);
         }
         return;
       }
@@ -1082,7 +1103,7 @@ export default function ViewerCanvas() {
       }
       if (e.altKey !== alt) alt = e.altKey;
       if (e.ctrlKey !== ctrl) ctrl = e.ctrlKey;
-      if (!space && s.draft.length === 0 && (isRectTool(s.tool) || (s.tool === 'deduct' && e.altKey))) {
+      if (!space && s.draft.length === 0 && (rectActive(s.tool) || (s.tool === 'deduct' && e.altKey))) {
         const a = resolvePoint(vp.toPage(q.x, q.y), null, s.tool);
         gesture = {
           kind: 'rect',
@@ -1094,7 +1115,7 @@ export default function ViewerCanvas() {
           moved: false,
           threshold: e.pointerType === 'touch' ? DRAG_PX_TOUCH : DRAG_PX_MOUSE,
         };
-        if (s.selectedId) s.select(null);
+        if (s.selectedId && s.tool !== 'count') s.select(null);
         updateCursor();
         updateBand();
         return;
