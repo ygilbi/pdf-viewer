@@ -28,9 +28,10 @@ export function CountFinishButton() {
   });
   const active = label === null ? null : { label };
   if (!active) return null;
-  // The count-measure step ("מדוד את …" + דלג) is explained in the bottom-left HintPanel.
+  // The count-measure step ("מדוד את …" + דלג) is explained in the HintPanel (bottom slot).
   return (
-    <div className="pointer-events-none absolute inset-x-0 bottom-6 z-30 flex justify-center px-4" data-viewer-ui>
+    // Rendered inside the bottom slot (stacked above the dock / edit toolbar, never over it).
+    <div className="pointer-events-none flex justify-center" data-viewer-ui>
       <button
         type="button"
         dir="rtl"

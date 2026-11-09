@@ -4,6 +4,8 @@ import type { AreaMeasurement } from '../../core/types';
 import { NOTE_PIN } from '../../core/markupGeometry';
 import { useViewer } from '../../state/store';
 import { useMarkup } from '../../state/markupStore';
+import { useDocEdit } from '../../state/docEditStore';
+import { TEXT_EDIT_PAD, estimateTextWidth, textEditCoverRect, textEditFontSize } from '../../core/docTools';
 
 /**
  * HTML parts of the markup layer, living inside the transformed "world"
@@ -69,7 +71,166 @@ export const NoteBubbles = memo(NoteBubblesImpl);
 
 /** In-place editor for the annotation being edited: target page for links, text otherwise. */
 export function MarkupEditor({ m }: { m: AreaMeasurement }) {
+  if (m.kind === 'textEdit') return <TextEditEditor m={m} isNew={false} />;
   return m.kind === 'link' ? <LinkEditor m={m} /> : <TextEditor m={m} />;
+}
+
+const EDIT_FONT = 'system-ui, "Segoe UI", Arial, sans-serif';
+
+/**
+ * Edit-text tool editor (cover-and-replace). Desktop: an opaque input exactly over the cover
+ * rectangle, in page units (so it matches the run's size and direction) + a small screen-sized
+ * toolbar above it. Phones: a fixed card (portal, 16px input, no autofocus) — never a focused
+ * input inside the zooming layer. `isNew` = the pending edit (useDocEdit), committed with ONE
+ * addMeasurement; an existing one is changed with one updateMeasurement.
+ */
+export function TextEditEditor({ m, isNew }: { m: AreaMeasurement; isNew: boolean }) {
+  const [value, setValue] = useState(m.text ?? '');
+  const [rtl, setRtl] = useState(!!m.rtl);
+  const ref = useRef<HTMLInputElement>(null);
+  const done = useRef(false);
+  const coarse = isCoarse();
+
+  useEffect(() => {
+    if (coarse) return;
+    ref.current?.focus({ preventScroll: true });
+    ref.current?.select();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const close = () => {
+    if (isNew) useDocEdit.getState().setPending(null);
+    else if (useMarkup.getState().editingId === m.id) useMarkup.getState().stopEditing();
+  };
+  const save = () => {
+    if (done.current) return;
+    done.current = true;
+    const s = useViewer.getState();
+    if (isNew) s.addMeasurement({ ...m, text: value, rtl });
+    else if (value !== (m.text ?? '') || rtl !== !!m.rtl) s.updateMeasurement(m.id, { text: value, rtl });
+    close();
+    // Leave the drawing unselected after a new edit (the white cover reads as part of the sheet).
+    if (isNew && useViewer.getState().selectedId === m.id) useViewer.getState().select(null);
+  };
+  const cancel = () => {
+    if (done.current) return;
+    done.current = true;
+    close();
+  };
+  const remove = () => {
+    done.current = true;
+    useViewer.getState().removeMeasurement(m.id);
+    close();
+  };
+  const keys = (e: React.KeyboardEvent) => {
+    e.stopPropagation();
+    if (e.key === 'Enter' && !e.nativeEvent.isComposing) {
+      e.preventDefault();
+      save();
+    } else if (e.key === 'Escape') {
+      e.preventDefault();
+      cancel();
+    }
+  };
+
+  const live = { ...m, text: value, rtl };
+  const cover = textEditCoverRect(live);
+  const fs = textEditFontSize(m);
+  const buttons = (
+    <div className="flex items-center gap-1">
+      <button
+        type="button"
+        onMouseDown={(e) => e.preventDefault()}
+        onClick={save}
+        data-testid="text-edit-save"
+        className="rounded bg-sky-600 px-2 py-0.5 text-[12px] font-medium text-white hover:bg-sky-700"
+      >
+        שמור
+      </button>
+      <button type="button" onMouseDown={(e) => e.preventDefault()} onClick={cancel} className="rounded px-2 py-0.5 text-[12px] text-slate-600 hover:bg-slate-100">
+        ביטול
+      </button>
+      <button
+        type="button"
+        onMouseDown={(e) => e.preventDefault()}
+        onClick={() => setRtl((v) => !v)}
+        title="כיוון הטקסט"
+        className="rounded px-1.5 py-0.5 text-[12px] text-slate-600 hover:bg-slate-100"
+        data-testid="text-edit-dir"
+      >
+        {rtl ? 'ימין←שמאל' : 'שמאל→ימין'}
+      </button>
+      {!isNew && (
+        <button type="button" onMouseDown={(e) => e.preventDefault()} onClick={remove} className="ms-auto rounded px-2 py-0.5 text-[12px] text-rose-600 hover:bg-rose-50">
+          שחזר מקור
+        </button>
+      )}
+    </div>
+  );
+
+  if (coarse) {
+    return createPortal(
+      <div data-viewer-ui className="fixed inset-x-0 top-24 flex justify-center px-3" style={{ zIndex: 60, pointerEvents: 'none' }} onPointerDown={(e) => e.stopPropagation()}>
+        <div dir="rtl" className="w-72 rounded-lg bg-white p-2 shadow-xl ring-1 ring-black/20" style={{ borderTop: '3px solid #0ea5e9', pointerEvents: 'auto', touchAction: 'none' }}>
+          <div className="mb-1 text-[11px] font-semibold text-slate-600">{m.origText ? `עריכת טקסט: ${m.origText}` : 'טקסט חדש על כיסוי'}</div>
+          <input
+            ref={ref}
+            type="text"
+            dir={rtl ? 'rtl' : 'ltr'}
+            value={value}
+            onChange={(e) => setValue(e.target.value)}
+            onKeyDown={keys}
+            data-testid="text-edit-input"
+            className="mb-1.5 block w-full rounded border border-slate-300 px-1.5 py-1 text-base text-slate-800 outline-none focus:border-sky-500 focus:ring-2 focus:ring-sky-200"
+          />
+          {buttons}
+        </div>
+      </div>,
+      document.body,
+    );
+  }
+
+  // Desktop: in place, in page units.
+  const width = Math.max(cover.width, estimateTextWidth(live) + 2 * fs * TEXT_EDIT_PAD);
+  const left = rtl ? cover.x + cover.width - width : cover.x;
+  return (
+    <div
+      data-viewer-ui
+      className="absolute"
+      style={{ left, top: cover.y, width, height: cover.height, pointerEvents: 'auto', zIndex: 45 }}
+      onPointerDown={(e) => e.stopPropagation()}
+      onBlur={(e) => {
+        if (!e.currentTarget.contains(e.relatedTarget as Node | null)) save();
+      }}
+    >
+      <input
+        ref={ref}
+        type="text"
+        dir={rtl ? 'rtl' : 'ltr'}
+        value={value}
+        onChange={(e) => setValue(e.target.value)}
+        onKeyDown={keys}
+        data-testid="text-edit-input"
+        className="block h-full w-full border-0 bg-white p-0 text-black"
+        style={{
+          fontSize: fs,
+          lineHeight: 1,
+          fontFamily: EDIT_FONT,
+          paddingInline: fs * TEXT_EDIT_PAD,
+          color: m.color || '#000',
+          outline: 'calc(2px * var(--inv-zoom, 1)) solid #0ea5e9',
+        }}
+      />
+      <div
+        dir="rtl"
+        className="absolute rounded-lg bg-white p-1 shadow-xl ring-1 ring-black/20"
+        style={{ right: 0, top: 0, transformOrigin: '100% 0', transform: 'scale(var(--inv-zoom, 1)) translate(0, calc(-100% - 8px))', whiteSpace: 'nowrap' }}
+      >
+        <div className="mb-0.5 px-1 text-[10px] text-slate-500">Enter שמירה · Esc ביטול</div>
+        {buttons}
+      </div>
+    </div>
+  );
 }
 
 /**

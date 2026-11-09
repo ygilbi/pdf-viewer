@@ -23,6 +23,8 @@ export interface HintInput {
   /** Kind of the annotation whose text / target is being edited in place, if any. */
   editingKind: string | null;
   searchOpen: boolean;
+  /** Clean viewing mode (calibrate / area dock, no tool palette). */
+  clean?: boolean;
 }
 
 export interface Hint {
@@ -147,7 +149,15 @@ export function computeHint(i: HintInput): Hint | null {
     if (!i.calibrated) {
       return {
         title: touch ? UNCALIBRATED_TITLE_TOUCH : UNCALIBRATED_TITLE,
-        lines: [touch ? 'בחר "כיול ידני" בסרגל הכלים, או הקש על הקנ״מ שזוהה למעלה' : 'סמן מידה ידועה בכלי הכיול, או לחץ על הקנ״מ שזוהה למעלה'],
+        lines: [
+          i.clean
+            ? touch
+              ? 'הקש "כיול" למטה, או על הקנ״מ שזוהה'
+              : 'לחץ "כיול" (C) למטה, או על הקנ״מ שזוהה'
+            : touch
+              ? 'בחר "כיול ידני" בסרגל הכלים, או הקש על הקנ״מ שזוהה למעלה'
+              : 'סמן מידה ידועה בכלי הכיול, או לחץ על הקנ״מ שזוהה למעלה',
+        ],
         warn: true,
       };
     }
@@ -185,6 +195,9 @@ export function computeHint(i: HintInput): Hint | null {
   if (tool === 'highlight') return { title: 'גרור מלבן להדגשה', lines: [touch ? 'מסמן שקוף מעל השרטוט' : 'מסמן שקוף מעל השרטוט · Esc יציאה'] };
   if (tool === 'link')
     return { title: 'גרור אזור לחיץ ובחר עמוד יעד', lines: [`${touch ? 'הקשה' : 'לחיצה'} על קישור קיים לעריכה · בכלי יד היא עוברת לעמוד`] };
+  // Document tools (edit existing text / signature) — added by the doc-tools change.
+  if (tool === 'textEdit') return { title: `${tap} על טקסט בשרטוט כדי לערוך אותו`, lines: [touch ? 'אין טקסט (סריקה)? גרור מלבן והקלד' : 'אין טקסט (סריקה)? גרור מלבן והקלד · Enter שמירה · Esc יציאה'] };
+  if (tool === 'signature') return { title: `${tap} במקום שבו תוצב החתימה`, lines: ['אחר כך: גרור להזזה · פינה לשינוי גודל · חתימה חזותית, לא דיגיטלית מאושרת'] };
 
   // pan
   if (i.searchOpen)
@@ -194,6 +207,8 @@ export function computeHint(i: HintInput): Hint | null {
       title: `נבחר: ${i.selectedLabel}`,
       lines: [touch ? 'גרור להזזה · גרור נקודה לעריכה · הקש ברקע לביטול' : 'גרור להזזה · גרור נקודה לעריכה · Delete מחיקה · Esc ביטול'],
     };
+  // Clean mode keeps the screen clean: no idle prompt (the dock is self-explanatory).
+  if (i.clean) return null;
   return touch
     ? { title: 'אצבע אחת להזזה · שתיים לזום', lines: ['בחר כלי מהסרגל כדי למדוד או לסמן'] }
     : { title: 'גרור להזזה · גלגלת = עמוד הבא · Ctrl+גלגלת = זום', lines: ['בחר כלי מהסרגל או מקש קיצור (A שטח · L אורך · N ספירה · C כיול)'] };

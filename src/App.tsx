@@ -284,7 +284,9 @@ function AddProgress() {
     <div
       role="status"
       data-testid="add-progress"
-      className="pointer-events-auto absolute bottom-4 right-4 z-30 flex w-72 flex-col gap-1 rounded-lg border border-slate-700 bg-slate-800/95 p-2 text-xs shadow-xl backdrop-blur"
+      // Above the bottom slot (dock / edit toolbar), whose height ModeDock publishes.
+      style={{ bottom: 'calc(var(--bottom-slot-h, 0px) + 0.5rem)' }}
+      className="pointer-events-auto absolute right-4 z-30 flex w-72 max-w-[calc(100vw-2rem)] flex-col gap-1 rounded-lg border border-slate-700 bg-slate-800/95 p-2 text-xs shadow-xl backdrop-blur"
     >
       <div className="px-1 font-semibold text-slate-300">מוסיף קבצים…</div>
       {items.map((it) => (

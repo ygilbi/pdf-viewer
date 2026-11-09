@@ -97,3 +97,27 @@ describe('computeHint', () => {
     expect(h({ tool: 'area', searchOpen: true }).title).toContain('פינות');
   });
 });
+
+describe('computeHint — clean mode', () => {
+  const base = {
+    tool: 'pan' as const,
+    draftLength: 0,
+    calibrated: true,
+    touch: false,
+    snapEnabled: true,
+    countMeasuringLabel: null,
+    activeCountLabel: null,
+    selectedLabel: null,
+    editingKind: null,
+    searchOpen: false,
+  };
+  it('no idle prompt in the clean mode (edit mode keeps it)', () => {
+    expect(computeHint({ ...base, clean: true })).toBeNull();
+    expect(computeHint({ ...base, clean: false })).not.toBeNull();
+  });
+  it('uncalibrated area points at the dock', () => {
+    const h = computeHint({ ...base, tool: 'rectArea', calibrated: false, clean: true });
+    expect(h?.warn).toBe(true);
+    expect(h?.lines[0]).toContain('"כיול"');
+  });
+});

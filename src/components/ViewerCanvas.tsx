@@ -1,9 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { useUi } from '../state/uiStore';
 import { useViewer } from '../state/store';
-import { getPdfClient, getPageSnapGeometry } from '../core/pdfClient';
+import { getPdfClient, getPageSnapGeometry, getPageText } from '../core/pdfClient';
 import { SNAP_INTERSECTION, SNAP_MIDPOINT, SnapIndex, nearestExtra, pickSnap, projectOnRay, type SnapHit } from '../core/snapIndex';
 import { useSnap } from '../state/snapStore';
-import type { AreaMeasurement, MarkupKind, MeasurementKind, Point, ToolId } from '../core/types';
+import type { AreaMeasurement, MarkupKind, MeasurementKind, Point, TextItem, ToolId } from '../core/types';
 import {
   DEDUCT_COLOR,
   KIND_LABEL_PREFIX,
@@ -32,7 +33,20 @@ import { PageLayers } from './viewer/TileLayer';
 import { LINK_COLOR, MeasureOverlay, OVERLAY_WARN_COLOR } from './viewer/MeasureOverlay';
 import { emitZoom, registerViewer, takePendingFocus } from './viewer/commands';
 import { TextHighlights } from './text/TextHighlights';
-import { MarkupEditor, NoteBubbles } from './viewer/MarkupHtml';
+import { MarkupEditor, NoteBubbles, TextEditEditor } from './viewer/MarkupHtml';
+import { SignatureDialog } from './doc/SignatureDialog';
+import { useDocEdit } from '../state/docEditStore';
+import { useSignatures } from '../state/signatureStore';
+import {
+  TEXT_EDIT_COLOR,
+  boxFontSize,
+  defaultSignatureSize,
+  findTextRunAt,
+  formatSignatureDate,
+  resizeLocked,
+  signatureBoxAt,
+  textEditFromRun,
+} from '../core/docTools';
 import { createWheelPager } from './viewer/wheelPager';
 import { followLink } from '../state/linkHistory';
 import { useCountFlow } from '../state/countFlow';
@@ -148,7 +162,7 @@ const SHIFT_STEP: Partial<Record<MarkupKind, number>> = { pen: 30, line: 30, arr
 /** Markup kinds without vertex handles (moved as a whole only). */
 const noHandles = (m: AreaMeasurement) => {
   const k = kindOf(m);
-  return k === 'pen' || k === 'note' || k === 'text';
+  return k === 'pen' || k === 'note' || k === 'text' || k === 'textEdit';
 };
 /** Minimum drag (screen px) for a drawn markup shape to count. */
 const MIN_DRAW_PX = 4;
@@ -258,12 +272,17 @@ export default function ViewerCanvas() {
   const segmentRef = useRef<SVGLineElement>(null);
   const closingRef = useRef<SVGLineElement>(null);
   const markupRef = useRef<SVGPathElement>(null);
+  const textRunRef = useRef<SVGRectElement>(null);
+  const ghostRef = useRef<SVGImageElement>(null);
   const snapMarkerRef = useRef<SVGSVGElement>(null);
   const layersRef = useRef<PageLayers | null>(null);
   /** Imperative hooks the main effect installs, so React effects can poke them. */
-  const hooks = useRef({ updateBand: () => {}, updateCursor: () => {} });
+  const hooks = useRef({ updateBand: () => {}, updateCursor: () => {}, docToolChanged: () => {} });
 
-  const band = useMemo(() => ({ livePoly: livePolyRef, segment: segmentRef, closing: closingRef, markup: markupRef }), []);
+  const band = useMemo(
+    () => ({ livePoly: livePolyRef, segment: segmentRef, closing: closingRef, markup: markupRef, textRun: textRunRef, ghost: ghostRef }),
+    [],
+  );
 
   // ---------------------------------------------------------------------------
   // Mount: viewport, raster layers, commands, input handling.
@@ -291,6 +310,10 @@ export default function ViewerCanvas() {
     /** Markup under the mouse (pan tool cursor + note hover bubble). */
     let hoverId: string | null = null;
     let lastMarkupClick: { t: number; id: string } | null = null;
+    // ---- edit-text / signature tools ----
+    /** Text layer of the current page (edit-text tool); items null while loading. */
+    let pageText: { page: number; items: TextItem[] | null } = { page: 0, items: null };
+    let hoverRun = -1;
     // ---- geometry snap state ----
     let ctrl = false;
     let alt = false;
@@ -623,6 +646,113 @@ export default function ViewerCanvas() {
       hoverId = id;
       if (id && m?.kind === 'note') world.querySelector(`[data-note-bubble="${CSS.escape(id)}"]`)?.setAttribute('data-hover', '');
     };
+    /** Load (cached) the current page's text layer for the edit-text tool. */
+    const loadText = () => {
+      const page = st().currentPage;
+      if (pageText.page === page) return;
+      pageText = { page, items: null };
+      getPageText(page).then(
+        (items) => {
+          if (pageText.page !== page) return;
+          pageText = { page, items };
+          updateDocHover();
+        },
+        () => {
+          if (pageText.page === page) pageText = { page, items: [] }; // no text layer → box mode
+        },
+      );
+    };
+    /** Text run under a page point (edit-text tool), -1 = none / not loaded. */
+    const runAt = (p: Point): number => {
+      const s = st();
+      if (pageText.page !== s.currentPage || !pageText.items) return -1;
+      return findTextRunAt(pageText.items, p, 2 / vp.zoom);
+    };
+    /** Edit-text: highlight the run under the mouse. Signature: move the ghost. (Direct DOM writes.) */
+    let docHoverShown = false;
+    const updateDocHover = () => {
+      const s = st();
+      if (!docHoverShown && s.tool !== 'textEdit' && s.tool !== 'signature') return; // nothing shown, nothing to show
+      docHoverShown = s.tool === 'textEdit' || s.tool === 'signature';
+      const run = textRunRef.current;
+      const ghost = ghostRef.current;
+      const p = cursor && s.numPages > 0 ? vp.toPage(cursor.x, cursor.y) : null;
+      hoverRun = -1;
+      if (run) {
+        const onEdit = p && s.tool === 'textEdit' && gesture.kind === 'none' && !useDocEdit.getState().pending && !useMarkup.getState().editingId;
+        const covered = onEdit && hitMarkupAt(p, s.measurements, s.currentPage, vp.zoom, ['textEdit']);
+        if (onEdit && !covered) {
+          if (pageText.page !== s.currentPage) loadText();
+          hoverRun = runAt(p);
+        }
+        const it = hoverRun >= 0 ? pageText.items![hoverRun] : null;
+        if (it) {
+          run.setAttribute('x', String(it.rect.x));
+          run.setAttribute('y', String(it.rect.y));
+          run.setAttribute('width', String(it.rect.width));
+          run.setAttribute('height', String(it.rect.height));
+          run.setAttribute('visibility', 'visible');
+        } else run.setAttribute('visibility', 'hidden');
+      }
+      if (ghost) {
+        const sig = useSignatures.getState();
+        if (p && s.tool === 'signature' && sig.active && !sig.dialogOpen && gesture.kind === 'none') {
+          const size = defaultSignatureSize(sig.active.aspect, vp.zoom, s.pageSizes[s.currentPage - 1]?.width ?? 842);
+          if (ghost.getAttribute('href') !== sig.active.image) ghost.setAttribute('href', sig.active.image);
+          ghost.setAttribute('x', String(p.x - size.width / 2));
+          ghost.setAttribute('y', String(p.y - size.height / 2));
+          ghost.setAttribute('width', String(size.width));
+          ghost.setAttribute('height', String(size.height));
+          ghost.setAttribute('visibility', 'visible');
+        } else ghost.setAttribute('visibility', 'hidden');
+      }
+    };
+    /** Place the chosen signature centred on `at`, then back to the hand tool. */
+    const placeSignature = (at: Point) => {
+      const s = st();
+      const sig = useSignatures.getState();
+      if (!sig.active) {
+        sig.openDialog();
+        return;
+      }
+      const size = defaultSignatureSize(sig.active.aspect, vp.zoom, s.pageSizes[s.currentPage - 1]?.width ?? 842);
+      s.addMeasurement({
+        id: newId(),
+        page: s.currentPage,
+        kind: 'signature',
+        label: `${KIND_LABEL_PREFIX.signature} ${nextLabelNumber(s.measurements, 'signature')}`,
+        points: signatureBoxAt(at, size),
+        image: sig.active.image,
+        aspect: sig.active.aspect,
+        ...(sig.withDate ? { text: formatSignatureDate() } : {}),
+        color: '#111827',
+      });
+      s.setTool('pan'); // the new signature stays selected: drag to move, corner to resize
+    };
+    /** Open the edit-text editor for a run, an existing edit, or a hand-drawn box. */
+    const startTextEdit = (p: Point): boolean => {
+      const s = st();
+      const hit = hitMarkupAt(p, s.measurements, s.currentPage, vp.zoom, ['textEdit']);
+      if (hit) {
+        s.select(hit.id);
+        useMarkup.getState().startEditing(hit.id);
+        return true;
+      }
+      const i = runAt(p);
+      if (i < 0) return false;
+      const picked = useMarkup.getState().color;
+      useDocEdit.getState().setPending({
+        id: newId(),
+        page: s.currentPage,
+        kind: 'textEdit',
+        label: `${KIND_LABEL_PREFIX.textEdit} ${nextLabelNumber(s.measurements, 'textEdit')}`,
+        ...textEditFromRun(pageText.items![i]),
+        color: picked ?? TEXT_EDIT_COLOR,
+      });
+      if (s.selectedId) s.select(null);
+      updateDocHover();
+      return true;
+    };
     /** Live preview of a markup being dragged out (direct DOM writes, no React). */
     const updateLive = (g: Extract<Gesture, { kind: 'draw' }> | null) => {
       const el = markupRef.current;
@@ -656,10 +786,22 @@ export default function ViewerCanvas() {
       else if (hoverVertex()) c = 'move';
       else if (tl === 'pan' && hoverId) c = st().measurements.find((x) => x.id === hoverId)?.kind === 'link' ? 'pointer' : 'move';
       else if ((tl === 'note' || tl === 'text' || tl === 'link') && hoverId) c = 'pointer';
+      else if (tl === 'textEdit' && (hoverRun >= 0 || st().measurements.find((x) => x.id === hoverId)?.kind === 'textEdit')) c = 'text';
       else c = tl === 'pan' ? 'grab' : 'crosshair';
       if (container.style.cursor !== c) container.style.cursor = c;
     };
-    hooks.current = { updateBand, updateCursor };
+    let lastDocTool: ToolId | null = null;
+    const docToolChanged = () => {
+      const t = st().tool;
+      pageText = { page: 0, items: null }; // page / document changed: re-read (the client caches it)
+      if (t === 'textEdit') loadText();
+      if (t === 'signature' && lastDocTool !== 'signature') useSignatures.getState().openDialog();
+      else if (t !== 'signature' && useSignatures.getState().dialogOpen) useSignatures.getState().closeDialog();
+      lastDocTool = t;
+      if (t !== 'textEdit' && useDocEdit.getState().pending) useDocEdit.getState().setPending(null);
+      updateDocHover();
+    };
+    hooks.current = { updateBand, updateCursor, docToolChanged };
 
     // ---- actions ------------------------------------------------------------
     const finishDraft = () => {
@@ -733,8 +875,17 @@ export default function ViewerCanvas() {
       }
       rectMode = false;
       if (s.tool === 'pan') {
-        const hit = hitTest(raw, s.measurements, s.currentPage, LINE_HIT_PX / vp.zoom, VERTEX_PX / vp.zoom, vp.zoom);
+        // Clean viewing mode: the hand only pans (and follows links); selecting is an edit-mode thing.
+        const hit = useUi.getState().editMode ? hitTest(raw, s.measurements, s.currentPage, LINE_HIT_PX / vp.zoom, VERTEX_PX / vp.zoom, vp.zoom) : null;
         s.select(hit ? hit.id : null);
+        return;
+      }
+      if (s.tool === 'textEdit') {
+        startTextEdit(raw);
+        return;
+      }
+      if (s.tool === 'signature') {
+        placeSignature(raw);
         return;
       }
       if (s.tool === 'note' || s.tool === 'text') {
@@ -846,6 +997,23 @@ export default function ViewerCanvas() {
           return;
         }
         points = g.tool === 'arrow' || g.tool === 'line' ? [a, b] : [{ x: r.x, y: r.y }, { x: r.x + r.width, y: r.y + r.height }];
+      }
+      if (g.tool === 'textEdit') {
+        // Scan / no text under the box: the drawn box becomes the paper cover, type the new text.
+        const r = normRect(points[0], points[1]);
+        const picked = useMarkup.getState().color;
+        useDocEdit.getState().setPending({
+          id: newId(),
+          page: s.currentPage,
+          kind: 'textEdit',
+          label: `${KIND_LABEL_PREFIX.textEdit} ${nextLabelNumber(s.measurements, 'textEdit')}`,
+          points,
+          text: '',
+          fontSize: boxFontSize(r),
+          rtl: true,
+          color: picked ?? TEXT_EDIT_COLOR,
+        });
+        return;
       }
       const sw = useMarkup.getState().strokeWidth;
       if (g.tool === 'link') {
@@ -1062,8 +1230,8 @@ export default function ViewerCanvas() {
           return;
         }
       }
-      if (!space && s.tool === 'pan') {
-        // Grab a markup annotation to move it (a plain click still selects it).
+      if (!space && s.tool === 'pan' && useUi.getState().editMode) {
+        // Grab a markup annotation to move it (a plain click still selects it). Edit mode only.
         const hit = hitMarkupAt(vp.toPage(q.x, q.y), s.measurements, s.currentPage, vp.zoom);
         if (hit) {
           if (s.selectedId !== hit.id) s.select(hit.id);
@@ -1091,6 +1259,26 @@ export default function ViewerCanvas() {
         updateCursor();
         updateBand();
         return;
+      }
+      if (!space && s.tool === 'textEdit' && !useDocEdit.getState().pending) {
+        const p0 = vp.toPage(q.x, q.y);
+        if (pageText.page !== s.currentPage) loadText();
+        if (runAt(p0) < 0 && !hitMarkupAt(p0, s.measurements, s.currentPage, vp.zoom, ['textEdit'])) {
+          // Nothing to edit here (or a scan): drag a box → it becomes the cover for new text.
+          gesture = { kind: 'draw', id: e.pointerId, tool: 'textEdit', pts: [p0, p0], sx: q.x, sy: q.y, lx: q.x, ly: q.y };
+          const el = markupRef.current;
+          if (el) {
+            el.setAttribute('stroke', '#0ea5e9');
+            el.setAttribute('fill', '#ffffff');
+            el.setAttribute('fill-opacity', '0.9');
+            el.style.strokeWidth = 'calc(1.5px * var(--inv-zoom, 1))';
+          }
+          if (s.selectedId) s.select(null);
+          updateDocHover();
+          updateCursor();
+          updateBand();
+          return;
+        }
       }
       if (!space && isDragTool(s.tool)) {
         const p0 = vp.toPage(q.x, q.y);
@@ -1188,6 +1376,11 @@ export default function ViewerCanvas() {
             const nb = kindOf(vm) === 'count' || (kindOf(vm) === 'length' && g.index === 0) ? null : g.points[(g.index - 1 + n) % n];
             pts[g.index] = resolvePoint(vp.toPage(q.x, q.y), shift ? nb : null, kindOf(vm) as ToolId, vm.id);
             updateMarker(true);
+          } else if (vm?.kind === 'signature' && pts.length === 2) {
+            // Signature: locked aspect, the opposite corner stays.
+            const anchor = pts[1 - g.index];
+            const aspect = vm.aspect ?? Math.abs(pts[1].x - pts[0].x) / Math.max(1e-6, Math.abs(pts[1].y - pts[0].y));
+            pts[g.index] = resizeLocked(anchor, pts[g.index], vp.toPage(q.x, q.y), aspect, 12 / vp.zoom);
           } else pts[g.index] = vp.toPage(q.x, q.y);
           g.points = pts;
           queueOverride({ id: g.mid, points: pts });
@@ -1251,6 +1444,7 @@ export default function ViewerCanvas() {
           if (e.pointerType !== 'touch') {
             cursor = q;
             updateHover();
+            updateDocHover();
             updateBand();
             updateCursor();
           }
@@ -1298,7 +1492,7 @@ export default function ViewerCanvas() {
             } else if (m.targetPage) followLink(m.targetPage, m.text?.trim() || undefined); // hand tool: follow the link
             return;
           }
-          if (lastMarkupClick && lastMarkupClick.id === g.mid && now - lastMarkupClick.t < DBL_MS && (m?.kind === 'note' || m?.kind === 'text')) {
+          if (lastMarkupClick && lastMarkupClick.id === g.mid && now - lastMarkupClick.t < DBL_MS && (m?.kind === 'note' || m?.kind === 'text' || m?.kind === 'textEdit')) {
             lastMarkupClick = null;
             useMarkup.getState().startEditing(g.mid);
           } else lastMarkupClick = { t: now, id: g.mid };
@@ -1329,6 +1523,7 @@ export default function ViewerCanvas() {
     const onPointerLeave = (e: PointerEvent) => {
       if (e.pointerType === 'mouse' && gesture.kind === 'none') {
         cursor = null;
+        updateDocHover();
         updateBand();
       }
     };
@@ -1444,7 +1639,7 @@ export default function ViewerCanvas() {
           else if (s.tool === 'count' && activeCount(s)) s.select(null); // finish the count group
           else if (s.selectedId && !s.draft.length) {
             const m = s.measurements.find((x) => x.id === s.selectedId);
-            if (m && (m.kind === 'note' || m.kind === 'text')) useMarkup.getState().startEditing(m.id);
+            if (m && (m.kind === 'note' || m.kind === 'text' || m.kind === 'textEdit')) useMarkup.getState().startEditing(m.id);
             else handled = false;
           } else handled = false;
           break;
@@ -1533,7 +1728,7 @@ export default function ViewerCanvas() {
       layers.destroy();
       layersRef.current = null;
       vp.setWorld(null);
-      hooks.current = { updateBand: () => {}, updateCursor: () => {} };
+      hooks.current = { updateBand: () => {}, updateCursor: () => {}, docToolChanged: () => {} };
     };
   }, [vp]);
 
@@ -1566,11 +1761,19 @@ export default function ViewerCanvas() {
     layersRef.current?.setSizes(pageSizes);
   }, [pageSizes]);
 
+  // Edit-text / signature tools: text layer preload, signature dialog, hover reset.
+  useEffect(() => {
+    hooks.current.docToolChanged();
+  }, [tool, currentPage, layoutKey]);
+  const pendingEdit = useDocEdit((s) => s.pending);
+
   // Rubber band / cursor depend on tool + draft + calibration.
   useEffect(() => {
     hooks.current.updateBand();
     hooks.current.updateCursor();
   }, [tool, draft, calibration, selectedId, measurements, editingId, snapOn]);
+
+  // Edit-text / signature tools: text layer preload, signature dialog, hover reset.
 
   const showPrompt = tool === 'calibrate' && draft.length === 2;
 
@@ -1617,6 +1820,7 @@ export default function ViewerCanvas() {
         {size && <TextHighlights page={currentPage} />}
         {size && <NoteBubbles notes={pageNotes} selectedId={selectedId} editingId={editingId} />}
         {editing && <MarkupEditor key={editing.id} m={editing} />}
+        {pendingEdit && pendingEdit.page === currentPage && <TextEditEditor key={pendingEdit.id} m={pendingEdit} isNew />}
         {showPrompt && <CalibrationPrompt key={`${draft[0].x},${draft[0].y},${draft[1].x},${draft[1].y}`} p1={draft[0]} p2={draft[1]} />}
       </div>
       <div
@@ -1626,6 +1830,7 @@ export default function ViewerCanvas() {
         data-testid="viewer-readout"
       />
       <SnapMarker ref={snapMarkerRef} />
+      <SignatureDialog />
     </div>
   );
 }

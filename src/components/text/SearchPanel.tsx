@@ -6,66 +6,8 @@ import { usePageTextInfo } from '../../text/pageTextInfo';
 import { docsWithoutText, groupResultsByDoc, type SearchScope } from '../../text/searchScope';
 import type { TextMatch } from '../../text/textSearch';
 import { IconFilePdf, IconX } from '../ui/icons';
-import { isTypingTarget } from '../ui/util';
+import { IconSearch } from './searchControls';
 
-export const IconSearch = ({ size = 16 }: { size?: number }) => (
-  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-    <circle cx="11" cy="11" r="7" />
-    <path d="m20 20-3.5-3.5" />
-  </svg>
-);
-
-/** The search box in the file tab bar (Ctrl+F focuses it). */
-export const TABBAR_SEARCH_SELECTOR = '[data-testid="tabbar-search"]';
-
-/** Focuses the tab bar's "search in files" box; falls back to the panel. */
-export function focusTabbarSearch(): void {
-  const el = document.querySelector<HTMLInputElement>(TABBAR_SEARCH_SELECTOR);
-  if (!el || el.offsetParent === null) return openSearch();
-  el.focus();
-  el.select();
-}
-
-/** Opens the search panel and focuses its input (F3 / Ctrl+F / menu). */
-export function openSearch(): void {
-  useSearch.getState().setOpen(true);
-  requestAnimationFrame(() => {
-    const el = document.querySelector<HTMLInputElement>('[data-testid="search-input"]');
-    el?.focus();
-    el?.select();
-  });
-}
-
-/** F3 / Ctrl+F open (F3 again = next, Shift+F3 = previous). Capture phase: beats the browser's find bar. */
-function useSearchKeys() {
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (useViewer.getState().numPages === 0) return;
-      const isF3 = e.key === 'F3';
-      const isCtrlF = (e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && e.code === 'KeyF';
-      if (!isF3 && !isCtrlF) return;
-      if (
-        isCtrlF &&
-        isTypingTarget(e.target) &&
-        !(e.target as HTMLElement).closest('[data-testid="search-panel"]') &&
-        !(e.target as HTMLElement).matches(TABBAR_SEARCH_SELECTOR)
-      )
-        return;
-      e.preventDefault();
-      e.stopPropagation();
-      const s = useSearch.getState();
-      if (isF3 && s.open && s.results.length) {
-        const n = s.results.length;
-        s.goTo(((s.activeIndex < 0 ? (e.shiftKey ? 0 : -1) : s.activeIndex) + (e.shiftKey ? -1 : 1) + n) % n);
-        return;
-      }
-      if (isCtrlF) focusTabbarSearch();
-      else openSearch();
-    };
-    window.addEventListener('keydown', onKey, true);
-    return () => window.removeEventListener('keydown', onKey, true);
-  }, []);
-}
 
 function Toggle({ on, onClick, title, children, testId }: { on: boolean; onClick(): void; title: string; children: ReactNode; testId: string }) {
   return (
@@ -101,21 +43,8 @@ function Highlighted({ m }: { m: TextMatch }) {
   );
 }
 
-/** Floating panel "חיפוש וספירה" (left side, over the drawing). Always mounted for its shortcuts. */
-export function SearchPanel() {
-  useSearchKeys();
-  const open = useSearch((s) => s.open);
-  // A changed workspace (file added/removed/reordered) invalidates page numbers of results.
-  const layoutKey = useViewer((s) => s.docs.map((d) => `${d.id}:${d.pageOffset}:${d.numPages}`).join('|'));
-  useEffect(() => {
-    useSearch.getState().clear();
-  }, [layoutKey]);
-
-  if (!open) return null;
-  return <SearchPanelBody />;
-}
-
-function SearchPanelBody() {
+/** Floating panel "חיפוש וספירה" (left side, over the drawing); mounted by SearchHost only while open (lazy chunk). */
+export default function SearchPanelBody() {
   const s = useSearch();
   const currentPage = useViewer((v) => v.currentPage);
   const numPages = useViewer((v) => v.numPages);

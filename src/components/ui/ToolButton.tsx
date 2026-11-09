@@ -15,11 +15,12 @@ interface ToolButtonProps {
   labelClassName?: string;
   className?: string;
   /** Which side of the button the tooltip appears on (physical sides). */
-  tooltipSide?: 'bottom' | 'left' | 'right';
+  tooltipSide?: 'bottom' | 'top' | 'left' | 'right';
 }
 
 const TOOLTIP_SIDE = {
   bottom: 'left-1/2 top-full mt-1.5 -translate-x-1/2',
+  top: 'left-1/2 bottom-full mb-1.5 -translate-x-1/2',
   left: 'right-full top-1/2 mr-2 -translate-y-1/2',
   right: 'left-full top-1/2 ml-2 -translate-y-1/2',
 } as const;

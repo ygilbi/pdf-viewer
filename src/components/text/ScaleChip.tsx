@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { useViewer } from '../../state/store';
 import { usePageTextInfo } from '../../text/pageTextInfo';
 import { calibrationFromScale, type DetectedScale } from '../../text/scaleDetect';
+import { useAfterFirstPaint, usePagePainted } from '../../state/firstPaint';
 
 /** Pages (doc:local or global fallback) where the user dismissed the suggestion — per session. */
 const dismissed = new Set<string>();
@@ -12,11 +13,23 @@ function applyScale(d: DetectedScale) {
 }
 
 /**
+ * Auto scale detection reads the page text, which competes with drawing the page: it starts only
+ * once the current page is on screen and the browser went idle after the first paint.
+ */
+export function ScaleChip({ placement = 'below' }: { placement?: 'below' | 'above' }) {
+  const calibrated = useViewer((s) => !!s.calibrations[s.currentPage]);
+  const painted = usePagePainted();
+  const idle = useAfterFirstPaint();
+  if (calibrated || !painted || !idle) return null;
+  return <ScaleChipInner placement={placement} />;
+}
+
+/**
  * "כיול אוטומטי": non-blocking chip in the floating pill when the current page
  * is not calibrated and its text names a scale ("SCALE 1:100", "קנ״מ 1:50").
  * Several different scales → a small picker.
  */
-export function ScaleChip() {
+function ScaleChipInner({ placement }: { placement: 'below' | 'above' }) {
   const page = useViewer((s) => s.currentPage);
   const calibrated = useViewer((s) => !!s.calibrations[s.currentPage]);
   const docKey = useViewer((s) => s.docs.map((d) => d.id).join(','));
@@ -81,7 +94,10 @@ export function ScaleChip() {
       </div>
       {pick && !one && (
         <div
-          className="absolute end-0 top-9 z-50 w-64 rounded-lg border border-slate-600 bg-slate-900/95 p-2 text-xs text-slate-200 shadow-xl backdrop-blur"
+          className={
+            (placement === 'above' ? 'bottom-9 ' : 'top-9 ') +
+            'absolute end-0 z-50 w-64 rounded-lg border border-slate-600 bg-slate-900/95 p-2 text-xs text-slate-200 shadow-xl backdrop-blur'
+          }
           data-testid="scale-picker"
         >
           <div className="mb-1.5 text-slate-400">קני מידה שנמצאו בדף (לפי מספר הופעות):</div>

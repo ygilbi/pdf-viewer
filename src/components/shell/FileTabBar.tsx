@@ -4,7 +4,7 @@ import { useViewer } from '../../state/store';
 import { useFileQueue } from '../../state/fileQueue';
 import { activeDocId, appendedDocIds, cycleDoc, pageForTab, pruneLastPages, rememberPage, type LastPages } from '../../state/docTabs';
 import { useSearch } from '../../text/searchStore';
-import { IconSearch, openSearch } from '../text/SearchPanel';
+import { IconSearch, openSearch } from '../text/searchControls';
 import { IconFilePdf, IconX } from '../ui/icons';
 import type { WorkspaceDoc } from '../../core/types';
 
@@ -351,8 +351,10 @@ function TabbarSearch() {
           aria-label="חיפוש בתוכן הקבצים (Ctrl+F)"
           title="חיפוש בתוכן הקבצים (Ctrl+F) — Enter לחיפוש / לתוצאה הבאה"
           className={
-            'h-7 w-36 rounded-md border border-slate-700 bg-slate-950 pl-2 pr-7 text-xs text-slate-100 placeholder:text-slate-500 ' +
-            'transition-[width] duration-150 focus:w-48 focus:border-sky-500 [&::-webkit-search-cancel-button]:hidden focus:outline-none sm:w-52 sm:focus:w-64'
+            // Phone: collapsed to its icon (the tab strip keeps the row); widens while focused.
+            'h-7 w-8 rounded-md border border-slate-700 bg-slate-950 pl-2 pr-7 text-xs text-slate-100 placeholder:text-transparent ' +
+            'transition-[width] duration-150 focus:w-44 focus:border-sky-500 focus:placeholder:text-slate-500 [&::-webkit-search-cancel-button]:hidden focus:outline-none ' +
+            'sm:w-52 sm:placeholder:text-slate-500 sm:focus:w-64'
           }
         />
       </label>

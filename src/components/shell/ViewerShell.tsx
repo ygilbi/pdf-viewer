@@ -1,21 +1,29 @@
-import { useEffect } from 'react';
+import { lazy, Suspense, useEffect } from 'react';
 import { useViewer } from '../../state/store';
 import { useUi } from '../../state/uiStore';
-import ThumbnailSidebar from '../ThumbnailSidebar';
 import { LeftDrawerContent, toggleLeftTab } from '../../pricing/LeftDrawer';
 import { IconAlert, IconX } from '../ui/icons';
 import { isTypingTarget } from '../ui/util';
 import { toggleFullscreen, useToolShortcuts } from '../toolActions';
 import { Drawer } from './Drawer';
 import { FloatingChrome } from './FloatingChrome';
-import { TopMenu } from './TopMenu';
-import { ToolPalette } from './ToolPalette';
 import { LinkBackButton } from './LinkBackButton';
 import { CountFinishButton } from './CountFinishButton';
 import { HintPanel } from './HintPanel';
-import { ExportDialog } from '../ExportDialog';
-import { SearchPanel } from '../text/SearchPanel';
+import { SearchHost } from '../text/searchControls';
 import { openExportDialog, useExportUi } from '../../export/exportUi';
+import { addedDocIds, EDIT_MODE_KEY } from '../../state/editMode';
+import { afterFirstPaint, useAfterFirstPaint } from '../../state/firstPaint';
+import { applyModeEvent, loadEditChrome, toggleEditMode } from './modeActions';
+import { BottomSlot, CleanDock, EditDockStub, EditModeToggle } from './ModeDock';
+import { useCompactLayout } from './layout';
+
+// Lazy chunks: none of these is needed to show the first page of a file.
+const EditChrome = lazy(loadEditChrome);
+const loadTopMenu = () => import('./TopMenu');
+const TopMenu = lazy(() => loadTopMenu().then((m) => ({ default: m.TopMenu })));
+const ExportDialog = lazy(() => import('../ExportDialog').then((m) => ({ default: m.ExportDialog })));
+const ThumbnailSidebar = lazy(() => import('../ThumbnailSidebar'));
 
 /**
  * Shell keys. Registered in the CAPTURE phase on window so they run before
@@ -50,6 +58,10 @@ function useShellKeys() {
           if (!e.shiftKey) toggleLeftTab();
           else handled = false;
           break;
+        case EDIT_MODE_KEY:
+          if (!e.shiftKey && !e.repeat) toggleEditMode();
+          else handled = false;
+          break;
         case 'Escape':
           if (ui.menuOpen) ui.setMenuOpen(false);
           else if ((ui.thumbsOpen && !ui.thumbsPinned) || (ui.measurementsOpen && !ui.measurementsPinned)) {
@@ -70,26 +82,91 @@ function useShellKeys() {
   }, []);
 }
 
+/**
+ * Mode bookkeeping: every opened file (first file, added tab, restored workspace) starts in the
+ * clean mode; a tool that is not in the clean dock (shortcut, "+ פריט חדש"…) switches to edit mode.
+ */
+function useEditModeSync() {
+  useEffect(() => {
+    // Mounting = a workspace was just opened.
+    applyModeEvent({ type: 'fileOpened', tool: useViewer.getState().tool });
+    const unsub = useViewer.subscribe((s, prev) => {
+      if (s.docs !== prev.docs) {
+        const added = addedDocIds(
+          prev.docs.map((d) => d.id),
+          s.docs.map((d) => d.id),
+        );
+        if (added.length) applyModeEvent({ type: 'fileOpened', tool: s.tool });
+      }
+      if (s.tool !== prev.tool) applyModeEvent({ type: 'toolChanged', tool: s.tool });
+    });
+    // Warm the chunks the user is likely to need next, once the drawing is on screen.
+    const cancel = afterFirstPaint(() => {
+      void loadEditChrome();
+      void loadTopMenu();
+    });
+    return () => {
+      unsub();
+      cancel();
+    };
+  }, []);
+}
+
 /** All floating chrome over the full-screen viewer (rendered as a sibling of the viewer). */
 export function ViewerShell({ onOpenFile }: { onOpenFile(file: File): void }) {
   useToolShortcuts();
   useShellKeys();
+  useEditModeSync();
+  const editMode = useUi((s) => s.editMode);
+  const compact = useCompactLayout();
+  const menuMounted = useUi((s) => s.menuMounted);
+  const idle = useAfterFirstPaint();
+  const exportOpen = useExportUi((s) => s.open);
+  const toggle = <EditModeToggle compact />;
+
   return (
     <>
       <FloatingChrome />
-      <ToolPalette />
-      <LinkBackButton />
-      <CountFinishButton />
-      <HintPanel />
+      {editMode && !compact && (
+        <Suspense fallback={null}>
+          <EditChrome variant="palette" />
+        </Suspense>
+      )}
+      <BottomSlot compact={compact} flush={editMode && compact}>
+        <LinkBackButton />
+        <CountFinishButton />
+        <HintPanel />
+        {!editMode ? (
+          <CleanDock compact={compact} />
+        ) : compact ? (
+          <Suspense fallback={<EditDockStub compact />}>
+            <EditChrome variant="bar" toggle={toggle} />
+          </Suspense>
+        ) : (
+          <EditDockStub compact={false} />
+        )}
+      </BottomSlot>
       <Drawer id="thumbs" side="right" label="תצוגת דפים">
-        {(p) => <ThumbnailSidebar {...p} />}
+        {(p) => (
+          <Suspense fallback={null}>
+            <ThumbnailSidebar {...p} />
+          </Suspense>
+        )}
       </Drawer>
       <Drawer id="measurements" side="left" label="רשימת מדידות">
         {(p) => <LeftDrawerContent {...p} />}
       </Drawer>
-      <TopMenu onOpenFile={onOpenFile} />
-      <SearchPanel />
-      <ExportDialog />
+      {(menuMounted || idle) && (
+        <Suspense fallback={null}>
+          <TopMenu onOpenFile={onOpenFile} />
+        </Suspense>
+      )}
+      <SearchHost />
+      {exportOpen && (
+        <Suspense fallback={null}>
+          <ExportDialog />
+        </Suspense>
+      )}
     </>
   );
 }

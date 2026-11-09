@@ -7,8 +7,9 @@ import { openExportDialog } from '../../export/exportUi';
 import { TOOLS } from '../toolActions';
 import { PillEditButtons } from './PillEditButtons';
 import { ScaleChip } from '../text/ScaleChip';
-import { IconSearch, openSearch } from '../text/SearchPanel';
+import { IconSearch, openSearch } from '../text/searchControls';
 import { formatPaper } from '../../text/scaleDetect';
+import { useCompactLayout } from './layout';
 
 const IDLE_MS = 2500;
 /** Pointer moves within this many px of the top edge wake the controls. */
@@ -84,7 +85,13 @@ const chipBtn =
   'flex h-8 min-w-8 items-center justify-center gap-1 rounded-full px-2 text-xs text-slate-200 transition-colors ' +
   'hover:bg-slate-700/80 hover:text-white focus:outline-none focus-visible:ring-1 focus-visible:ring-sky-400';
 
-/** Translucent status pill (top-centre) + the two drawer edge handles. */
+/**
+ * Translucent status pill (top-centre) + the two drawer edge handles.
+ * Clean mode: ☰ · undo/redo/snap · page (desktop adds zoom, export, search) — the scale state
+ * lives in the bottom dock. Edit mode on desktop: today's full pill (tool chip, scale chips).
+ * Phones: ☰ · undo/redo/snap · page only (zoom / search / export are in ☰), so the pill always
+ * fits between the two corner handles.
+ */
 export function FloatingChrome() {
   const menuOpen = useUi((s) => s.menuOpen);
   const thumbsOpen = useUi((s) => s.thumbsOpen);
@@ -105,6 +112,10 @@ export function FloatingChrome() {
   const zoom = useZoom().percent;
   const paper = formatPaper(useViewer((s) => s.pageSizes[s.currentPage - 1]));
 
+  const editMode = useUi((s) => s.editMode);
+  const compact = useCompactLayout();
+  const full = editMode && !compact;
+
   const { awake, bind } = useAwake(menuOpen);
   const t = TOOLS.find((x) => x.id === tool) ?? TOOLS[0];
   const fade = fadeCls(awake);
@@ -117,7 +128,8 @@ export function FloatingChrome() {
         data-testid="floating-pill"
         data-awake={awake ? 'true' : 'false'}
         className={
-          'absolute left-1/2 top-2 z-20 flex -translate-x-1/2 items-center gap-0.5 rounded-full border border-slate-600/70 ' +
+          // max-width: never reaches the corner handles (36px + 8px gap on each side).
+          'absolute left-1/2 top-2 z-20 flex max-w-[calc(100%-6.5rem)] -translate-x-1/2 items-center gap-0.5 rounded-full border border-slate-600/70 ' +
           'bg-slate-900/75 p-0.5 shadow-lg shadow-black/40 backdrop-blur ' +
           fade
         }
@@ -134,15 +146,19 @@ export function FloatingChrome() {
         >
           <IconMenu />
         </button>
-        <span className="mx-0.5 h-4 w-px bg-slate-600" aria-hidden="true" />
-        <span
-          className="flex h-8 items-center gap-1 rounded-full bg-sky-600/90 px-2 text-xs text-white"
-          title={`${t.label} (${t.shortcut})`}
-          data-testid="pill-tool"
-        >
-          {t.icon}
-          <span className="hidden whitespace-nowrap sm:inline">{t.label}</span>
-        </span>
+        {full && (
+          <>
+            <span className="mx-0.5 h-4 w-px bg-slate-600" aria-hidden="true" />
+            <span
+              className="flex h-8 items-center gap-1 rounded-full bg-sky-600/90 px-2 text-xs text-white"
+              title={`${t.label} (${t.shortcut})`}
+              data-testid="pill-tool"
+            >
+              {t.icon}
+              <span className="hidden whitespace-nowrap sm:inline">{t.label}</span>
+            </span>
+          </>
+        )}
         <PillEditButtons />
         <button
           type="button"
@@ -154,12 +170,12 @@ export function FloatingChrome() {
               ? `${fileDoc.name}, דף ${currentPage - fileDoc.pageOffset} מתוך ${fileDoc.numPages} (דף ${currentPage} מתוך ${numPages} בסך הכול)`
               : `דף ${currentPage} מתוך ${numPages}`
           }
-          className={chipBtn + ' font-mono tabular-nums'}
+          className={chipBtn + ' shrink-0 whitespace-nowrap font-mono tabular-nums'}
           data-testid="pill-page"
         >
           {fileDoc && (
             <>
-              <span className="max-w-[9rem] truncate font-sans text-slate-400" dir="auto" title={fileDoc.name} data-testid="pill-file">
+              <span className="max-w-[4.5rem] truncate font-sans text-slate-400 sm:max-w-[9rem]" dir="auto" title={fileDoc.name} data-testid="pill-file">
                 {fileDoc.name.replace(/\.pdf$/i, '')}
               </span>
               <span className="text-slate-500" aria-hidden="true">
@@ -171,6 +187,8 @@ export function FloatingChrome() {
             {fileDoc ? currentPage - fileDoc.pageOffset : currentPage} / {fileDoc ? fileDoc.numPages : numPages}
           </span>
         </button>
+        {!compact && (
+          <>
         <button
           type="button"
           onClick={() => viewerCommands.fit()}
@@ -201,7 +219,9 @@ export function FloatingChrome() {
         >
           <IconSearch />
         </button>
-        {!calibrated && (
+          </>
+        )}
+        {full && !calibrated && (
           <button
             type="button"
             onClick={() => setTool('calibrate')}
@@ -213,7 +233,7 @@ export function FloatingChrome() {
             לא מכויל
           </button>
         )}
-        <ScaleChip />
+        {full && <ScaleChip />}
       </div>
 
       {/* drawer handles (RTL: thumbnails on the start/right side, measurements on the left) */}

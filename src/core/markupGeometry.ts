@@ -8,6 +8,7 @@
  * <path d>. No DOM, no React — shared by the viewer overlay and PDF export.
  */
 import type { Point, Rect } from './types';
+import { signatureBounds, textEditCoverRect } from './docTools';
 
 /** Default stroke width (screen px at 100% zoom; export: PDF points). */
 export const DEFAULT_STROKE_WIDTH = 2;
@@ -402,6 +403,8 @@ export interface MarkupLike {
   text?: string;
   fontSize?: number;
   strokeWidth?: number;
+  origText?: string;
+  rtl?: boolean;
 }
 
 export function translatePoints(points: Point[], dx: number, dy: number): Point[] {
@@ -448,6 +451,8 @@ export function markupBounds(m: MarkupLike, pinScale = 1): Rect {
     };
   }
   if (m.kind === 'text' && pts.length) return estimateTextBounds(pts[0], m.text, m.fontSize ?? 12);
+  if (m.kind === 'textEdit' && pts.length) return textEditCoverRect(m);
+  if (m.kind === 'signature' && pts.length) return signatureBounds(m);
   if (m.kind === 'link' && pts.length >= 2) {
     const r = rectOfPoints(pts);
     const hr = linkHeadRadius(m);
@@ -488,6 +493,10 @@ export function hitMarkup(p: Point, m: MarkupLike, slop: number, pinScale = 1): 
     }
     case 'text':
       return inRect(p, markupBounds(m), slop);
+    case 'textEdit':
+    case 'signature':
+      // Filled areas that often sit edge to edge (adjacent text runs): at most 2 screen px of slop.
+      return inRect(p, markupBounds(m), Math.min(slop, 2 * pinScale));
     case 'highlight':
       return inRect(p, rectOfPoints(pts), slop);
     case 'link':
