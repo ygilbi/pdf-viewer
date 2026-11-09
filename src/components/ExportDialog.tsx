@@ -93,6 +93,28 @@ const chipBtn =
   'rounded-full border border-slate-600 px-2.5 py-1 text-xs text-slate-200 hover:border-sky-500 hover:bg-slate-700 disabled:opacity-40';
 
 /** Export dialog (PDF / CSV): which pages / files, which content, one output file. */
+/**
+ * "פתח" after an export: a PDF opens in a new tab (the browser's / desktop app's PDF viewer); Excel / CSV
+ * can't be shown in a browser, so they are handed to the system again (download → opens in Excel; on
+ * iPhone the system preview).
+ */
+function openExportedFile(blob: Blob, name: string): void {
+  const url = URL.createObjectURL(blob);
+  const isPdf = blob.type === 'application/pdf' || /\.pdf$/i.test(name);
+  let opened: Window | null = null;
+  if (isPdf) opened = window.open(url, '_blank');
+  if (!opened) {
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = name;
+    a.rel = 'noopener';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+  }
+  window.setTimeout(() => URL.revokeObjectURL(url), 120_000);
+}
+
 export function ExportDialog() {
   const open = useExportUi((s) => s.open);
   if (!open) return null;
@@ -128,7 +150,7 @@ function ExportDialogBody() {
   const [usePicker, setUsePicker] = useState(pickerOk);
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set(docs.length <= 3 ? docs.map((d) => d.id) : []));
   const [progress, setProgress] = useState<{ frac: number; text: string } | null>(null);
-  const [message, setMessage] = useState<{ kind: 'ok' | 'error'; text: string } | null>(null);
+  const [message, setMessage] = useState<{ kind: 'ok' | 'error'; text: string; file?: { blob: Blob; name: string } } | null>(null);
   const handle = useRef<ExportHandle | null>(null);
   const dialogRef = useRef<HTMLDivElement>(null);
   const running = progress !== null;
@@ -202,7 +224,7 @@ function ExportDialogBody() {
         handle.current = null;
         setProgress(null);
         const kb = r.bytes > 1024 * 1024 ? `${(r.bytes / 1024 / 1024).toFixed(1)} MB` : `${Math.max(1, Math.round(r.bytes / 1024))} KB`;
-        setMessage({ kind: 'ok', text: `הקובץ ${r.fileName} נוצר (${kb})${r.how === 'picker' ? ' ונשמר' : ' והורד'}` });
+        setMessage({ kind: 'ok', text: `הקובץ ${r.fileName} נוצר (${kb})${r.how === 'picker' ? ' ונשמר' : ' והורד'}`, file: { blob: r.blob, name: r.fileName } });
       },
       (e: unknown) => {
         if (handle.current !== h) return;
@@ -535,6 +557,16 @@ function ExportDialogBody() {
               className={'text-sm ' + (message.kind === 'ok' ? 'text-emerald-300' : 'text-red-400')}
             >
               {message.text}
+              {message.file && (
+                <button
+                  type="button"
+                  onClick={() => openExportedFile(message.file!.blob, message.file!.name)}
+                  data-testid="export-open"
+                  className="ms-2 inline-flex items-center gap-1 rounded bg-emerald-600 px-2.5 py-0.5 text-xs font-semibold text-white hover:bg-emerald-500"
+                >
+                  פתח
+                </button>
+              )}
             </p>
           )}
           <div className="flex items-center gap-2">

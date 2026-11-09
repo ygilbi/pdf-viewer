@@ -32,7 +32,7 @@ export interface ExportRequest {
   usePicker: boolean;
 }
 
-export type ExportResult = { how: 'picker' | 'download'; fileName: string; bytes: number; ms: number };
+export type ExportResult = { how: 'picker' | 'download'; fileName: string; bytes: number; ms: number; blob: Blob };
 
 export interface ExportHandle {
   promise: Promise<ExportResult>;
@@ -237,7 +237,7 @@ export function startExport(req: ExportRequest, onProgress: ProgressCb = () => {
     const ms = Math.round(performance.now() - t0);
     console.info(`[export] ${req.format} ${pages.length} pages, ${blob.size} bytes in ${ms} ms`);
     onProgress(1, 'הסתיים');
-    return { how, fileName, bytes: blob.size, ms };
+    return { how, fileName, bytes: blob.size, ms, blob };
   };
 
   return {
