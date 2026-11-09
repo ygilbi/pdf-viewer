@@ -61,7 +61,9 @@ export function UpdateToast() {
       if (!isIdleForReload() || recentlyAutoReloaded()) return;
       void applyUpdate(true);
     };
-    if (document.visibilityState === 'hidden') tryAuto();
+    // Nothing open (start screen, e.g. right after a crash/relaunch): switch right away, so a fix
+    // reaches the device without the user having to find the toast. Otherwise wait until hidden.
+    if (document.visibilityState === 'hidden' || isIdleForReload()) tryAuto();
     document.addEventListener('visibilitychange', tryAuto);
     return () => document.removeEventListener('visibilitychange', tryAuto);
   }, [status]);

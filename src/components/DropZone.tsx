@@ -2,6 +2,7 @@ import { useRef, useState } from 'react';
 import { IconFilePdf } from './ui/icons';
 import { DriveOpenButton } from '../drive/DriveUi';
 import { UpdateCheckButton } from '../pwa/UpdateToast';
+import { VersionTag } from '../pwa/VersionTag';
 
 interface Props {
   /** Several files: the first is opened, the rest are added to the workspace. */
@@ -102,7 +103,10 @@ export default function DropZone({ onFiles }: Props) {
           if (files.length) onFiles(files);
         }}
       />
-      <UpdateCheckButton className="absolute bottom-3 left-1/2 -translate-x-1/2" />
+      <div className="absolute bottom-3 left-1/2 flex -translate-x-1/2 flex-col items-center gap-0.5 text-[11px] text-slate-500">
+        <UpdateCheckButton />
+        <VersionTag />
+      </div>
     </div>
   );
 }

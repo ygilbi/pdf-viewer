@@ -33,6 +33,7 @@ import { formatPaper } from '../../text/scaleDetect';
 import { IconSearch, openSearch } from '../text/SearchPanel';
 import { sendManualReport } from '../../diag/diagUi';
 import { useLabUi } from '../../diag/labUi';
+import { VersionTag } from '../../pwa/VersionTag';
 
 function Group({ children, label }: { children: React.ReactNode; label: string }) {
   return (
@@ -391,6 +392,7 @@ export function TopMenu({ onOpenFile }: { onOpenFile(file: File): void }) {
           >
             מעבדת אבחון
           </button>
+          <VersionTag className="flex h-8 items-center whitespace-nowrap px-2 text-[11px] text-slate-500" />
           <InstallButton
             label="התקן"
             className="flex h-8 items-center gap-1.5 rounded px-2 text-xs text-sky-300 hover:bg-slate-700 hover:text-white focus:outline-none focus-visible:ring-1 focus-visible:ring-sky-400"
