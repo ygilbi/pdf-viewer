@@ -11,8 +11,6 @@
 
 /** Last-known app/device state, refreshed with every heartbeat. */
 export interface DiagState {
-  /** Active crash-lab switches (see lab.ts). */
-  lab?: string;
   tool?: string;
   page?: number;
   pages?: number;

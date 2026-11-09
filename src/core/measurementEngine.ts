@@ -674,7 +674,24 @@ export const MEASUREMENT_COLUMNS = [
   'מידות פריט (ס״מ)',
   'שטח פריטים (מ״ר)',
   'היקף פרופיל (מ׳)',
+  'פרטים',
 ] as const;
+
+/** Valid detail lines of a measurement (non-empty key or value), trimmed. */
+export function detailsOf(m: { details?: unknown }): { k: string; v: string }[] {
+  if (!Array.isArray(m.details)) return [];
+  return m.details
+    .filter((d): d is { k: unknown; v: unknown } => !!d && typeof d === 'object')
+    .map((d) => ({ k: typeof d.k === 'string' ? d.k.trim() : '', v: typeof d.v === 'string' ? d.v.trim() : '' }))
+    .filter((d) => d.k || d.v);
+}
+
+/** "זכוכית: 6.6.2; צבע: RAL 7016" */
+export function formatDetails(m: { details?: unknown }): string {
+  return detailsOf(m)
+    .map((d) => (d.k && d.v ? `${d.k}: ${d.v}` : d.k || d.v))
+    .join('; ');
+}
 
 function csvCell(v: string | number): string {
   const s = String(v);
@@ -737,11 +754,11 @@ export function buildMeasurementRows(
     const cat = key ? categoryName(key, categories) : '';
     const parentId = assignment.get(m.id);
     const parent = parentId ? (byId.get(parentId)?.label ?? '') : '';
-    rows.push([i + 1, KIND_LABELS[kind], m.label, cat, m.page, area, perim, len, qty, m.points.length, parent, dims, itemArea, itemPerim]);
+    rows.push([i + 1, KIND_LABELS[kind], m.label, cat, m.page, area, perim, len, qty, m.points.length, parent, dims, itemArea, itemPerim, formatDetails(m)]);
   });
   const anyItems = measurements.some((m) => itemOf(m));
   const itemCells = (t: MeasurementSummary): string[] =>
-    anyItems ? ['', t.itemAreaM2.toFixed(2), t.itemPerimeterM.toFixed(2)] : ['', '', ''];
+    anyItems ? ['', t.itemAreaM2.toFixed(2), t.itemPerimeterM.toFixed(2), ''] : ['', '', '', ''];
   if (measurements.some((m) => categoryKey(m))) {
     for (const c of computeCategorySummaries(measurements, calibrations, categories)) {
       const t = c.summary;
@@ -750,7 +767,7 @@ export function buildMeasurementRows(
   }
   const s = computeDocumentSummary(measurements, calibrations);
   const total = (label: string, col: number, v: string | number) => {
-    const r: (string | number)[] = ['', '', label, '', '', '', '', '', '', '', '', '', '', ''];
+    const r: (string | number)[] = ['', '', label, '', '', '', '', '', '', '', '', '', '', '', ''];
     r[col] = v;
     rows.push(r);
     return r;
@@ -760,16 +777,16 @@ export function buildMeasurementRows(
   total('נטו', 5, s.netM2.toFixed(2));
   total('סה״כ אורך', 7, s.lengthM.toFixed(2));
   const countRow = total('סה״כ כמות', 8, s.count);
-  if (anyItems) countRow.splice(11, 3, ...itemCells(s));
+  if (anyItems) countRow.splice(11, 4, ...itemCells(s));
   // Notes / text labels (not quantities) in their own section after the totals.
   const notes = all.filter((m) => (m.kind === 'note' || m.kind === 'text') && (m.text ?? '').trim());
   if (notes.length) {
-    rows.push(['', '', '', '', '', '', '', '', '', '', '', '', '', '']);
-    rows.push(['', 'הערות', 'שם', 'קטגוריה', 'עמוד', 'טקסט', '', '', '', '', '', '', '', '']);
+    rows.push(['', '', '', '', '', '', '', '', '', '', '', '', '', '', '']);
+    rows.push(['', 'הערות', 'שם', 'קטגוריה', 'עמוד', 'טקסט', '', '', '', '', '', '', '', '', '']);
     notes.forEach((m, i) => {
       const key = categoryKey(m);
       const text = (m.text ?? '').trim().replace(/\s*\r?\n\s*/g, ' / ');
-      rows.push([i + 1, KIND_LABELS[kindOf(m)], m.label, key ? categoryName(key, categories) : '', m.page, text, '', '', '', '', '', '', '', '']);
+      rows.push([i + 1, KIND_LABELS[kindOf(m)], m.label, key ? categoryName(key, categories) : '', m.page, text, '', '', '', '', '', '', '', '', '']);
     });
   }
   return rows.map((r) => r.map(String));

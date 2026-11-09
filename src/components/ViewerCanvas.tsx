@@ -35,7 +35,6 @@ import { TextHighlights } from './text/TextHighlights';
 import { MarkupEditor, NoteBubbles } from './viewer/MarkupHtml';
 import { createWheelPager } from './viewer/wheelPager';
 import { followLink } from '../state/linkHistory';
-import { useLab } from '../diag/lab';
 import { useMarkup } from '../state/markupStore';
 import {
   DEFAULT_STROKE_WIDTH,
@@ -589,9 +588,7 @@ export default function ViewerCanvas() {
           else if (isDragTool(s.tool)) text = 'גרור לציור';
           else if (s.tool === 'count') {
             const g = activeCount(s);
-            text = g
-              ? `${g.label} ×${g.points.length} · לחץ להוספה · Enter לסיום`
-              : 'לחץ לסימון פריט (קבוצת ספירה חדשה)';
+            text = g ? 'לחץ להוספה' : 'לחץ לפריט חדש';
           } else if (s.tool === 'length') {
             if (!ppm) {
               text = 'יש לכייל קנה מידה';
@@ -621,7 +618,7 @@ export default function ViewerCanvas() {
             else text = ppm ? `${formatLength(lengthMeters(d[d.length - 1], p, ppm))} · לחץ על נקודת הסיום` : 'לחץ על נקודת הסיום';
           }
         }
-        if (snapHit && text && (active || ra)) text += snapHit.kind === SNAP_MIDPOINT ? ' · אמצע' : snapHit.kind === SNAP_INTERSECTION ? ' · חיתוך' : ' · קצה';
+        if (snapHit && text && (active || ra) && s.tool !== 'count') text += snapHit.kind === SNAP_MIDPOINT ? ' · אמצע' : snapHit.kind === SNAP_INTERSECTION ? ' · חיתוך' : ' · קצה';
         if (text && cursor) {
           readout.textContent = text;
           readout.style.display = 'block';
@@ -871,7 +868,7 @@ export default function ViewerCanvas() {
           fontSize: defaultLinkHeadRadius(s.pageSizes[s.currentPage - 1]?.width ?? 842, s.pageSizes[s.currentPage - 1]?.height ?? 595),
           color: LINK_COLOR,
         });
-        if (!useLab.getState().instantLink) useMarkup.getState().startEditing(id, true); // ask for the target page
+        useMarkup.getState().startEditing(id, true); // ask for the target page
         return;
       }
       s.addMeasurement({
@@ -898,24 +895,7 @@ export default function ViewerCanvas() {
     };
 
     // ---- pointer events -----------------------------------------------------
-    // Crash lab: optionally hide the whole SVG overlay while pinching (restored shortly after).
-    let overlayTimer = 0;
-    const overlayEl = () => world.querySelector<SVGElement>('[data-testid="measure-overlay"]');
-    const hideOverlayForPinch = () => {
-      if (!useLab.getState().hideOverlayOnPinch) return;
-      window.clearTimeout(overlayTimer);
-      const el = overlayEl();
-      if (el) el.style.visibility = 'hidden';
-    };
-    const showOverlayAfterPinch = () => {
-      window.clearTimeout(overlayTimer);
-      overlayTimer = window.setTimeout(() => {
-        const el = overlayEl();
-        if (el) el.style.visibility = '';
-      }, 400);
-    };
     const startPinch = () => {
-      hideOverlayForPinch();
       // A focused editor (link / note / text) must not stay focused while the page zooms: on
       // phones the browser keeps scrolling the focused field into view → heavy layout loops.
       const ae = document.activeElement;
@@ -1290,7 +1270,6 @@ export default function ViewerCanvas() {
       const q = local(e);
       const g = gesture;
       if (g.kind === 'pinch') {
-        if (pointers.size < 2) showOverlayAfterPinch();
         // continue panning with the remaining finger (no click)
         const [rest] = [...pointers.entries()];
         gesture = rest

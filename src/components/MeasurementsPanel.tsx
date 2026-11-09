@@ -1,3 +1,4 @@
+import { startNewCountItem } from './shell/CountFinishButton';
 import { scrollWithin } from './ui/scrollWithin';
 import { Fragment, memo, type ReactNode, useEffect, useMemo, useRef, useState } from 'react';
 import { useViewer } from '../state/store';
@@ -15,6 +16,7 @@ import {
   formatLength,
   isMarkupKind,
   itemOf,
+  detailsOf,
   itemQuantities,
   kindOf,
   polygonAreaM2,
@@ -300,9 +302,18 @@ export default function MeasurementsPanel({ onHide, headerActions }: PanelProps 
 
   return (
     <aside className="flex w-72 shrink-0 flex-col border-s border-slate-700 bg-slate-800/80 text-slate-200">
-      <div className="flex h-8 shrink-0 items-center gap-2 border-b border-slate-700 px-2 text-[11px] text-slate-400">
+      <div className="flex min-h-8 shrink-0 flex-wrap items-center gap-x-2 gap-y-1 border-b border-slate-700 px-2 py-1 text-[11px] text-slate-400">
         <span className="font-semibold text-slate-300">מדידות</span>
         <span>({visible.length})</span>
+        <button
+          type="button"
+          onClick={startNewCountItem}
+          data-testid="new-count-item"
+          title="סימון פריט חדש בשרטוט (כלי ספירה)"
+          className="whitespace-nowrap rounded border border-emerald-700/70 bg-emerald-900/30 px-1.5 py-0.5 text-[11px] font-semibold text-emerald-300 hover:bg-emerald-800/50 hover:text-white"
+        >
+          + פריט חדש
+        </button>
         <div className="flex-1" />
         <label className="flex cursor-pointer select-none items-center gap-1" title="קבץ לפי קטגוריה עם סיכומי ביניים">
           <input
@@ -638,7 +649,7 @@ function ItemDimsButton({ m }: { m: AreaMeasurement }) {
       type="button"
       data-testid="item-dims-toggle"
       aria-expanded={open}
-      title="מידות פריט — רוחב × גובה (לחישוב שטח זיגוג והיקף פרופיל)"
+      title="מידות ופרטי הפריט — רוחב × גובה, קוד ופרטים חופשיים (זכוכית, צבע, פרופיל…)"
       onClick={(e) => {
         e.stopPropagation();
         setOpenItemEditor(open ? null : m.id);
@@ -648,7 +659,7 @@ function ItemDimsButton({ m }: { m: AreaMeasurement }) {
         (it ? 'border-violet-700/70 bg-violet-900/30 text-violet-200' : 'border-dashed border-slate-600 text-slate-400 hover:text-slate-200')
       }
     >
-      {it ? <span dir="ltr">{formatItemDims(it)}</span> : '+ מידות פריט'}
+      {it ? <span dir="ltr">{formatItemDims(it)}</span> : detailsOf(m).length ? 'פרטים' : '+ מידות ופרטים'}
     </button>
   );
 }
@@ -676,34 +687,69 @@ function ItemDimsEditor({ m }: { m: AreaMeasurement }) {
   const [w, setW] = useState(cmText(it?.width));
   const [h, setH] = useState(cmText(it?.height));
   const [code, setCode] = useState(it?.code ?? '');
+  const [rows, setRows] = useState<{ k: string; v: string }[]>(detailsOf(m));
   useEffect(() => {
     if (!open) return;
     setW(cmText(it?.width));
     setH(cmText(it?.height));
     setCode(it?.code ?? '');
+    setRows(detailsOf(m));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
   if (!open) {
     const q = itemQuantities(m);
-    return q ? (
-      <div className="ps-1 font-mono tabular-nums text-[10px] text-violet-300" data-testid="row-item-qty">
-        <span className="font-sans text-slate-500">זיגוג </span>
-        <span dir="ltr">{formatArea(q.areaM2)}</span>
-        <span className="font-sans text-slate-500"> · פרופיל </span>
-        <span dir="ltr">{formatLength(q.perimeterM)}</span>
-      </div>
+    const det = detailsOf(m);
+    return q || det.length ? (
+      <>
+        {q && (
+          <div className="ps-1 font-mono tabular-nums text-[10px] text-violet-300" data-testid="row-item-qty">
+            <span className="font-sans text-slate-500">זיגוג </span>
+            <span dir="ltr">{formatArea(q.areaM2)}</span>
+            <span className="font-sans text-slate-500"> · פרופיל </span>
+            <span dir="ltr">{formatLength(q.perimeterM)}</span>
+          </div>
+        )}
+        {det.length > 0 && (
+          <div className="flex flex-wrap gap-1 ps-1 pt-0.5" data-testid="row-item-details">
+            {det.map((d, i) => (
+              <span key={i} className="rounded bg-slate-700/70 px-1 text-[10px] text-slate-200">
+                {d.k && <span className="text-slate-400">{d.k}: </span>}
+                {d.v}
+              </span>
+            ))}
+          </div>
+        )}
+      </>
     ) : null;
   }
   const pw = parseCm(w);
   const ph = parseCm(h);
   const bad = (w.trim() !== '' && pw === undefined) || (h.trim() !== '' && ph === undefined);
   const save = () => {
-    const update = useViewer.getState().updateMeasurement;
-    if (pw && ph) update(m.id, { item: { width: pw, height: ph, ...(code.trim() ? { code: code.trim() } : {}) } });
-    else if (!w.trim() && !h.trim()) update(m.id, { item: undefined });
+    let item: AreaMeasurement['item'];
+    if (pw && ph) item = { width: pw, height: ph, ...(code.trim() ? { code: code.trim() } : {}) };
+    else if (!w.trim() && !h.trim()) item = undefined;
     else return;
+    const details = rows.map((d) => ({ k: d.k.trim(), v: d.v.trim() })).filter((d) => d.k || d.v);
+    useViewer.getState().updateMeasurement(m.id, { item, details: details.length ? details : undefined });
     setOpenItemEditor(null);
   };
+  const setRow = (i: number, patch: Partial<{ k: string; v: string }>) => setRows((r) => r.map((d, j) => (j === i ? { ...d, ...patch } : d)));
+  const detailInput = (value: string, onChange: (v: string) => void, placeholder: string, cls: string, testId: string) => (
+    <input
+      value={value}
+      placeholder={placeholder}
+      aria-label={placeholder}
+      data-testid={testId}
+      onChange={(e) => onChange(e.target.value)}
+      onKeyDown={(e) => {
+        e.stopPropagation();
+        if (e.key === 'Enter') save();
+        else if (e.key === 'Escape') setOpenItemEditor(null);
+      }}
+      className={'h-6 min-w-0 rounded border border-slate-600 bg-slate-900 px-1 text-xs text-slate-100 placeholder:text-slate-600 focus:border-sky-500 focus:outline-none ' + cls}
+    />
+  );
   const input = (value: string, set: (v: string) => void, label: string, testId: string, cls = 'w-14') => (
     <label className="flex flex-col gap-0.5 text-[10px] text-slate-400">
       {label}
@@ -756,6 +802,30 @@ function ItemDimsEditor({ m }: { m: AreaMeasurement }) {
             הסר
           </button>
         )}
+      </div>
+      <div className="mt-1.5 space-y-1" data-testid="item-details">
+        {rows.map((d, i) => (
+          <div key={i} className="flex items-center gap-1">
+            {detailInput(d.k, (v) => setRow(i, { k: v }), 'שדה (זכוכית, צבע…)', 'w-24', `detail-key-${i}`)}
+            {detailInput(d.v, (v) => setRow(i, { v }), 'ערך', 'flex-1', `detail-value-${i}`)}
+            <button
+              type="button"
+              aria-label="הסר פרט"
+              onClick={() => setRows((r) => r.filter((_, j) => j !== i))}
+              className="h-6 shrink-0 rounded px-1 text-slate-500 hover:bg-slate-700 hover:text-red-300"
+            >
+              ×
+            </button>
+          </div>
+        ))}
+        <button
+          type="button"
+          data-testid="detail-add"
+          onClick={() => setRows((r) => [...r, { k: '', v: '' }])}
+          className="rounded border border-dashed border-slate-600 px-1.5 py-0.5 text-[10px] text-slate-300 hover:border-violet-500 hover:text-white"
+        >
+          + הוסף פרט
+        </button>
       </div>
       <div className="mt-1 text-[10px] text-slate-500">
         {bad

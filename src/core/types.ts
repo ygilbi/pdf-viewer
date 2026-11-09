@@ -172,6 +172,14 @@ export interface AreaMeasurement {
    */
   targetPage?: number;
   refLabel?: string;
+  /** Free-form item details (count groups): e.g. [{k:'זכוכית', v:'6.6.2'}, {k:'צבע', v:'RAL 7016'}]. */
+  details?: ItemDetail[];
+}
+
+/** One free-form detail line of an item ("key: value"). */
+export interface ItemDetail {
+  k: string;
+  v: string;
 }
 
 /** Size of one counted item (meters) + optional item / schedule code. */
