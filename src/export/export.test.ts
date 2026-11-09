@@ -6,7 +6,8 @@ import { formatPageRanges, parsePageRanges } from './pageSelection';
 import { hatchSegments } from './hatch';
 import { buildExportPdf, numberNotes } from './buildPdf';
 import { buildExportCsv } from './csvExport';
-import { forPdfLib } from './pdfCommon';
+import { ITEM_COLUMNS } from '../core/itemTable';
+import { forPdfLib, shape, wrapCell } from './pdfCommon';
 import fontkit from '@pdf-lib/fontkit';
 import { DEFAULT_CATEGORIES } from '../core/measurementEngine';
 import { buildBoq, emptyPriceBook, resolvePricing } from '../pricing/boq';
@@ -55,6 +56,35 @@ describe('fontkit glyph order', () => {
       const got = glyphs.map((g: { codePoints: number[] }) => String.fromCodePoint(...g.codePoints)).join('');
       expect(got).toBe(visual);
     }
+  });
+});
+
+describe('shape: mixed Hebrew / Latin lines', () => {
+  it('draws single-script pieces so every glyph lands in visual order', async () => {
+    const { regular } = await fonts();
+    const doc = await PDFDocument.create();
+    doc.registerFontkit(fontkit);
+    const pdfFont = await doc.embedFont(regular);
+    const font = fontkit.create(regular as Uint8Array);
+    for (const logical of ['Low-E, פרזול נסתר, ידית', 'זיגוג Low-E', 'קיר מסך CW-1', 'Schüco AWS 75', 'דלת D1 אלומיניום']) {
+      const s = shape(pdfFont, logical, 10, true);
+      const got = s.parts
+        .map((p) => font.layout(p.text).glyphs.map((g: { codePoints: number[] }) => String.fromCodePoint(...g.codePoints)).join(''))
+        .join('');
+      expect(got).toBe(toVisual(logical, true));
+      expect(s.parts[0].dx).toBe(0);
+    }
+  });
+  it('wrapCell breaks long words and ends a cut cell with an ellipsis', async () => {
+    const { regular } = await fonts();
+    const doc = await PDFDocument.create();
+    doc.registerFontkit(fontkit);
+    const f = await doc.embedFont(regular);
+    const lines = wrapCell(f, 'א'.repeat(80) + ' שלום עולם '.repeat(20), 9, 60, 3);
+    expect(lines.length).toBe(3);
+    for (const l of lines) expect(f.widthOfTextAtSize(l, 9)).toBeLessThanOrEqual(60.01);
+    expect(lines[2].endsWith('…')).toBe(true);
+    expect(wrapCell(f, 'קצר', 9, 60, 3)).toEqual(['קצר']);
   });
 });
 
@@ -201,7 +231,7 @@ describe('buildExportPdf', () => {
       measurements: ms,
       calibrations: { 1: cal },
       categories: DEFAULT_CATEGORIES,
-      options: { ...DEFAULT_PDF_OPTIONS, drawings: false, summary: false },
+      options: { ...DEFAULT_PDF_OPTIONS, drawings: false, summary: false, items: false },
       fonts: await fonts(),
       title: 'x',
     };
@@ -222,7 +252,7 @@ describe('buildExportPdf', () => {
       measurements: [link, dangling],
       calibrations: {},
       categories: DEFAULT_CATEGORIES,
-      options: { ...DEFAULT_PDF_OPTIONS, drawings: false, summary: false },
+      options: { ...DEFAULT_PDF_OPTIONS, drawings: false, summary: false, items: false },
       fonts: await fonts(),
       title: 'x',
     };
@@ -254,7 +284,7 @@ describe('buildExportPdf', () => {
       measurements: ms,
       calibrations: { 1: cal },
       categories: DEFAULT_CATEGORIES,
-      options: { ...DEFAULT_PDF_OPTIONS, drawings: false, summary: false, boq: true },
+      options: { ...DEFAULT_PDF_OPTIONS, drawings: false, items: false, boq: true },
       fonts: await fonts(),
       title: 'x',
       boq,
@@ -303,5 +333,115 @@ describe('buildExportCsv', () => {
     const noRows = buildExportCsv(ms, { 1: cal }, DEFAULT_CATEGORIES, [1], { ...DEFAULT_CSV_OPTIONS, rows: false, notes: false });
     expect(noRows).not.toContain('פתח 1');
     expect(noRows).toContain('נטו');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// טבלת פריטים
+
+const sq = (x: number, y: number, w: number, h: number) => [{ x, y }, { x: x + w, y }, { x: x + w, y: y + h }, { x, y: y + h }];
+/** Many items over three categories (+ an uncategorised one) → the items table spans pages. */
+function itemFixture(n = 60): AreaMeasurement[] {
+  const out: AreaMeasurement[] = [];
+  for (let i = 0; i < n; i++) {
+    out.push({
+      id: `w${i}`, page: 1, kind: 'count', label: `W${i + 1}`, color: '#ff7f0e', category: i % 3 ? 'windows' : 'doors',
+      points: Array.from({ length: 1 + (i % 4) }, (_, k) => ({ x: 20 + k * 10, y: 20 + i })),
+      item: { width: 1.2, height: 1.5, code: `W${i + 1}` }, system: i % 2 ? 'קליל 4400' : 'Schüco AWS 75',
+      ...(i === 5 ? { extra: 'זיגוג בידודי 6+12+6 עם ציפוי Low-E, פרזול נסתר, ידית נעילה, רשת נגד יתושים, אטימה כפולה ובדיקת עמידות לרוח לפי ת״י 1068 — הערה ארוכה במיוחד שאמורה להיחתך' } : {}),
+    });
+  }
+  out.push({ id: 'cw', page: 1, kind: 'area', label: 'חזית', color: '#1f77b4', category: 'curtain-wall', points: sq(100, 100, 300, 200), asItem: true, itemName: 'קיר מסך CW-1', system: 'קיר מסך סטיק' });
+  out.push({ id: 'cwd', page: 1, kind: 'deduct', label: 'פתח', color: '#e11d48', points: sq(120, 120, 28.346, 28.346) });
+  out.push({ id: 'misc', page: 1, kind: 'length', label: 'מעקה', color: '#2ca02c', points: [{ x: 0, y: 500 }, { x: 283.46, y: 500 }], asItem: true });
+  return out;
+}
+
+describe('items table export', () => {
+  it('PDF: drawings + items table by default, paginated with a repeated header, RTL text', async () => {
+    expect(DEFAULT_PDF_OPTIONS.items).toBe(true);
+    expect(DEFAULT_PDF_OPTIONS.summary).toBe(false);
+    const input: PdfBuildInput = {
+      docs: [{ id: 'doc1', name: 'חזיתות.pdf' }],
+      bytes: {},
+      pages: [{ globalPage: 1, docId: 'doc1', localPage: 1 }],
+      pageSizes: { 1: { width: 842, height: 595 } },
+      measurements: itemFixture(40),
+      calibrations: { 1: cal },
+      categories: DEFAULT_CATEGORIES,
+      options: { ...DEFAULT_PDF_OPTIONS, drawings: false },
+      fonts: await fonts(),
+      title: 'פרויקט בדיקה',
+      dateText: '9.11.2026',
+    };
+    const out = await buildExportPdf(input);
+    const doc = await PDFDocument.load(out);
+    expect(doc.getPageCount()).toBe(3); // 1 drawing page + 2 items pages (42 rows + 4 subtotals + total)
+    expect(doc.getPage(1).getSize()).toEqual({ width: 595.28, height: 841.89 });
+    const pd = await (await pdfjs()).getDocument({ data: out }).promise;
+    const pageText = async (n: number) => (await (await pd.getPage(n)).getTextContent()).items.map((i: { str: string }) => i.str).join(' ');
+    // pdf.js runs its own bidi → logical order (mixed-script lines come back as separate pieces)
+    const has = (text: string, logical: string) => text.includes(logical);
+    const p2 = await pageText(2);
+    const p3 = await pageText(3);
+    for (const h of [...ITEM_COLUMNS, 'טבלת פריטים']) expect(has(p2, h)).toBe(true);
+    expect(has(p3, 'שם פריט')).toBe(true); // header repeated on the continuation page
+    expect(has(p2 + p3, 'סה״כ דלתות')).toBe(true);
+    expect(has(p2 + p3, 'סה״כ כללי')).toBe(true);
+    expect(has(p2 + p3, 'CW-1') && has(p2 + p3, 'קיר מסך סטיק')).toBe(true);
+    expect(has(p2, '120×150')).toBe(true); // dimensions stay width×height
+    expect(p2 + p3).toContain('…'); // the long note is truncated
+    await pd.destroy();
+
+    // Items + generic summary: items first.
+    const both = await buildExportPdf({ ...input, options: { ...input.options, summary: true } });
+    const pd2 = await (await pdfjs()).getDocument({ data: both }).promise;
+    expect(pd2.numPages).toBe(4);
+    const last = (await (await pd2.getPage(4)).getTextContent()).items.map((i: { str: string }) => i.str).join(' ');
+    expect(has(last, 'סיכום כמויות')).toBe(true);
+    await pd2.destroy();
+  });
+
+  it('PDF: an items page with a notice when the pages have no items', async () => {
+    const input: PdfBuildInput = {
+      docs: [{ id: 'doc1', name: 'x.pdf' }],
+      bytes: {},
+      pages: [{ globalPage: 1, docId: 'doc1', localPage: 1 }],
+      pageSizes: { 1: { width: 500, height: 300 } },
+      measurements: ms.filter((m) => m.kind !== 'count'),
+      calibrations: { 1: cal },
+      categories: DEFAULT_CATEGORIES,
+      options: { ...DEFAULT_PDF_OPTIONS, drawings: false },
+      fonts: await fonts(),
+      title: 'x',
+    };
+    expect((await PDFDocument.load(await buildExportPdf(input))).getPageCount()).toBe(2);
+  });
+
+  it('CSV: items table first (owner\'s columns, subtotals, total); filters apply; other sections unchanged', () => {
+    const all = itemFixture(6);
+    const onlyItems = buildExportCsv(all, { 1: cal }, DEFAULT_CATEGORIES, [1], {
+      ...DEFAULT_CSV_OPTIONS, items: true, rows: false, categoryTotals: false, totals: false, notes: false,
+    });
+    expect(onlyItems.startsWith('\ufeff')).toBe(true);
+    const lines = onlyItems.slice(1).trim().split('\r\n');
+    expect(lines[0]).toBe(ITEM_COLUMNS.join(','));
+    expect(lines).toContain('סה״כ כללי,,,,13 יח׳ · 73.67 מ״ר · 10.00 מ׳,');
+    expect(lines.some((l) => l.startsWith('סה״כ דלתות,'))).toBe(true);
+    // the curtain wall's net area: 300×200 px ≈ 10.58×7.06 m = 74.67 m² minus the 1 m² opening
+    expect(lines.find((l) => l.startsWith('קיר מסך CW-1'))).toBe('קיר מסך CW-1,קיר מסך,קיר מסך סטיק,10.58×7.06,73.67 מ״ר,');
+    // kind / category filters select items; deductions still apply
+    const cwOnly = buildExportCsv(all, { 1: cal }, DEFAULT_CATEGORIES, [1], {
+      ...DEFAULT_CSV_OPTIONS, items: true, rows: false, categoryTotals: false, totals: false, notes: false, kinds: ['area'],
+    });
+    expect(cwOnly).toContain('73.67 מ״ר');
+    expect(cwOnly).not.toContain('W1');
+    // items + measurement rows: blank line between the two tables, measurement header after it
+    const both = buildExportCsv(all, { 1: cal }, DEFAULT_CATEGORIES, [1], { ...DEFAULT_CSV_OPTIONS, items: true });
+    const parts = both.slice(1).split('\r\n\r\n');
+    expect(parts.length).toBe(2);
+    expect(parts[1].startsWith(buildExportCsv(all, { 1: cal }, DEFAULT_CATEGORIES, [1], DEFAULT_CSV_OPTIONS).slice(1).split('\r\n')[0])).toBe(true);
+    // default off → unchanged output
+    expect(DEFAULT_CSV_OPTIONS.items).toBe(false);
   });
 });

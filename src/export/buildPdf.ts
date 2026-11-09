@@ -62,7 +62,8 @@ import {
 import { hatchSegments } from './hatch';
 import { pageGeometry, placement, viewportSize, viewportToPdf, type PageGeometry } from './pageTransform';
 import { BLACK, WHITE, hexColor, shape, svgNum as f, type FontPair } from './pdfCommon';
-import { writeBoq, writeSummary } from './pdfSummary';
+import { writeBoq, writeItems, writeSummary } from './pdfSummary';
+import { buildItemTable } from '../core/itemTable';
 import type { PdfBuildInput, ProgressFn } from './types';
 
 export class ExportCancelled extends Error {
@@ -140,11 +141,15 @@ function text(
   o: { bold?: boolean; color?: RGB; align?: 'left' | 'center' | 'right' } = {},
 ): number {
   const font = o.bold ? c.fonts.bold : c.fonts.regular;
-  const { visual, width } = shape(font, str, size);
+  const { visual, width, parts } = shape(font, str, size);
   if (!visual.trim()) return width;
   const x0 = o.align === 'center' ? x - width / 2 : o.align === 'right' ? x - width : x;
-  const at = viewportToPdf(c.g, { x: x0, y: baseline });
-  c.page.drawText(visual, { x: at.x, y: at.y, size, font, color: o.color ?? BLACK, rotate: degrees(c.pl.rotate) });
+  // Single-script pieces (see `shape`), advanced along the baseline in viewport space.
+  for (const p of parts) {
+    if (!p.text.trim()) continue;
+    const at = viewportToPdf(c.g, { x: x0 + p.dx, y: baseline });
+    c.page.drawText(p.text, { x: at.x, y: at.y, size, font, color: o.color ?? BLACK, rotate: degrees(c.pl.rotate) });
+  }
   return width;
 }
 
@@ -464,7 +469,13 @@ export async function buildExportPdf(
     if (i % 4 === 3) await yieldNow();
   }
 
-  // 3) Summary pages.
+  // 3) Items table, then the generic summary / BOQ pages.
+  if (o.items) {
+    check();
+    onProgress('summary', 0, 1);
+    writeItems(out, fonts, input, buildItemTable(selected, input.calibrations, input.categories));
+    if (!o.summary) onProgress('summary', 1, 1);
+  }
   if (o.summary) {
     check();
     onProgress('summary', 0, 1);

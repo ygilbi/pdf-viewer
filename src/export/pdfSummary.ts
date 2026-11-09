@@ -10,7 +10,8 @@ import {
   isMarkupKind,
   type MeasurementSummary,
 } from '../core/measurementEngine';
-import { BLACK, GREY, hexColor, shape, wrapText, type FontPair } from './pdfCommon';
+import { BLACK, GREY, drawShaped, ellipsize, hexColor, shape, wrapCell, wrapText, type FontPair } from './pdfCommon';
+import { ITEM_COLUMNS, formatSubtotal, type ItemTable } from '../core/itemTable';
 import type { PdfBuildInput } from './types';
 import { UNIT_LABELS, describeQuantity, type Boq } from '../pricing/boq';
 
@@ -19,12 +20,19 @@ const H = 841.89;
 const M = 40;
 const HEAD_BG = rgb(0.89, 0.91, 0.94);
 const ZEBRA = rgb(0.965, 0.972, 0.98);
+const SUBTOTAL_BG = rgb(0.9, 0.94, 0.99);
+const WHITE_BG = rgb(1, 1, 1);
+const GRAND_BG = rgb(0.8, 0.87, 0.96);
 const LINE = rgb(0.8, 0.82, 0.86);
 
 interface Col {
   title: string;
   width: number;
   align?: 'right' | 'center';
+  /** Centred column whose cells may wrap (default: one line, ellipsis). */
+  wrap?: boolean;
+  /** Cells without Hebrew letters read left to right ("120×150", not "150×120"). */
+  ltr?: boolean;
 }
 
 interface Cell {
@@ -62,11 +70,12 @@ class Writer {
   /** x = anchor (right edge for 'right'), yTop = baseline measured from the top. */
   text(str: string, x: number, baselineFromTop: number, size: number, o: { bold?: boolean; color?: RGB; align?: 'right' | 'center' | 'left'; rtl?: boolean } = {}) {
     const font = o.bold ? this.fonts.bold : this.fonts.regular;
-    const { visual, width } = shape(font, str, size, o.rtl);
-    if (!visual.trim()) return width;
+    const sh = shape(font, str, size, o.rtl);
+    const width = sh.width;
+    if (!sh.visual.trim()) return width;
     const align = o.align ?? 'right';
     const x0 = align === 'right' ? x - width : align === 'center' ? x - width / 2 : x;
-    this.page.drawText(visual, { x: x0, y: H - baselineFromTop, size, font, color: o.color ?? BLACK });
+    drawShaped(this.page, sh, x0, H - baselineFromTop, { size, font, color: o.color ?? BLACK });
     return width;
   }
 
@@ -85,29 +94,43 @@ class Writer {
     }
   }
 
-  /** RTL table: first column at the right. Repeats the header on page breaks. */
-  table(cols: Col[], rows: Cell[][], o: { totalRow?: boolean } = {}) {
+  /**
+   * RTL table: first column at the right. Repeats the header on page breaks. Text cells wrap
+   * (at most `maxLines` lines, then an ellipsis); centred cells stay on one line (ellipsis).
+   * `fill(i)` overrides the zebra background of row i; `keepWithNext(i)` moves row i to the next
+   * page together with row i + 1 when that one would not fit (a group's last row + its subtotal).
+   */
+  table(
+    cols: Col[],
+    rows: Cell[][],
+    o: { totalRow?: boolean; fill?: (i: number) => RGB | undefined; maxLines?: number; keepWithNext?: (i: number) => boolean } = {},
+  ) {
     const fs = 8.5;
     const pad = 4;
     const lineH = fs * 1.35;
     const header = () => {
-      this.ensure(lineH + 2 * pad + 16);
+      this.ensure(2 * (lineH + 2 * pad));
       this.row(cols, cols.map((c) => ({ t: c.title, bold: true })), [[]], HEAD_BG, fs, pad, lineH);
     };
+    const wrappedRows = rows.map((r) =>
+      r.map((cell, k) => {
+        const font = cell.bold ? this.fonts.bold : this.fonts.regular;
+        const width = cols[k].width - 2 * pad - (cell.swatch ? 12 : 0);
+        return cols[k].align === 'center' && !cols[k].wrap ? [ellipsize(font, cell.t, fs, width)] : wrapCell(font, cell.t, fs, width, o.maxLines);
+      }),
+    );
+    const heights = wrappedRows.map((w) => Math.max(1, ...w.map((l) => l.length)) * lineH + 2 * pad);
     header();
     rows.forEach((r, i) => {
-      // wrap text cells
-      const wrapped = r.map((cell, k) =>
-        cols[k].align === 'center' ? [cell.t] : wrapText(cell.bold ? this.fonts.bold : this.fonts.regular, cell.t, fs, cols[k].width - 2 * pad - (cell.swatch ? 12 : 0)),
-      );
-      const lines = Math.max(1, ...wrapped.map((w) => w.length));
-      const h = lines * lineH + 2 * pad;
-      if (this.y + h > H - M) {
+      let need = heights[i];
+      for (let j = i; o.keepWithNext?.(j) && j + 1 < rows.length; j++) need += heights[j + 1];
+      if (this.y + need > H - M) {
         this.newPage();
         header();
       }
       const isTotal = o.totalRow && i === rows.length - 1;
-      this.row(cols, r, wrapped, isTotal ? HEAD_BG : i % 2 ? ZEBRA : undefined, fs, pad, lineH);
+      const bg = o.fill?.(i) ?? (isTotal ? HEAD_BG : i % 2 ? ZEBRA : undefined);
+      this.row(cols, r, wrappedRows[i], bg, fs, pad, lineH);
     });
     this.y += 10;
   }
@@ -131,7 +154,8 @@ class Writer {
       }
       textLines.forEach((t, li) => {
         const base = this.y + pad + fs * 0.95 + li * lineH;
-        if (col.align === 'center') this.text(t, right - col.width / 2, base, fs, { bold: cell.bold, color: cell.color, align: 'center' });
+        const rtl = col.ltr && !/[\u0590-\u05ff]/.test(t) ? false : undefined;
+        if (col.align === 'center') this.text(t, right - col.width / 2, base, fs, { bold: cell.bold, color: cell.color, align: 'center', rtl });
         else this.text(t, r, base, fs, { bold: cell.bold, color: cell.color, rtl: true });
       });
       right -= col.width;
@@ -235,6 +259,59 @@ export function writeSummary(
       list,
     );
   }
+}
+
+/**
+ * טבלת פריטים — the owner's items table on its own A4 page(s): columns (right to left) שם פריט ·
+ * קטגוריה · מערכת · גודל · כמות · מידע נוסף; each category's rows followed by a bold, tinted
+ * subtotal row; a grand total when there is more than one category.
+ */
+export function writeItems(doc: PDFDocument, fonts: FontPair, input: PdfBuildInput, table: ItemTable) {
+  const w = new Writer(doc, fonts, `טבלת פריטים — ${input.title}`);
+  const docName = new Map(input.docs.map((d) => [d.id, d.name]));
+  w.title('טבלת פריטים', 16);
+  const files = [...new Set(input.pages.map((p) => docName.get(p.docId) ?? p.docId))];
+  w.para(`${files.length > 1 ? 'קבצים' : 'קובץ'}: ${files.join(', ')}`, 9, GREY);
+  w.para(`דפים בייצוא: ${input.pages.length}${input.dateText ? ` · תאריך: ${input.dateText}` : ''}`, 9, GREY);
+  w.y += 6;
+  if (!table.groups.length) {
+    w.para('אין פריטים בדפים שנבחרו. פריט הוא ספירה, או שטח / אורך שסומן כפריט.', 10);
+    return;
+  }
+
+  const [cName, cCat, cSys, cSize, cQty, cExtra] = ITEM_COLUMNS;
+  const cols: Col[] = [
+    { title: cName, width: 112 },
+    { title: cCat, width: 74 },
+    { title: cSys, width: 86 },
+    { title: cSize, width: 62, align: 'center', wrap: true, ltr: true },
+    { title: cQty, width: 62, align: 'center', wrap: true, ltr: true },
+    { title: cExtra, width: W - 2 * M - 396 },
+  ];
+  const rows: Cell[][] = [];
+  const kind: ('row' | 'sub' | 'grand')[] = [];
+  const lines = (t: string) => t.split(' · ').join('\n'); // one unit per line in total cells
+  for (const g of table.groups) {
+    const swatch = g.color ?? '#94a3b8';
+    g.rows.forEach((r) => {
+      rows.push([{ t: r.name }, { t: r.categoryName, swatch }, { t: r.system }, { t: r.size }, { t: r.qtyText }, { t: r.extra }]);
+      kind.push('row');
+    });
+    rows.push([{ t: `סה״כ ${g.name}`, bold: true }, { t: '' }, { t: '' }, { t: '' }, { t: lines(formatSubtotal(g.subtotal)), bold: true }, { t: '' }]);
+    kind.push('sub');
+  }
+  if (table.groups.length > 1) {
+    rows.push([{ t: 'סה״כ כללי', bold: true }, { t: '' }, { t: '' }, { t: '' }, { t: lines(formatSubtotal(table.total)), bold: true }, { t: '' }]);
+    kind.push('grand');
+  }
+  let zebra = 0;
+  const fills = kind.map((k) => (k === 'sub' ? SUBTOTAL_BG : k === 'grand' ? GRAND_BG : zebra++ % 2 ? ZEBRA : WHITE_BG));
+  w.table(cols, rows, {
+    fill: (i) => fills[i],
+    maxLines: 3,
+    keepWithNext: (i) => i + 1 < kind.length && kind[i + 1] !== 'row',
+  });
+  if (table.uncalibrated) w.para(`* ${table.uncalibrated} שורות בדף לא מכויל — הכמות שלהן אינה נכללת בסיכומים.`, 8, GREY);
 }
 
 /** Priced bill of quantities (כתב כמויות עם מחירים) — its own A4 page(s). */

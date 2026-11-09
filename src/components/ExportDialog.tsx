@@ -2,6 +2,7 @@ import { createPortal } from 'react-dom';
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useViewer } from '../state/store';
 import { categoryKey, categoryName, isMarkupKind, kindOf } from '../core/measurementEngine';
+import { isItem } from '../core/itemTable';
 import { useExportUi } from '../export/exportUi';
 import { formatPageRanges, parsePageRanges } from '../export/pageSelection';
 import { savePickerSupported, startExport, type ExportHandle } from '../export/runExport';
@@ -23,19 +24,21 @@ const PDF_CONTENT: { id: keyof PdfContentOptions; label: string; hint?: string }
   { id: 'drawings', label: 'דפי השרטוט', hint: 'התוכן המקורי (וקטורי, ללא המרה לתמונה)' },
   { id: 'measurements', label: 'מדידות על הדף', hint: 'שטחים, ניכויים, אורכים, ספירות ותוויות' },
   { id: 'markup', label: 'סימונים והערות', hint: 'מלבן, ענן, חץ, עט, מרקר, טקסט, נעצי הערה' },
-  { id: 'calibration', label: 'קו כיול' },
-  { id: 'summary', label: 'טבלאות סיכום בסוף', hint: 'לפי עמוד ולפי קטגוריה, סה״כ, רשימת הערות' },
-  { id: 'legend', label: 'מקרא קטגוריות' },
+  { id: 'items', label: 'טבלת פריטים', hint: 'שם פריט · קטגוריה · מערכת · גודל · כמות · מידע נוסף, עם סה״כ לכל קטגוריה' },
+  { id: 'summary', label: 'טבלאות סיכום כמויות', hint: 'לפי עמוד ולפי קטגוריה, סה״כ, רשימת הערות' },
   { id: 'boq', label: 'כתב כמויות עם מחירים', hint: 'עמוד תמחור: כמות, פחת, מחיר, הנחה ומע״מ (לפי חלונית התמחור)' },
+  { id: 'calibration', label: 'קו כיול' },
+  { id: 'legend', label: 'מקרא קטגוריות' },
 ];
 
 const FORMATS: { id: ExportFormat; label: string; hint: string }[] = [
-  { id: 'pdf', label: 'PDF', hint: 'שרטוט + מדידות' },
+  { id: 'pdf', label: 'PDF', hint: 'שרטוט + טבלת פריטים' },
   { id: 'xlsx', label: 'Excel', hint: 'מומלץ לתמחור' },
   { id: 'csv', label: 'CSV', hint: 'טבלה פשוטה' },
 ];
 
-const CSV_SECTIONS: { id: 'rows' | 'categoryTotals' | 'totals' | 'notes'; label: string }[] = [
+const CSV_SECTIONS: { id: 'items' | 'rows' | 'categoryTotals' | 'totals' | 'notes'; label: string }[] = [
+  { id: 'items', label: 'טבלת פריטים (בראש הקובץ)' },
   { id: 'rows', label: 'שורת מדידה לכל פריט' },
   { id: 'categoryTotals', label: 'סיכומי ביניים לפי קטגוריה' },
   { id: 'totals', label: 'סה״כ (ברוטו / ניכויים / נטו / אורך / כמות)' },
@@ -172,6 +175,12 @@ function ExportDialogBody() {
 
   const selectedCount = selected.size;
   const selectedMeasurements = measurements.filter((m) => selected.has(m.page)).length;
+  const selectedItems = measurements.filter((m) => selected.has(m.page) && !isMarkupKind(m.kind) && isItem(m)).length;
+  const noItemsHint = (
+    <span className="block text-[11px] text-amber-400" data-testid="export-no-items">
+      אין פריטים בדפים שנבחרו — פריט הוא ספירה, או שטח / אורך שסומן כפריט
+    </span>
+  );
 
   const doExport = () => {
     if (running) return;
@@ -416,6 +425,7 @@ function ExportDialogBody() {
                   >
                     {o.label}
                     {o.hint && <span className="block text-[11px] text-slate-500">{o.hint}</span>}
+                    {o.id === 'items' && pdfOpts.items && !selectedItems && noItemsHint}
                   </Check>
                 ))}
               </Section>
@@ -425,6 +435,7 @@ function ExportDialogBody() {
                   {CSV_SECTIONS.map((o) => (
                     <Check key={o.id} checked={csvOpts[o.id]} testId={`export-csv-${o.id}`} onChange={(v) => setCsvOpts({ ...csvOpts, [o.id]: v })}>
                       {o.label}
+                      {o.id === 'items' && csvOpts.items && !selectedItems && noItemsHint}
                     </Check>
                   ))}
                 </Section>
@@ -572,6 +583,9 @@ function XlsxSummary({ pages }: { pages: Set<number> }) {
   return (
     <Section title="תוכן קובץ ה־Excel">
       <ul className="flex list-disc flex-col gap-1.5 ps-5 text-sm text-slate-300">
+        <li>
+          <b className="text-slate-100">טבלת פריטים</b> — שם פריט, קטגוריה, מערכת, גודל, כמות ויחידה, מידע נוסף; סה״כ לכל קטגוריה וסה״כ כללי
+        </li>
         <li>
           <b className="text-slate-100">כתב כמויות</b> — שורה לכל קטגוריה עם נוסחאות חיות: כמות × (1 + פחת) × מחיר, סה״כ, הנחה, מע״מ
         </li>

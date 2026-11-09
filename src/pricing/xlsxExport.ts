@@ -1,5 +1,5 @@
 /**
- * Excel (.xlsx) export: "כתב כמויות" (BOQ with live formulas), "מדידות" (every
+ * Excel (.xlsx) export: "טבלת פריטים" (the owner's items table, first sheet), "כתב כמויות" (BOQ with live formulas), "מדידות" (every
  * measurement row, like the CSV) and "הערות". exceljs is loaded lazily — this
  * module itself is only reached through a dynamic import from runExport.
  *
@@ -8,10 +8,13 @@
  * total = after + VAT — the same arithmetic as pricing/boq.ts, so the cached
  * results written with each formula equal what Excel recalculates.
  */
-import type { Workbook, Worksheet, Cell } from 'exceljs';
+import type { Workbook, Worksheet, Cell, Fill } from 'exceljs';
 import { UNIT_LABELS, describeQuantity, type Boq } from './boq';
+import { ITEM_COLUMNS, type ItemSubtotal, type ItemTable, type ItemUnit } from '../core/itemTable';
 
 export interface XlsxInput {
+  /** טבלת פריטים for the selected pages (sheet omitted when absent). */
+  items?: ItemTable;
   boq: Boq;
   /** buildMeasurementRows output (header first; numbers as strings). */
   measurementRows: string[][];
@@ -154,6 +157,130 @@ function boqSheet(wb: Workbook, input: XlsxInput) {
   return ws;
 }
 
+/** Header row of the items sheet (title + meta above it). */
+export const ITEMS_HEADER_ROW = 4;
+const SUBTOTAL_FILL: Fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFE6EEF8' } };
+const UNIT_FIELD: Record<ItemUnit, keyof ItemSubtotal> = { 'יח׳': 'units', 'מ״ר': 'm2', 'מ׳': 'm' };
+const UNITS: ItemUnit[] = ['יח׳', 'מ״ר', 'מ׳'];
+
+/**
+ * טבלת פריטים: A שם פריט · B קטגוריה · C מערכת · D גודל · E כמות (number) · F יחידה · G מידע נוסף.
+ * Quantity is a real number (with its unit next to it) unless the user typed free text that is
+ * not a plain number. Each category ends with one subtotal row per unit it uses —
+ * SUMIF(F,unit,E) over the category's rows, so edits in Excel recalculate — and the grand total
+ * rows add up the subtotals.
+ */
+function itemsSheet(wb: Workbook, input: XlsxInput, table: ItemTable) {
+  const ws = wb.addWorksheet('טבלת פריטים', {
+    views: [{ rightToLeft: true, state: 'frozen', ySplit: ITEMS_HEADER_ROW }],
+    pageSetup: { orientation: 'landscape', fitToPage: true, fitToWidth: 1, fitToHeight: 0, paperSize: 9 },
+  });
+  ws.columns = [{ width: 26 }, { width: 16 }, { width: 22 }, { width: 14 }, { width: 11 }, { width: 7 }, { width: 40 }];
+  ws.mergeCells('A1:G1');
+  const t = ws.getCell('A1');
+  t.value = 'טבלת פריטים';
+  t.font = { bold: true, size: 16 };
+  t.alignment = { horizontal: 'right' };
+  ws.mergeCells('A2:G2');
+  const meta = ws.getCell('A2');
+  meta.value = [input.title, input.files.join(', '), input.dateText && `תאריך: ${input.dateText}`].filter(Boolean).join(' · ');
+  meta.font = { color: { argb: 'FF64748B' } };
+  meta.alignment = { horizontal: 'right' };
+
+  const head = ws.getRow(ITEMS_HEADER_ROW);
+  const [cName, cCat, cSys, cSize, cQty, cExtra] = ITEM_COLUMNS;
+  head.values = [cName, cCat, cSys, cSize, cQty, 'יחידה', cExtra];
+  head.font = { bold: true };
+  head.height = 22;
+  head.eachCell((c) => {
+    c.fill = HEADER_FILL;
+    c.border = BORDER;
+    c.alignment = { horizontal: 'center', vertical: 'middle', wrapText: true };
+  });
+
+  let r = ITEMS_HEADER_ROW + 1;
+  const style = (row: ReturnType<Worksheet['getRow']>, fill?: Fill) => {
+    for (let c = 1; c <= 7; c++) {
+      const cell = row.getCell(c);
+      cell.border = BORDER;
+      cell.alignment = { vertical: 'middle', wrapText: true, horizontal: c === 5 || c === 6 ? 'center' : 'right' };
+      if (fill) cell.fill = fill;
+    }
+  };
+  const fmtQty = (v: number) => (Number.isInteger(v) ? '#,##0' : NUM);
+  /** Subtotal cells per unit, for the grand total. */
+  const subCells: Record<ItemUnit, string[]> = { 'יח׳': [], 'מ״ר': [], 'מ׳': [] };
+
+  if (!table.groups.length) {
+    ws.mergeCells(r, 1, r, 7);
+    ws.getCell(r, 1).value = 'אין פריטים בדפים שנבחרו (פריט = ספירה, או שטח / אורך שסומן כפריט)';
+    return ws;
+  }
+  for (const g of table.groups) {
+    const first = r;
+    const textQty = new Set<ItemUnit>(); // units with a quantity Excel cannot add up (text cell)
+    for (const it of g.rows) {
+      const row = ws.getRow(r);
+      row.getCell(1).value = it.name || null;
+      row.getCell(2).value = it.categoryName || null;
+      row.getCell(3).value = it.system || null;
+      row.getCell(4).value = it.size || null;
+      // A typed quantity stays text unless it is just a number (optionally with its unit).
+      const plain = !it.custom.qty || !it.qtyText.replace(/-?\d[\d,]*(?:[.,]\d+)?/, '').replace(/יח['׳]|מ["״]ר|מ['׳]|מטר|\s/g, '');
+      if (it.qty !== null && !plain) textQty.add(it.unit);
+      if (it.qty !== null && plain) {
+        row.getCell(5).value = it.qty;
+        row.getCell(5).numFmt = it.kind === 'count' && Number.isInteger(it.qty) ? '#,##0' : NUM;
+      } else row.getCell(5).value = it.qtyText;
+      row.getCell(6).value = it.unit;
+      row.getCell(7).value = it.extra || null;
+      style(row);
+      r++;
+    }
+    const last = r - 1;
+    const used = UNITS.filter((u) => g.rows.some((x) => x.unit === u && x.qty !== null));
+    for (const u of used.length ? used : [null]) {
+      const row = ws.getRow(r);
+      row.getCell(1).value = `סה״כ ${g.name}`;
+      if (u) {
+        const v = g.subtotal[UNIT_FIELD[u]];
+        row.getCell(5).value = textQty.has(u) ? v : { formula: `SUMIF(F${first}:F${last},"${u.replace(/"/g, '""')}",E${first}:E${last})`, result: v };
+        row.getCell(5).numFmt = u === 'יח׳' ? fmtQty(v) : NUM;
+        row.getCell(6).value = u;
+        subCells[u].push(`E${r}`);
+      } else row.getCell(5).value = '—';
+      row.font = { bold: true };
+      style(row, SUBTOTAL_FILL);
+      r++;
+    }
+  }
+  if (table.groups.length > 1) {
+    const used = UNITS.filter((u) => subCells[u].length);
+    for (const u of used.length ? used : [null]) {
+      const row = ws.getRow(r);
+      row.getCell(1).value = 'סה״כ כללי';
+      if (u) {
+        const v = table.total[UNIT_FIELD[u]];
+        row.getCell(5).value = { formula: subCells[u].join('+'), result: v };
+        row.getCell(5).numFmt = u === 'יח׳' ? fmtQty(v) : NUM;
+        row.getCell(6).value = u;
+      } else row.getCell(5).value = '—';
+      row.font = { bold: true, size: 12 };
+      style(row, TOTAL_FILL);
+      r++;
+    }
+  }
+  if (table.uncalibrated) {
+    r++;
+    ws.mergeCells(r, 1, r, 7);
+    const c = ws.getCell(r, 1);
+    c.value = `⚠ ${table.uncalibrated} שורות בדף לא מכויל — הכמות שלהן אינה נכללת בסיכומים`;
+    c.font = { color: { argb: 'FFB45309' } };
+  }
+  ws.pageSetup.printTitlesRow = `${ITEMS_HEADER_ROW}:${ITEMS_HEADER_ROW}`;
+  return ws;
+}
+
 const numeric = /^-?\d+(\.\d+)?$/;
 
 function tableSheet(wb: Workbook, name: string, rows: string[][], widths: number[], numericFrom = 0): Worksheet {
@@ -185,6 +312,7 @@ export async function buildXlsx(input: XlsxInput): Promise<Uint8Array> {
   wb.creator = 'PDF Viewer — תמחור';
   wb.created = new Date();
   wb.calcProperties.fullCalcOnLoad = true;
+  if (input.items) itemsSheet(wb, input, input.items);
   boqSheet(wb, input);
   tableSheet(wb, 'מדידות', input.measurementRows, [6, 9, 22, 14, 7, 12, 11, 11, 8, 10, 16, 16, 14, 14]);
   const notes = input.notes.length ? [['מס׳', 'סוג', 'שם', 'קטגוריה', 'דף', 'טקסט'], ...input.notes] : [['הערות'], ['אין הערות בדפים שנבחרו']];

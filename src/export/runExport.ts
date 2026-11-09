@@ -15,6 +15,7 @@ import { buildBoq } from '../pricing/boq';
 import { currentPricing } from '../pricing/store';
 import { buildMeasurementRows, categoryKey, categoryName, kindOf, takeoffOnly, KIND_LABELS } from '../core/measurementEngine';
 import type { ViewerState } from '../state/store';
+import { buildItemTable } from '../core/itemTable';
 
 /** Priced BOQ of the current workspace for the given (global) pages. */
 export function boqForPages(s: Pick<ViewerState, 'measurements' | 'calibrations' | 'categories'>, pages: Iterable<number>) {
@@ -178,6 +179,7 @@ export function startExport(req: ExportRequest, onProgress: ProgressCb = () => {
           return [String(i + 1), KIND_LABELS[kindOf(m)], m.label, k ? categoryName(k, s.categories) : '', String(m.page), (m.text ?? '').trim()];
         });
       const out = await buildXlsx({
+        items: buildItemTable(onPages, s.calibrations, s.categories),
         boq: boqForPages(s, req.pages),
         measurementRows: buildMeasurementRows(takeoffOnly(onPages), s.calibrations, s.categories),
         notes,

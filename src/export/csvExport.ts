@@ -13,6 +13,7 @@ import {
   takeoffOnly,
 } from '../core/measurementEngine';
 import type { CsvOptions } from './types';
+import { buildItemTable, isItem, itemTableRows } from '../core/itemTable';
 
 function csvCell(v: string): string {
   return /[",\r\n]/.test(v) ? `"${v.replace(/"/g, '""')}"` : v;
@@ -42,6 +43,26 @@ export function selectCsvMeasurements(
   });
 }
 
+/**
+ * Items table rows (header + rows + category subtotals + grand total) for the CSV. Pages and the
+ * kind / category filters select which items appear; every other takeoff on those pages is kept
+ * as input so deductions still reduce an item area's net quantity.
+ */
+export function itemsCsvRows(
+  measurements: AreaMeasurement[],
+  calibrations: Record<number, Calibration>,
+  categories: Category[],
+  pages: Iterable<number>,
+  o: Pick<CsvOptions, 'kinds' | 'categories'>,
+): string[][] {
+  const pageSet = new Set(pages);
+  const cats = o.categories ? new Set(o.categories) : null;
+  const input = takeoffOnly(measurements.filter((m) => pageSet.has(m.page))).filter(
+    (m) => !isItem(m) || ((o.kinds as string[]).includes(kindOf(m)) && (!cats || cats.has(categoryKey(m)))),
+  );
+  return itemTableRows(buildItemTable(input, calibrations, categories));
+}
+
 export function buildExportCsv(
   measurements: AreaMeasurement[],
   calibrations: Record<number, Calibration>,
@@ -61,8 +82,11 @@ export function buildExportCsv(
   const catRows = rows.slice(1 + nRows, 1 + nRows + nCats);
   const totals = rows.slice(1 + nRows + nCats, 1 + nRows + nCats + 5);
   const notes = rows.slice(1 + nRows + nCats + 5);
+  const sections = o.rows || o.categoryTotals || o.totals || o.notes;
   const out = [
-    ...header,
+    ...(o.items ? itemsCsvRows(measurements, calibrations, categories, pages, o) : []),
+    ...(o.items && sections ? [[]] : []), // blank line between the two tables
+    ...(o.items && !sections ? [] : header),
     ...(o.rows ? body : []),
     ...(o.categoryTotals ? catRows : []),
     ...(o.totals ? totals : []),

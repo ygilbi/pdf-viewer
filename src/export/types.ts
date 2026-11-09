@@ -12,7 +12,12 @@ export interface PdfContentOptions {
   markup: boolean;
   /** Calibration reference line. */
   calibration: boolean;
-  /** Summary table pages at the end (per page, per category, totals, notes). */
+  /**
+   * Items table pages (טבלת פריטים) after the drawings: name · category · system · size · quantity ·
+   * additional info, a subtotal per category and a grand total (core/itemTable).
+   */
+  items: boolean;
+  /** Generic summary table pages at the end (per page, per category, totals, notes). */
   summary: boolean;
   /** Category legend (on every drawing page and in the summary). */
   legend: boolean;
@@ -25,7 +30,10 @@ export const DEFAULT_PDF_OPTIONS: PdfContentOptions = {
   measurements: true,
   markup: true,
   calibration: true,
-  summary: true,
+  // The owner's deliverable is "drawings with markings + the items table"; the generic quantity
+  // summary stays available but is opt-in.
+  items: true,
+  summary: false,
   legend: false,
   boq: false,
 };
@@ -69,6 +77,8 @@ export type ProgressFn = (stage: ProgressStage, done: number, total: number) => 
 // ---- CSV ------------------------------------------------------------------
 
 export interface CsvOptions {
+  /** Items table (טבלת פריטים) first: owner's 6 columns, category subtotals, grand total. */
+  items: boolean;
   /** One row per measurement. */
   rows: boolean;
   /** Per-category subtotal rows. */
@@ -84,6 +94,7 @@ export interface CsvOptions {
 }
 
 export const DEFAULT_CSV_OPTIONS: CsvOptions = {
+  items: false,
   rows: true,
   categoryTotals: true,
   totals: true,
