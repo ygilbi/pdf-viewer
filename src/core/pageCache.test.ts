@@ -41,4 +41,21 @@ describe('PageCache operator budget', () => {
     await tick();
     expect(cleaned).toEqual([1, 2, 3]);
   });
+  it('transient renders (version compare) free their page afterwards, unless the viewer uses it', async () => {
+    const { doc, cleaned } = fakeDoc();
+    const c = new PageCache(doc, 20, 1000);
+    void c.get(1); // viewer
+    void c.get(1, true); // compare renders the page on screen
+    c.releaseTransient(1);
+    void c.get(2, true); // compare renders another page
+    c.noteOps(2, 500);
+    c.releaseTransient(2);
+    await tick();
+    expect(cleaned).toEqual([2]);
+    void c.get(3, true);
+    void c.get(3); // the viewer opened it meanwhile → keep
+    c.releaseTransient(3);
+    await tick();
+    expect(cleaned).toEqual([2]);
+  });
 });

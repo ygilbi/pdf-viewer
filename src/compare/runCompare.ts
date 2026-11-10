@@ -15,6 +15,8 @@ import { useCompare, initialCompare } from './compareStore';
 const FULL_PAGE: DiffRegion = { x: 0, y: 0, width: 1, height: 1 };
 /** Render priority: below the visible page's tiles, so the viewer stays responsive. */
 const PRIORITY = 0;
+/** Long side (px) of the diff images: smaller on touch devices (memory). */
+const DIFF_PX = typeof matchMedia === 'function' && matchMedia('(pointer: coarse)').matches ? 1280 : 1600;
 /** Long side (px) of the page-matching fingerprints' render. */
 const MATCH_PX = 160;
 
@@ -72,7 +74,7 @@ const abort = () => Object.assign(new Error('Aborted'), { name: 'AbortError' });
 /** Renders a global page stretched to w×h and returns its gray pixels. */
 async function grayPage(globalPage: number, pageW: number, pageH: number, w: number, h: number, alive: () => boolean): Promise<Uint8Array> {
   const scale = Math.max(w / pageW, h / pageH);
-  const task = getPdfClient().render({ page: globalPage, scale, priority: PRIORITY });
+  const task = getPdfClient().render({ page: globalPage, scale, priority: PRIORITY, transient: true });
   const res = await task.promise;
   try {
     if (!alive()) throw abort();
@@ -95,7 +97,7 @@ async function grayPage(globalPage: number, pageW: number, pageH: number, w: num
 async function grayPair(o: WorkspaceDoc, n: WorkspaceDoc, oldLocal: number, newLocal: number, alive: () => boolean) {
   const ns = n.pageSizes[newLocal - 1];
   const os = o.pageSizes[oldLocal - 1];
-  const { w, h } = diffImageSize(ns.width, ns.height);
+  const { w, h } = diffImageSize(ns.width, ns.height, DIFF_PX);
   const newG = await grayPage(n.pageOffset + newLocal, ns.width, ns.height, w, h, alive);
   if (!alive()) throw abort();
   const oldG = await grayPage(o.pageOffset + oldLocal, os.width, os.height, w, h, alive);

@@ -34,7 +34,7 @@ export type SnapGeometry = Omit<Extract<SnapWorkerResponse, { type: 'snapGeometr
 const UNSUPPORTED_PREFIX = 'PDF_WORKER_UNSUPPORTED:';
 
 /** `page` is the GLOBAL (workspace) page number. */
-type RenderOpts = { page: number; scale: number; region?: Rect; priority?: number };
+type RenderOpts = { page: number; scale: number; region?: Rect; priority?: number; transient?: boolean };
 
 interface PendingRender {
   id: number;
@@ -221,7 +221,7 @@ class MainThreadRenderer {
       if (!d) throw rq.makeCancelError();
       const { pages } = await d.ready;
       if (job.active.cancelled || d.closed) throw rq.makeCancelError();
-      const page = await pages.get(job.localPage);
+      const page = await pages.get(job.localPage, job.opts.transient);
       const vp = page.getViewport({ scale: 1 });
       const plan = rq.planRender(vp.width, vp.height, job.opts.scale, job.opts.region);
       if (typeof OffscreenCanvas !== 'undefined') {
@@ -248,6 +248,7 @@ class MainThreadRenderer {
     } finally {
       if (canvas) canvas.width = canvas.height = 0;
       this.jobs.delete(job.id);
+      if (job.opts.transient) void this.docs.get(job.docId)?.ready.then((r) => r.pages.releaseTransient(job.localPage), () => {});
     }
   }
 }
@@ -530,13 +531,13 @@ class PdfClientImpl implements WorkspaceClient {
   }
 
   private dispatch(entry: PendingRender) {
-    const { scale, region, priority } = entry.opts;
+    const { scale, region, priority, transient } = entry.opts;
     if (this.mode === 'worker') {
       if (!this.worker) {
         entry.reject(new Error('No document is open'));
         return;
       }
-      this.send({ type: 'render', id: entry.id, docId: entry.docId, page: entry.localPage, scale, region, priority: priority ?? 0 });
+      this.send({ type: 'render', id: entry.id, docId: entry.docId, page: entry.localPage, scale, region, priority: priority ?? 0, transient });
     } else {
       this.getMain().render(entry);
     }

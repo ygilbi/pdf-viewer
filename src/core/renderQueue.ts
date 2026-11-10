@@ -274,6 +274,10 @@ export async function operatorListForGeometry(page: PDFPageProxy): Promise<{ fnA
 export class PageCache {
   private pages = new Map<number, Promise<PDFPageProxy>>();
   private ops = new Map<number, number>();
+  /** Pages loaded only by transient renders (version compare) — freed when those finish. */
+  private transientOnly = new Set<number>();
+  /** Transient renders in flight per page. */
+  private transientBusy = new Map<number, number>();
 
   constructor(
     private readonly doc: PDFDocumentProxy,
@@ -281,7 +285,11 @@ export class PageCache {
     private readonly maxOps = MAX_CACHED_OPS,
   ) {}
 
-  get(pageNumber: number): Promise<PDFPageProxy> {
+  get(pageNumber: number, transient = false): Promise<PDFPageProxy> {
+    if (transient) {
+      this.transientBusy.set(pageNumber, (this.transientBusy.get(pageNumber) ?? 0) + 1);
+      if (!this.pages.has(pageNumber)) this.transientOnly.add(pageNumber);
+    } else this.transientOnly.delete(pageNumber); // the viewer uses it: keep it
     let p = this.pages.get(pageNumber);
     if (p) {
       this.pages.delete(pageNumber);
@@ -300,6 +308,25 @@ export class PageCache {
     if (!this.pages.has(pageNumber)) return;
     this.ops.set(pageNumber, ops);
     this.trim();
+  }
+
+  /**
+   * A transient render of `pageNumber` finished: when no viewer render touched the page meanwhile,
+   * drop it and free its parsed operator list (a heavy page's list is hundreds of MB; a version
+   * compare must not leave the other file's pages resident next to the one on screen).
+   */
+  releaseTransient(pageNumber: number): void {
+    const n = (this.transientBusy.get(pageNumber) ?? 1) - 1;
+    if (n > 0) {
+      this.transientBusy.set(pageNumber, n);
+      return;
+    }
+    this.transientBusy.delete(pageNumber);
+    if (!this.transientOnly.delete(pageNumber)) return;
+    const p = this.pages.get(pageNumber);
+    this.pages.delete(pageNumber);
+    this.ops.delete(pageNumber);
+    p?.then((pg) => pg.cleanup()).catch(() => {});
   }
 
   clear(): void {

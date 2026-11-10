@@ -241,6 +241,7 @@ interface Job {
   page: number;
   scale: number;
   region?: Rect;
+  transient?: boolean;
   doc: DocState;
   active: ActiveRender;
 }
@@ -266,7 +267,7 @@ async function runJob(job: Job): Promise<void> {
     if (job.active.cancelled) throw makeCancelError();
     const { pages } = await job.doc.ready;
     if (job.active.cancelled || job.doc.closed) throw makeCancelError();
-    const page = await pages.get(job.page);
+    const page = await pages.get(job.page, job.transient);
     if (job.active.cancelled) throw makeCancelError();
     const vp = page.getViewport({ scale: 1 });
     const plan = planRender(vp.width, vp.height, job.scale, job.region);
@@ -290,6 +291,7 @@ async function runJob(job: Job): Promise<void> {
   } finally {
     if (canvas) canvas.width = canvas.height = 0;
     jobs.delete(job.id);
+    if (job.transient) job.doc.ready.then((r) => r.pages.releaseTransient(job.page), () => {});
   }
 }
 
@@ -331,6 +333,7 @@ self.onmessage = (ev: MessageEvent<WorkerRequest & { seq?: number }>) => {
         page: msg.page,
         scale: msg.scale,
         region: msg.region,
+        transient: msg.transient,
         doc,
         active: { task: null, cancelled: false },
       };

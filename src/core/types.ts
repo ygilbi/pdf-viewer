@@ -43,6 +43,8 @@ export type WorkerRequest =
       /** Document to render from (see `open`). Omitted = 'default'. */
       docId?: string;
       /** Output pixels per page unit. */
+      /** One-off render (version compare): free the page's operator list afterwards unless the viewer uses it. */
+      transient?: boolean;
       scale: number;
       /**
        * Optional sub-region of the page (page units) to render. When omitted,
@@ -92,7 +94,8 @@ export interface PdfDocumentInfo {
 
 export interface PdfClient {
   open(file: File): Promise<PdfDocumentInfo>;
-  render(opts: { page: number; scale: number; region?: Rect; priority?: number }): RenderTask;
+  /** `transient`: a one-off render (version compare) — the page's parsed drawing is freed right after, unless the viewer uses it too. */
+  render(opts: { page: number; scale: number; region?: Rect; priority?: number; transient?: boolean }): RenderTask;
   close(): void;
 }
 

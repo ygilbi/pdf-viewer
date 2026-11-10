@@ -47,9 +47,17 @@ html, body, #root { height: 100%; margin: 0; overflow: hidden; }
 @keyframes cmp-pulse {
   to { opacity: 1; }
 }
+/* Phones / tablets and whole-page marks: a static glow. Every animated mark is its own compositing
+   layer (sized with its glow, at the page's raster scale) — on iOS that memory adds up fast. */
 @media (prefers-reduced-motion: reduce) {
   .cmp-mark::after { animation: none; opacity: 0.6; }
 }
+/* Touch devices (iOS): no extra glow layer at all — the mark's own static glow stays. A zoomed-out
+   page scales the glow up (--inv-zoom), and each animated layer then costs tens of MB. */
+@media (pointer: coarse) {
+  .cmp-mark::after { display: none; }
+}
+.cmp-whole::after { animation: none; opacity: 0.5; }
 .cmp-tag {
   position: absolute;
   padding: 0 calc(4px * var(--inv-zoom, 1));
