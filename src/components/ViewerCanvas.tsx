@@ -31,9 +31,10 @@ import {
 import { ViewportController } from './viewer/Viewport';
 import { PageLayers } from './viewer/TileLayer';
 import { LINK_COLOR, MeasureOverlay, OVERLAY_WARN_COLOR } from './viewer/MeasureOverlay';
-import { emitZoom, registerViewer, takePendingFocus } from './viewer/commands';
+import { emitSettled, emitZoom, registerViewer, takePendingFocus } from './viewer/commands';
 import { TextHighlights } from './text/TextHighlights';
 import { CompareHighlights } from '../compare/CompareHighlights';
+import { FormaLayers } from '../compare/FormaLayers';
 import { MarkupEditor, NoteBubbles, TextEditEditor } from './viewer/MarkupHtml';
 import { SignatureDialog } from './doc/SignatureDialog';
 import { useDocEdit } from '../state/docEditStore';
@@ -343,6 +344,7 @@ export default function ViewerCanvas() {
       }
       lastPanRender = performance.now();
       layers.settle(vp.zoom, vp.visibleRect());
+      emitSettled({ zoom: vp.zoom, visible: vp.visibleRect() });
       if (interacting) {
         // Let the browser re-rasterise the vector overlay crisply at the final scale.
         world.style.willChange = 'auto';
@@ -409,6 +411,10 @@ export default function ViewerCanvas() {
       zoomOut: () => vp.zoomBy(1 / ZOOM_STEP),
       zoomToScale: (z) => vp.zoomToAnimated(z),
       zoomToRect: (r) => vp.zoomToRect(r),
+      screenToPage: (cx, cy) => {
+        const r = container.getBoundingClientRect();
+        return vp.toPage(cx - r.left, cy - r.top);
+      },
     });
 
     // ---- rubber band + readout (direct DOM writes) --------------------------
@@ -1825,6 +1831,7 @@ export default function ViewerCanvas() {
           />
         )}
         {size && <TextHighlights page={currentPage} />}
+        {size && <FormaLayers page={currentPage} />}
         {size && <CompareHighlights page={currentPage} />}
         {size && <NoteBubbles notes={pageNotes} selectedId={selectedId} editingId={editingId} />}
         {editing && <MarkupEditor key={editing.id} m={editing} />}

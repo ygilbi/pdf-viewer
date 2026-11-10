@@ -40,6 +40,8 @@ export interface ViewerImpl {
   zoomToScale(scale: number): void;
   /** Zoom/pan to a rect of the current page (page units). Optional: added for text search. */
   zoomToRect?(rect: Rect): void;
+  /** Client (window) coordinates → page units of the current page. */
+  screenToPage?(clientX: number, clientY: number): { x: number; y: number } | null;
 }
 
 let impl: ViewerImpl | null = null;
@@ -111,4 +113,35 @@ export function takePendingFocus(page: number): Rect | null {
   const r = pendingFocus.rect;
   pendingFocus = null;
   return r;
+}
+
+// ---- settled view (version compare layers render the other version sharp) -------
+
+export interface SettledView {
+  /** CSS px per page unit. */
+  zoom: number;
+  /** Visible part of the current page's space (page units; may extend beyond the page). */
+  visible: Rect;
+}
+
+let settledView: SettledView | null = null;
+const settledSubs = new Set<(v: SettledView) => void>();
+
+/** Called by ViewerCanvas when the view stops moving. */
+export function emitSettled(v: SettledView): void {
+  settledView = v;
+  for (const cb of settledSubs) cb(v);
+}
+
+/** cb(view) whenever the view settles (and now, with the last one). */
+export function subscribeSettled(cb: (v: SettledView) => void): () => void {
+  settledSubs.add(cb);
+  if (settledView) cb(settledView);
+  return () => {
+    settledSubs.delete(cb);
+  };
+}
+
+export function screenToPage(clientX: number, clientY: number): { x: number; y: number } | null {
+  return impl?.screenToPage?.(clientX, clientY) ?? null;
 }

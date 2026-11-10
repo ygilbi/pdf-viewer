@@ -8,16 +8,15 @@ import { create } from 'zustand';
 import type { ChangeKind, DiffRegion } from '../core/versionDiff';
 
 export type PageNote = 'added' | 'removed';
-export type CompareMode = 'marker' | 'overlay';
+/**
+ * 'layers' (default, as in Autodesk Forma's 2D compare): both versions drawn one over the other, each
+ * in its own colour (ink in both = dark), each can be hidden, optional curtain.
+ * 'marker': the page as is, with glowing boxes on the changed areas.
+ */
+export type CompareMode = 'layers' | 'marker';
 
-export interface OverlayImage {
-  /** New-version page (local) the image belongs to. */
-  newLocal: number;
-  w: number;
-  h: number;
-  /** Per pixel: 0 paper, 1 both, 2 added, 3 removed (see versionDiff.PageDiff.overlay). */
-  classes: Uint8Array;
-}
+/** Ink colours of the two versions (Forma style: one red, one blue). */
+export const VERSION_COLOR = { old: '#e0262f', new: '#1f5fe0' } as const;
 
 export interface CompareState {
   /** Dialog to pick the two versions. */
@@ -39,17 +38,25 @@ export interface CompareState {
   diffed: Record<number, true>;
   /** Highlights shown (the bar stays). */
   visible: boolean;
-  /** Glowing markers on the page, or the colour overlay of both versions (as in Forma's 2D compare). */
   mode: CompareMode;
   /** Change types shown. */
   filter: Record<ChangeKind, boolean>;
-  /** Overlay layers: the previous version's / the new version's ink. */
+  /** Versions shown (layers mode): the previous / the new one. */
   layers: { old: boolean; new: boolean };
+  /** Layers mode: each version in its colour (off = both black, as Forma's "hide colours"). */
+  colors: boolean;
+  /** Layers mode: curtain — the previous version on one side of it, the new one on the other. */
+  curtain: boolean;
+  /** Curtain position: fraction of the page width (0..1). */
+  curtainX: number;
+  /** Layers mode: the sharp layer of the other version is being rendered for the current view. */
+  sharpening: boolean;
+  /** Layers mode: also frame the changed areas. */
+  regionsOn: boolean;
+  /** New local page → alignment of the old page (fractions of the page: old(x+dx) ≈ new(x)). */
+  shifts: Record<number, { dx: number; dy: number }>;
   /** Details panel (types, layers, list of changes) open under the bar. */
   panelOpen: boolean;
-  /** Overlay image of the page on screen (built on demand). */
-  overlay: OverlayImage | null;
-  overlayLoading: boolean;
   /** Change picked in the list (pulses faster). */
   selected: { docId: string; local: number; index: number } | null;
   error: string | null;
@@ -68,8 +75,7 @@ export const initialCompare = {
   pairOf: {},
   diffed: {},
   visible: true,
-  overlay: null,
-  overlayLoading: false,
+  shifts: {},
   selected: null,
   error: null,
 };
@@ -78,9 +84,14 @@ export const useCompare = create<CompareState>(() => ({
   ...initialCompare,
   dialogOpen: false,
   runId: 0,
-  mode: 'marker',
+  mode: 'layers',
   filter: { added: true, removed: true, modified: true },
   layers: { old: true, new: true },
+  colors: true,
+  curtain: false,
+  curtainX: 0.5,
+  regionsOn: false,
+  sharpening: false,
   panelOpen: false,
 }));
 

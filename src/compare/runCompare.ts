@@ -4,7 +4,7 @@
  * every later one), renders each pair at the same pixel size through the shared
  * PDF client, converts to gray and diffs them in a worker (core/versionDiff).
  * Pages are done one at a time (low memory on phones); results stream into the
- * compare store. The colour overlay of the page on screen is built on demand.
+ * compare store.
  */
 import { getPdfClient } from '../core/pdfClient';
 import { diffImageSize, diffPages, fingerprint, matchPages, toGray, type DiffRegion, type PageDiff, type PagePairing } from '../core/versionDiff';
@@ -51,7 +51,7 @@ function getWorker(): Worker | null {
   }
 }
 
-async function diff(oldG: Uint8Array, newG: Uint8Array, w: number, h: number, withOverlay = false): Promise<PageDiff> {
+async function diff(oldG: Uint8Array, newG: Uint8Array, w: number, h: number): Promise<PageDiff> {
   const wk = getWorker();
   if (wk) {
     try {
@@ -60,13 +60,13 @@ async function diff(oldG: Uint8Array, newG: Uint8Array, w: number, h: number, wi
         pending.set(id, { resolve, reject });
         const a = oldG.slice().buffer;
         const b = newG.slice().buffer;
-        wk.postMessage({ id, oldG: a, newG: b, w, h, withOverlay }, [a, b]);
+        wk.postMessage({ id, oldG: a, newG: b, w, h }, [a, b]);
       });
     } catch {
       /* fall through to the main thread */
     }
   }
-  return diffPages(oldG, newG, w, h, { withOverlay });
+  return diffPages(oldG, newG, w, h);
 }
 
 const abort = () => Object.assign(new Error('Aborted'), { name: 'AbortError' });
@@ -180,6 +180,7 @@ export async function runCompare(oldId: string, newId: string): Promise<void> {
       useCompare.setState((s) => ({
         progress: { done: i, total: pairs.length },
         diffed: { ...s.diffed, [np]: true },
+        shifts: { ...s.shifts, [np]: { dx: d.shift.dx / w, dy: d.shift.dy / h } },
         regions: d.regions.length
           ? {
               ...s.regions,
@@ -194,44 +195,6 @@ export async function runCompare(oldId: string, newId: string): Promise<void> {
   } catch (e) {
     if (!alive() || (e as { name?: string })?.name === 'AbortError') return;
     useCompare.setState({ status: 'error', error: e instanceof Error ? e.message : String(e) });
-  }
-}
-
-let overlaySeq = 0;
-
-/**
- * Builds the colour overlay (both versions' ink: common / added / removed) for
- * the pair of `docId`'s local page. Keeps only the latest one (memory).
- */
-export async function loadOverlay(docId: string, local: number): Promise<void> {
-  const s = useCompare.getState();
-  if (!s.oldId || !s.newId) return;
-  const newLocal = docId === s.newId ? local : s.pairOf[s.oldId]?.[local];
-  const oldLocal = newLocal != null ? s.pairOf[s.newId]?.[newLocal] : undefined;
-  if (newLocal == null || oldLocal == null) {
-    useCompare.setState({ overlay: null, overlayLoading: false });
-    return;
-  }
-  if (s.overlay?.newLocal === newLocal) return;
-  const my = ++overlaySeq;
-  const runId = s.runId;
-  const alive = () => my === overlaySeq && useCompare.getState().runId === runId;
-  useCompare.setState({ overlayLoading: true });
-  try {
-    const docs = useViewer.getState().docs;
-    const o = docs.find((d) => d.id === s.oldId);
-    const n = docs.find((d) => d.id === s.newId);
-    if (!o || !n) return;
-    const { oldG, newG, w, h } = await grayPair(o, n, oldLocal, newLocal, alive);
-    if (!alive()) return;
-    const d = await diff(oldG, newG, w, h, true);
-    if (!alive() || !d.overlay) return;
-    useCompare.setState({ overlay: { newLocal, w, h, classes: d.overlay }, overlayLoading: false });
-  } catch (e) {
-    if (alive()) {
-      useCompare.setState({ overlayLoading: false });
-      if ((e as { name?: string })?.name !== 'AbortError') console.warn('compare overlay failed', e);
-    }
   }
 }
 
