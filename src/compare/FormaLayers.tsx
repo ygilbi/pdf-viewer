@@ -1,4 +1,4 @@
-import { memo, useEffect, useRef, useState } from 'react';
+import { memo, useCallback, useEffect, useRef, useState } from 'react';
 import { useShallow } from 'zustand/react/shallow';
 import { getPdfClient } from '../core/pdfClient';
 import type { Rect } from '../core/types';
@@ -31,11 +31,11 @@ interface OtherLayer {
 
 const COARSE = typeof matchMedia === 'function' && matchMedia('(pointer: coarse)').matches;
 /** Pixel budget of the whole-page layer (a quick full view while the sharp one renders). */
-const FULL_BUDGET = COARSE ? 3_000_000 : 6_000_000;
+const FULL_BUDGET = COARSE ? 2_000_000 : 6_000_000;
 /** Scale (px per page unit) of the whole-page layer: by area, so long strip drawings stay sharp too. */
 const fullScale = (w: number, h: number) => Math.min(Math.sqrt(FULL_BUDGET / (w * h)), 8000 / Math.max(w, h));
 /** Pixel budget of the sharp layer. */
-const SHARP_MAX_PX = COARSE ? 5_000_000 : 8_000_000;
+const SHARP_MAX_PX = COARSE ? 3_000_000 : 8_000_000;
 
 export const FormaLayers = memo(function FormaLayers({ page }: { page: number }) {
   const doc = useViewer((s) => s.docs.find((d) => page > d.pageOffset && page <= d.pageOffset + d.numPages));
@@ -62,8 +62,8 @@ export const FormaLayers = memo(function FormaLayers({ page }: { page: number })
   const shift = newLocal != null ? c.shifts[newLocal] : undefined;
   const active = c.on && !!doc && !!size && !!role && otherLocal != null;
 
-  const [full, setFull] = useState<OtherLayer | null>(null);
-  const [sharp, setSharp] = useState<OtherLayer | null>(null);
+  const [full, setFull] = useOwnedLayer();
+  const [sharp, setSharp] = useOwnedLayer();
   const tint = c.colors ? VERSION_COLOR[otherRole] : null;
   const layerKey = `${otherId}|${otherLocal}|${shift?.dx ?? 0}|${shift?.dy ?? 0}|${tint}`;
 
@@ -76,7 +76,7 @@ export const FormaLayers = memo(function FormaLayers({ page }: { page: number })
     const scale = fullScale(size.width, size.height);
     const job = renderOther({ rect: { x: 0, y: 0, width: size.width, height: size.height }, scale, page, otherId: otherId!, otherLocal: otherLocal!, role: role!, shift, tint });
     job.promise.then(
-      (canvas) => !cancelled && setFull({ rect: { x: 0, y: 0, width: size.width, height: size.height }, canvas, key: layerKey }),
+      (canvas) => (cancelled ? freeCanvas(canvas) : setFull({ rect: { x: 0, y: 0, width: size.width, height: size.height }, canvas, key: layerKey })),
       () => {},
     );
     return () => {
@@ -114,16 +114,18 @@ export const FormaLayers = memo(function FormaLayers({ page }: { page: number })
       if (px > SHARP_MAX_PX) s *= Math.sqrt(SHARP_MAX_PX / px);
       rect = { ...rect };
       useCompare.setState({ sharpening: true });
+      // Phones: wait a bit longer — a pinch is often followed by another one.
       timer = window.setTimeout(() => {
         const my = (job = renderOther({ rect, scale: s, page, otherId: otherId!, otherLocal: otherLocal!, role: role!, shift, tint }));
         my.promise.then(
           (canvas) => {
+            if (job !== my) return freeCanvas(canvas);
             setSharp({ rect, canvas, key: layerKey });
             if (job === my) useCompare.setState({ sharpening: false });
           },
           () => {},
         );
-      }, 120);
+      }, COARSE ? 350 : 120);
     });
     return () => {
       unsub();
@@ -173,6 +175,39 @@ export const FormaLayers = memo(function FormaLayers({ page }: { page: number })
   );
 });
 
+/**
+ * Frees a canvas' pixel memory now. iOS reclaims canvas memory only when the element is garbage
+ * collected — a new sharp layer on every zoom / pan otherwise piles up hundreds of MB (crash).
+ * Deferred one task so the replacement is in the DOM first; skipped if the canvas is shown again.
+ */
+function freeCanvas(cv: HTMLCanvasElement): void {
+  // Still on screen (React has not swapped it out yet) → CanvasHost frees it when it leaves.
+  cv.dataset.retired = '1';
+  setTimeout(() => {
+    if (!cv.isConnected) cv.width = cv.height = 0;
+  }, 0);
+}
+
+/** Layer state that frees the canvas it replaces (and the last one on unmount). */
+function useOwnedLayer(): [OtherLayer | null, (l: OtherLayer | null) => void] {
+  const [layer, setLayer] = useState<OtherLayer | null>(null);
+  const cur = useRef<OtherLayer | null>(null);
+  const set = useCallback((l: OtherLayer | null) => {
+    const prev = cur.current;
+    cur.current = l;
+    if (prev && prev.canvas !== l?.canvas) freeCanvas(prev.canvas);
+    setLayer(l);
+  }, []);
+  useEffect(
+    () => () => {
+      if (cur.current) freeCanvas(cur.current.canvas);
+      cur.current = null;
+    },
+    [],
+  );
+  return [layer, set];
+}
+
 function CanvasHost({ layer, testId }: { layer: OtherLayer; testId: string }) {
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -185,6 +220,7 @@ function CanvasHost({ layer, testId }: { layer: OtherLayer; testId: string }) {
     host.appendChild(cv);
     return () => {
       cv.remove();
+      if (cv.dataset.retired) cv.width = cv.height = 0;
     };
   }, [layer]);
   return (
