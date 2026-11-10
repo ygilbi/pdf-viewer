@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { diffPages, estimateShift, mergeBoxes, pairPages, toGray } from './versionDiff';
+import { diffPages, estimateShift, fingerprint, matchPages, mergeBoxes, pairPages, toGray } from './versionDiff';
 
 const W = 400;
 const H = 300;
@@ -66,6 +66,36 @@ describe('versionDiff', () => {
     const oldG = page([...BASE, [200, 120, 3, 8], [206, 120, 3, 8], [212, 120, 3, 8]]);
     const newG = page([...BASE, [200, 120, 3, 8], [206, 122, 6, 6], [216, 120, 3, 8]]);
     expect(diffPages(oldG, newG, W, H).regions).toHaveLength(1);
+  });
+
+  it('classifies regions as added / removed / modified', () => {
+    const oldG = page([...BASE, [300, 50, 40, 20], [200, 150, 30, 10]]);
+    const newG = page([...BASE, [60, 220, 50, 3], [212, 144, 30, 10]]);
+    const kinds = diffPages(oldG, newG, W, H).regions.map((r) => r.kind).sort();
+    expect(kinds).toEqual(['added', 'modified', 'removed']);
+  });
+
+  it('overlay classes: paper / both / added / removed', () => {
+    const oldG = page([...BASE, [300, 50, 40, 20]]);
+    const newG = page([...BASE, [60, 220, 50, 3]]);
+    const o = diffPages(oldG, newG, W, H, { withOverlay: true }).overlay!;
+    expect(o[0]).toBe(0);
+    expect(o[10 * W + 100]).toBe(1); // frame line in both
+    expect(o[221 * W + 80]).toBe(2); // added
+    expect(o[60 * W + 320]).toBe(3); // removed
+  });
+
+  it('matchPages finds an inserted page instead of shifting every later page', () => {
+    const sheets = [0, 1, 2, 3].map((k) => page([...BASE, [30 + k * 80, 120 + k * 30, 60, 40], [k * 90 + 20, 30, 10, 200]]));
+    const inserted = page([[50, 50, 300, 200]]);
+    const fp = (g: Uint8Array) => fingerprint(g, W, H);
+    const r = matchPages(sheets.map(fp), [sheets[0], sheets[1], inserted, sheets[2], sheets[3]].map(fp));
+    expect(r.pairs).toEqual([[1, 1], [2, 2], [3, 4], [4, 5]]);
+    expect(r.added).toEqual([3]);
+    expect(r.removed).toEqual([]);
+    const del = matchPages(sheets.map(fp), [sheets[0], sheets[2], sheets[3]].map(fp));
+    expect(del.pairs).toEqual([[1, 1], [3, 2], [4, 3]]);
+    expect(del.removed).toEqual([2]);
   });
 
   it('toGray composites alpha on white', () => {

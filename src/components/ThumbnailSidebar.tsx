@@ -6,7 +6,7 @@ import { useFileQueue } from '../state/fileQueue';
 import { IconFilePdf, IconPanel, IconX } from './ui/icons';
 import { persistentMeasurements } from '../core/tempMeasurements';
 import { useShallow } from 'zustand/react/shallow';
-import { useCompare } from '../compare/compareStore';
+import { pageChanges, useCompare } from '../compare/compareStore';
 
 // ---------------------------------------------------------------------------
 // Layout constants
@@ -393,7 +393,9 @@ export default function ThumbnailSidebar({ onHide, headerActions }: SidebarProps
   const docs = useViewer((s) => s.docs);
   const currentPage = useViewer((s) => s.currentPage);
   const setPage = useViewer((s) => s.setPage);
-  const cmp = useCompare(useShallow((s) => ({ status: s.status, oldId: s.oldId, newId: s.newId, regions: s.regions, progress: s.progress })));
+  const cmp = useCompare(
+    useShallow((s) => ({ status: s.status, oldId: s.oldId, newId: s.newId, regions: s.regions, notes: s.notes, filter: s.filter, pairOf: s.pairOf, diffed: s.diffed })),
+  );
   const measurements = useViewer((s) => persistentMeasurements(s.measurements));
   const calibrations = useViewer((s) => s.calibrations);
   const queued = useFileQueue((s) => s.items);
@@ -570,13 +572,7 @@ export default function ThumbnailSidebar({ onHide, headerActions }: SidebarProps
     );
   }
 
-  const cmpChanges = (docId: string, local: number): number | null => {
-    if (cmp.status === 'idle' || (docId !== cmp.oldId && docId !== cmp.newId)) return null;
-    const n = cmp.regions[docId]?.[local]?.length ?? 0;
-    // Not compared yet (still running) → no badge.
-    if (!n && cmp.status === 'running' && local > cmp.progress.done) return null;
-    return n;
-  };
+  const cmpChanges = (docId: string, local: number): number | null => pageChanges(cmp, docId, local);
   const items = [];
   for (let i = range[0]; i <= range[1]; i++) {
     const page = i + 1;

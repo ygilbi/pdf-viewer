@@ -5,7 +5,20 @@ import { docIdAtPage } from '../state/editMode';
 import { IconX } from '../components/ui/icons';
 import { useCompactLayout } from '../components/shell/layout';
 import { changedGlobalPages, runCompare } from './runCompare';
-import { changesOnPage, clearCompare, closeCompareDialog, compareTotals, useCompare } from './compareStore';
+import { clearCompare, closeCompareDialog, compareTotals, KIND_LABEL, pageChanges, regionKind, shownRegions, useCompare, type CompareTotals } from './compareStore';
+import type { ChangeKind, DiffRegion } from '../core/versionDiff';
+import { setPendingFocus, zoomToRect } from '../components/viewer/commands';
+import type { Rect } from '../core/types';
+
+/** Go to `page` (if needed) and zoom to `rect` (same as the search results). */
+function focusRect(page: number, rect: Rect) {
+  const v = useViewer.getState();
+  if (v.currentPage === page) zoomToRect(rect);
+  else {
+    setPendingFocus(page, rect);
+    v.setPage(page);
+  }
+}
 
 /** Two-files icon (version compare). */
 export function IconCompare({ size = 18 }: { size?: number }) {
@@ -112,7 +125,7 @@ export function CompareDialog() {
           </button>
         </div>
         <p className="mb-3 text-xs leading-relaxed text-slate-400">
-          האזורים שהשתנו יסומנו במרקר זוהר בשתי הגרסאות, ולכל דף יוצג מספר השינויים. הדפים מושווים לפי הסדר (דף 1 מול דף 1 וכן הלאה).
+          האזורים שהשתנו יסומנו במרקר זוהר בשתי הגרסאות, ולכל דף יוצג מספר השינויים. הדפים מותאמים אוטומטית — גם אם נוספו או הוסרו דפים באמצע הסט.
         </p>
         <label className="mb-1 block text-xs font-semibold text-slate-300">גרסה חדשה</label>
         {select(newId, setNewId, 'compare-new', oldId)}
@@ -172,27 +185,34 @@ export function CompareDialog() {
   );
 }
 
+const KIND_DOT: Record<ChangeKind, string> = { added: 'bg-green-500', removed: 'bg-red-500', modified: 'bg-amber-500' };
+const KINDS: ChangeKind[] = ['added', 'removed', 'modified'];
+
 /**
  * Floating bar while a compare is shown: progress, changes on this page and in
  * total, previous / next changed page, jump to the same page in the other
- * version, show / hide the highlights, close.
+ * version, show / hide the highlights, details panel, close.
  */
 export function CompareBar() {
   const status = useCompare((s) => s.status);
+  const phase = useCompare((s) => s.phase);
   const progress = useCompare((s) => s.progress);
   const visible = useCompare((s) => s.visible);
+  const panelOpen = useCompare((s) => s.panelOpen);
   const oldId = useCompare((s) => s.oldId);
   const newId = useCompare((s) => s.newId);
   const regions = useCompare((s) => s.regions);
   const notes = useCompare((s) => s.notes);
-  const totals = compareTotals({ regions, notes, oldId, newId });
+  const filter = useCompare((s) => s.filter);
+  const pairOf = useCompare((s) => s.pairOf);
+  const totals = compareTotals({ regions, notes, oldId, newId, filter });
   const docs = useViewer((s) => s.docs);
   const currentPage = useViewer((s) => s.currentPage);
   const setPage = useViewer((s) => s.setPage);
   const activeId = docIdAtPage(docs, currentPage);
   const doc = docs.find((d) => d.id === activeId);
   const local = doc ? currentPage - doc.pageOffset : 0;
-  const here = useCompare((s) => (activeId ? changesOnPage(s, activeId, local) : 0));
+  const here = useCompare((s) => (activeId ? pageChanges(s, activeId, local) : null));
   const compact = useCompactLayout();
 
   // A compared file was closed → the compare ends.
@@ -208,69 +228,236 @@ export function CompareBar() {
   const next = pages.find((p) => p > currentPage);
   const other = activeId === newId ? oldId : newId;
   const otherDoc = docs.find((d) => d.id === other);
+  // The matching page in the other version (content-matched when pages were inserted / deleted).
+  const otherLocal = activeId ? pairOf[activeId]?.[local] : undefined;
   const goOther = () => {
     if (!otherDoc) return;
-    setPage(otherDoc.pageOffset + Math.min(Math.max(1, local || 1), otherDoc.numPages));
+    setPage(otherDoc.pageOffset + Math.min(Math.max(1, otherLocal ?? (local || 1)), otherDoc.numPages));
   };
   const btn =
-    'flex h-8 min-w-8 items-center justify-center rounded-full px-2 text-xs font-semibold text-pink-100 hover:bg-pink-500/25 disabled:opacity-35 disabled:hover:bg-transparent';
+    'flex h-8 min-w-8 shrink-0 items-center justify-center rounded-full px-2 text-xs font-semibold text-pink-100 hover:bg-pink-500/25 disabled:opacity-35 disabled:hover:bg-transparent';
+
+  return (
+    <div className="absolute left-1/2 top-14 z-30 flex w-max max-w-[calc(100%-1rem)] -translate-x-1/2 flex-col items-center gap-1.5" dir="rtl">
+      <div
+        data-testid="compare-bar"
+        data-status={status}
+        className="flex max-w-full items-center gap-0.5 overflow-x-auto rounded-full border border-pink-500/60 bg-slate-900/90 p-1 text-pink-50 shadow-[0_0_18px_rgba(255,42,149,0.45)] backdrop-blur [scrollbar-width:none]"
+      >
+        {!compact && (
+          <span className="flex shrink-0 items-center gap-1 ps-2 text-pink-300">
+            <IconCompare size={16} />
+          </span>
+        )}
+        {status === 'running' && (
+          <span className="flex shrink-0 items-center gap-1.5 whitespace-nowrap px-1 text-xs" data-testid="compare-progress">
+            <span className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-pink-300/40 border-t-pink-300" aria-hidden="true" />
+            {phase === 'match' ? (compact ? 'מתאים ' : 'מתאים דפים ') : compact ? '' : 'משווה דף '}
+            {Math.min(progress.done + 1, progress.total)}/{progress.total}
+          </span>
+        )}
+        {status === 'error' && <span className="shrink-0 whitespace-nowrap px-1 text-xs text-red-300">ההשוואה נכשלה</span>}
+        {onCompared && here != null && (
+          <span className="shrink-0 whitespace-nowrap rounded-full bg-pink-600/80 px-2.5 py-1 text-xs font-bold text-white" data-testid="compare-here">
+            {activeId === newId ? 'חדשה' : 'קודמת'} · {compact ? '' : `דף ${local}: `}
+            {here === 0 ? 'ללא שינויים' : here === 1 ? 'שינוי אחד' : `${here} שינויים`}
+          </span>
+        )}
+        {status === 'done' && !compact && (
+          <span className="shrink-0 whitespace-nowrap px-1.5 text-xs text-pink-200" data-testid="compare-total">
+            סה״כ {totals.changes} שינויים ב-{totals.pages} דפים
+          </span>
+        )}
+        {onCompared && (
+          <>
+            <button type="button" className={btn} disabled={prev == null} onClick={() => prev != null && setPage(prev)} aria-label="דף שינוי קודם" title="דף שינוי קודם" data-testid="compare-prev">
+              ›
+            </button>
+            <button type="button" className={btn} disabled={next == null} onClick={() => next != null && setPage(next)} aria-label="דף שינוי הבא" title="דף שינוי הבא" data-testid="compare-next">
+              ‹
+            </button>
+          </>
+        )}
+        {otherDoc && (
+          <button type="button" className={btn + ' whitespace-nowrap'} onClick={goOther} data-testid="compare-swap" title="אותו דף בגרסה השנייה">
+            ⇄ {compact ? (activeId === newId ? 'קודמת' : 'חדשה') : activeId === newId ? 'לגרסה הקודמת' : 'לגרסה החדשה'}
+          </button>
+        )}
+        <button
+          type="button"
+          className={btn}
+          onClick={() => useCompare.setState({ visible: !visible })}
+          aria-pressed={!visible}
+          aria-label={visible ? 'הסתר סימון' : 'הצג סימון'}
+          data-testid="compare-toggle"
+          title={visible ? 'הסתר סימון' : 'הצג סימון'}
+        >
+          <IconEye off={!visible} />
+        </button>
+        <button
+          type="button"
+          className={btn + (panelOpen ? ' bg-pink-500/30' : '')}
+          onClick={() => useCompare.setState({ panelOpen: !panelOpen })}
+          aria-expanded={panelOpen}
+          aria-label="פרטי השוואה"
+          title="תצוגה, סוגי שינויים ורשימה"
+          data-testid="compare-details"
+        >
+          <IconSliders />
+        </button>
+        <button type="button" className={btn} onClick={clearCompare} aria-label="סגור השוואה" title="סגור השוואה" data-testid="compare-close">
+          <IconX size={14} />
+        </button>
+      </div>
+      {panelOpen && <CompareDetails totals={totals} done={status === 'done'} />}
+    </div>
+  );
+}
+
+function IconSliders() {
+  return (
+    <svg width={16} height={16} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" aria-hidden="true">
+      <path d="M4 6h10M18 6h2M4 12h4M12 12h8M4 18h12M20 18h0" />
+      <circle cx="16" cy="6" r="2" />
+      <circle cx="10" cy="12" r="2" />
+      <circle cx="18" cy="18" r="2" />
+    </svg>
+  );
+}
+
+/**
+ * Details under the bar (as in Forma's compare window): display mode
+ * (glowing markers / colour overlay of both versions), overlay layers,
+ * change types with counts (click = show / hide) and the list of changes
+ * (click = zoom to it).
+ */
+function CompareDetails({ totals, done }: { totals: CompareTotals; done: boolean }) {
+  const mode = useCompare((s) => s.mode);
+  const layers = useCompare((s) => s.layers);
+  const filter = useCompare((s) => s.filter);
+  const regions = useCompare((s) => s.regions);
+  const notes = useCompare((s) => s.notes);
+  const selected = useCompare((s) => s.selected);
+  const oldId = useCompare((s) => s.oldId);
+  const newId = useCompare((s) => s.newId);
+  const docs = useViewer((s) => s.docs);
+  const currentPage = useViewer((s) => s.currentPage);
+
+  // Changes of the new version + pages that exist only in the old one, in page order.
+  const items: { docId: string; local: number; global: number; index: number; r: DiffRegion; kind: ChangeKind; old: boolean }[] = [];
+  for (const id of [newId, oldId]) {
+    const d = docs.find((x) => x.id === id);
+    if (!d) continue;
+    for (const k of Object.keys(regions[d.id] ?? {})) {
+      const local = Number(k);
+      const note = notes[d.id]?.[local];
+      if (id === oldId && note !== 'removed') continue;
+      shownRegions({ regions, notes, filter }, d.id, local).forEach((r, index) =>
+        items.push({ docId: d.id, local, global: d.pageOffset + local, index, r, kind: regionKind(r, note), old: id === oldId }),
+      );
+    }
+  }
+  items.sort((a, b) => (a.old !== b.old ? (a.old ? 1 : -1) : a.local - b.local || a.index - b.index));
+
+  const pick = (it: (typeof items)[number]) => {
+    const size = useViewer.getState().pageSizes[it.global - 1];
+    useCompare.setState({ selected: { docId: it.docId, local: it.local, index: it.index }, visible: true });
+    if (!size) return;
+    const padX = Math.max(it.r.width * size.width * 0.6, 40);
+    const padY = Math.max(it.r.height * size.height * 0.6, 40);
+    focusRect(it.global, {
+      x: it.r.x * size.width - padX,
+      y: it.r.y * size.height - padY,
+      width: it.r.width * size.width + 2 * padX,
+      height: it.r.height * size.height + 2 * padY,
+    });
+  };
+
+  const seg = (on: boolean) =>
+    'h-8 flex-1 rounded-md px-2 text-xs font-semibold transition-colors ' + (on ? 'bg-pink-600 text-white shadow' : 'text-slate-300 hover:bg-slate-700');
+  const chip = (on: boolean) =>
+    'flex h-8 items-center gap-1.5 rounded-full border px-2.5 text-xs font-semibold transition-colors ' +
+    (on ? 'border-slate-500 bg-slate-800 text-white' : 'border-slate-700 bg-transparent text-slate-500 line-through');
 
   return (
     <div
-      dir="rtl"
-      data-testid="compare-bar"
-      data-status={status}
-      className="absolute left-1/2 top-14 z-30 flex max-w-[calc(100%-1rem)] -translate-x-1/2 items-center gap-0.5 overflow-x-auto rounded-full border border-pink-500/60 bg-slate-900/90 p-1 text-pink-50 shadow-[0_0_18px_rgba(255,42,149,0.45)] backdrop-blur [scrollbar-width:none]"
+      data-testid="compare-panel"
+      className="w-[min(22rem,calc(100vw-1rem))] rounded-xl border border-pink-500/50 bg-slate-900/95 p-2.5 text-slate-100 shadow-[0_0_18px_rgba(255,42,149,0.35)] backdrop-blur"
     >
-      <span className="flex shrink-0 items-center gap-1 ps-2 text-pink-300">
-        <IconCompare size={16} />
-      </span>
-      {status === 'running' && (
-        <span className="flex shrink-0 items-center gap-1.5 whitespace-nowrap px-1 text-xs" data-testid="compare-progress">
-          <span className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-pink-300/40 border-t-pink-300" aria-hidden="true" />
-          {compact ? '' : 'משווה דף '}{Math.min(progress.done + 1, progress.total)}/{progress.total}
-        </span>
-      )}
-      {status === 'error' && <span className="shrink-0 whitespace-nowrap px-1 text-xs text-red-300">ההשוואה נכשלה</span>}
-      {onCompared && (
-        <span className="shrink-0 whitespace-nowrap rounded-full bg-pink-600/80 px-2.5 py-1 text-xs font-bold text-white" data-testid="compare-here">
-          {activeId === newId ? 'חדשה' : 'קודמת'} · {compact ? '' : `דף ${local}: `}{here === 0 ? 'ללא שינויים' : here === 1 ? 'שינוי אחד' : `${here} שינויים`}
-        </span>
-      )}
-      {status === 'done' && (
-        <span className="shrink-0 whitespace-nowrap px-1.5 text-xs text-pink-200" data-testid="compare-total" title={`סה״כ ${totals.changes} שינויים ב-${totals.pages} דפים`}>
-          {compact ? `סה״כ ${totals.changes}` : `סה״כ ${totals.changes} שינויים ב-${totals.pages} דפים`}
-        </span>
-      )}
-      {onCompared && (
-        <>
-          <button type="button" className={btn} disabled={prev == null} onClick={() => prev != null && setPage(prev)} aria-label="דף שינוי קודם" title="דף שינוי קודם" data-testid="compare-prev">
-            ›
-          </button>
-          <button type="button" className={btn} disabled={next == null} onClick={() => next != null && setPage(next)} aria-label="דף שינוי הבא" title="דף שינוי הבא" data-testid="compare-next">
-            ‹
-          </button>
-        </>
-      )}
-      {otherDoc && (
-        <button type="button" className={btn + ' whitespace-nowrap'} onClick={goOther} data-testid="compare-swap" title="אותו דף בגרסה השנייה">
-          ⇄ {compact ? (activeId === newId ? 'קודמת' : 'חדשה') : activeId === newId ? 'לגרסה הקודמת' : 'לגרסה החדשה'}
+      <div className="mb-2 text-center text-xs font-semibold text-pink-200" data-testid="compare-panel-total">
+        {done ? `סה״כ ${totals.changes} שינויים ב-${totals.pages} דפים` : 'ההשוואה עדיין רצה…'}
+      </div>
+      <div className="flex gap-1 rounded-lg bg-slate-800 p-0.5" role="radiogroup" aria-label="אופן הצגה">
+        <button type="button" role="radio" aria-checked={mode === 'marker'} className={seg(mode === 'marker')} onClick={() => useCompare.setState({ mode: 'marker' })} data-testid="compare-mode-marker">
+          סימון זוהר
         </button>
+        <button type="button" role="radio" aria-checked={mode === 'overlay'} className={seg(mode === 'overlay')} onClick={() => useCompare.setState({ mode: 'overlay', visible: true })} data-testid="compare-mode-overlay">
+          שכבות צבע
+        </button>
+      </div>
+      {mode === 'overlay' && (
+        <div className="mt-2 flex items-center gap-1.5 text-xs" data-testid="compare-layers">
+          <span className="text-slate-400">שכבות:</span>
+          {(['old', 'new'] as const).map((k) => (
+            <button
+              key={k}
+              type="button"
+              aria-pressed={layers[k]}
+              onClick={() => useCompare.setState({ layers: { ...layers, [k]: !layers[k] } })}
+              className={chip(layers[k])}
+              data-testid={`compare-layer-${k}`}
+            >
+              <span className={'h-2.5 w-2.5 rounded-full ' + (k === 'old' ? 'bg-red-500' : 'bg-green-500')} />
+              {k === 'old' ? 'הוסר (קודמת)' : 'נוסף (חדשה)'}
+            </button>
+          ))}
+        </div>
       )}
-      <button
-        type="button"
-        className={btn}
-        onClick={() => useCompare.setState({ visible: !visible })}
-        aria-pressed={!visible}
-        aria-label={visible ? 'הסתר סימון' : 'הצג סימון'}
-        data-testid="compare-toggle"
-        title={visible ? 'הסתר סימון' : 'הצג סימון'}
-      >
-        {visible ? <IconEye off={false} /> : <IconEye off />}
-      </button>
-      <button type="button" className={btn} onClick={clearCompare} aria-label="סגור השוואה" title="סגור השוואה" data-testid="compare-close">
-        <IconX size={14} />
-      </button>
+      <div className="mt-2 flex flex-wrap items-center gap-1.5" role="group" aria-label="סוגי שינויים">
+        {KINDS.map((k) => (
+          <button
+            key={k}
+            type="button"
+            aria-pressed={filter[k]}
+            onClick={() => useCompare.setState({ filter: { ...filter, [k]: !filter[k] }, selected: null })}
+            className={chip(filter[k])}
+            data-testid={`compare-filter-${k}`}
+            title={filter[k] ? `הסתר "${KIND_LABEL[k]}"` : `הצג "${KIND_LABEL[k]}"`}
+          >
+            <span className={'h-2.5 w-2.5 rounded-full ' + KIND_DOT[k]} />
+            {KIND_LABEL[k]}
+            <span className="tabular-nums text-slate-400">{totals.byKind[k]}</span>
+          </button>
+        ))}
+      </div>
+      <div className="mt-2 max-h-[min(40vh,18rem)] overflow-y-auto rounded-lg border border-slate-700/70" data-testid="compare-list">
+        {items.length === 0 ? (
+          <div className="p-3 text-center text-xs text-slate-500">אין שינויים להצגה</div>
+        ) : (
+          items.map((it) => {
+            const sel = selected?.docId === it.docId && selected.local === it.local && selected.index === it.index;
+            return (
+              <button
+                key={`${it.docId}:${it.local}:${it.index}`}
+                type="button"
+                onClick={() => pick(it)}
+                data-testid="compare-list-item"
+                className={
+                  'flex w-full items-center gap-2 border-b border-slate-800 px-2.5 py-1.5 text-start text-xs last:border-b-0 hover:bg-slate-800 ' +
+                  (sel ? 'bg-pink-950/60' : it.global === currentPage ? 'bg-slate-800/50' : '')
+                }
+              >
+                <span className={'h-2.5 w-2.5 shrink-0 rounded-full ' + KIND_DOT[it.kind]} />
+                <span className="font-semibold">{KIND_LABEL[it.kind]}</span>
+                <span className="text-slate-400">
+                  {it.old ? 'גרסה קודמת · ' : ''}דף {it.local}
+                </span>
+                <span className="ms-auto rounded-full bg-slate-700 px-1.5 tabular-nums text-slate-300">#{it.index + 1}</span>
+              </button>
+            );
+          })
+        )}
+      </div>
     </div>
   );
 }

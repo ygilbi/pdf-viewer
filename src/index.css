@@ -14,28 +14,35 @@ html, body, #root { height: 100%; margin: 0; overflow: hidden; }
   }
 }
 
-/* ---- Version compare: glowing highlighter on changed areas ---- */
+/* ---- Version compare: glowing highlighter on changed areas, coloured by change type ---- */
 .cmp-mark {
+  --cmp: 255, 42, 149;
   border-radius: calc(4px * var(--inv-zoom, 1));
-  background: rgba(255, 32, 150, 0.13);
-  border: calc(2px * var(--inv-zoom, 1)) solid #ff2a95;
+  background: rgba(var(--cmp), 0.13);
+  border: calc(2px * var(--inv-zoom, 1)) solid rgb(var(--cmp));
   box-shadow:
-    0 0 calc(10px * var(--inv-zoom, 1)) calc(2px * var(--inv-zoom, 1)) rgba(255, 42, 149, 0.55),
-    inset 0 0 calc(10px * var(--inv-zoom, 1)) rgba(255, 42, 149, 0.35);
+    0 0 calc(10px * var(--inv-zoom, 1)) calc(2px * var(--inv-zoom, 1)) rgba(var(--cmp), 0.55),
+    inset 0 0 calc(10px * var(--inv-zoom, 1)) rgba(var(--cmp), 0.35);
 }
+.cmp-added { --cmp: 22, 190, 90; }
+.cmp-removed { --cmp: 239, 50, 60; }
+.cmp-modified { --cmp: 245, 166, 20; }
 /* The pulse animates opacity only (compositor-friendly, cheap on phones). */
 .cmp-mark::after {
   content: '';
   position: absolute;
   inset: calc(-5px * var(--inv-zoom, 1));
   border-radius: inherit;
-  box-shadow: 0 0 calc(18px * var(--inv-zoom, 1)) calc(5px * var(--inv-zoom, 1)) rgba(255, 64, 160, 0.7);
+  box-shadow: 0 0 calc(18px * var(--inv-zoom, 1)) calc(5px * var(--inv-zoom, 1)) rgba(var(--cmp), 0.7);
   opacity: 0;
   animation: cmp-pulse 1.6s ease-in-out infinite alternate;
 }
+.cmp-thin { background: transparent; }
+.cmp-sel { border-width: calc(3.5px * var(--inv-zoom, 1)); }
+.cmp-sel::after { animation-duration: 0.5s; }
 .cmp-whole {
   border-width: calc(4px * var(--inv-zoom, 1));
-  background: rgba(255, 32, 150, 0.06);
+  background: rgba(var(--cmp), 0.06);
 }
 @keyframes cmp-pulse {
   to { opacity: 1; }
@@ -47,11 +54,11 @@ html, body, #root { height: 100%; margin: 0; overflow: hidden; }
   position: absolute;
   padding: 0 calc(4px * var(--inv-zoom, 1));
   border-radius: 999px;
-  background: linear-gradient(135deg, #ff4fa8, #c2187a);
+  background: rgb(var(--cmp));
   color: #fff;
   font-weight: 700;
   text-align: center;
-  box-shadow: 0 0 calc(6px * var(--inv-zoom, 1)) rgba(255, 42, 149, 0.9);
+  box-shadow: 0 0 calc(6px * var(--inv-zoom, 1)) rgba(var(--cmp), 0.9);
   font-family: system-ui, 'Segoe UI', Arial, sans-serif;
 }
 .cmp-badge {

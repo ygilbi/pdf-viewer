@@ -12,7 +12,11 @@
  * No DOM / pdf.js: runs in a worker or in unit tests.
  */
 
+export type ChangeKind = 'added' | 'removed' | 'modified';
+
 export interface DiffRegion {
+  /** What changed here: only new ink (added), only old ink (removed) or both (modified). */
+  kind?: ChangeKind;
   /** Normalized to the page: 0..1 from the left / top. */
   x: number;
   y: number;
@@ -26,6 +30,11 @@ export interface PageDiff {
   shift: { dx: number; dy: number };
   /** Changed pixels found (before clustering). */
   changedPixels: number;
+  /**
+   * Per pixel of the new page (only with `withOverlay`): 0 paper, 1 ink in both versions,
+   * 2 added (new only), 3 removed (old only, mapped into new coordinates).
+   */
+  overlay?: Uint8Array;
 }
 
 export interface DiffOptions {
@@ -41,6 +50,8 @@ export interface DiffOptions {
   maxShift?: number;
   /** At most this many regions (the gap grows until it fits). */
   maxRegions?: number;
+  /** Also return the per-pixel overlay classes (PageDiff.overlay). */
+  withOverlay?: boolean;
 }
 
 const DEFAULTS: Required<DiffOptions> = {
@@ -50,7 +61,13 @@ const DEFAULTS: Required<DiffOptions> = {
   gap: 3,
   maxShift: 24,
   maxRegions: 120,
+  withOverlay: false,
 };
+
+/** Share of the other kind's pixels under which a region is purely added / removed. */
+const PURE = 0.12;
+/** Gray level under which a pixel is ink (overlay "in both"). */
+const INK = 200;
 
 /** RGBA → gray (Rec.601 luma), alpha composited on white. */
 export function toGray(rgba: Uint8ClampedArray | Uint8Array, w: number, h: number): Uint8Array {
@@ -144,11 +161,13 @@ export function estimateShift(oldG: Uint8Array, newG: Uint8Array, w: number, h: 
   return fine;
 }
 
-/** Changed-pixel mask: 1 where `p` has no close match in a 3×3 neighbourhood of `q` (q read at +dx,+dy). */
+/** Changed-pixel mask: 1 where an ink pixel of `p` has no close match in a 3×3 neighbourhood of `q` (q read at +dx,+dy). */
 function unmatched(p: Uint8Array, q: Uint8Array, w: number, h: number, dx: number, dy: number, t: number, out: Uint8Array) {
   for (let y = 0; y < h; y++) {
     for (let x = 0; x < w; x++) {
       const v = p[y * w + x];
+      // Only ink can be added / removed: paper is never "unmatched" (it is covered by the other direction).
+      if (v > 255 - t) continue;
       let found = false;
       for (let yy = -1; yy <= 1 && !found; yy++) {
         const qy = y + dy + yy;
@@ -187,7 +206,7 @@ export function diffPages(oldG: Uint8Array, newG: Uint8Array, w: number, h: numb
     for (let x = 0; x < w; x++) {
       if (!oldMask[y * w + x]) continue;
       const nx = x - shift.dx;
-      if (nx >= 0 && nx < w) mask[ny * w + nx] = 1;
+      if (nx >= 0 && nx < w) mask[ny * w + nx] |= 2;
     }
   }
 
@@ -195,12 +214,18 @@ export function diffPages(oldG: Uint8Array, newG: Uint8Array, w: number, h: numb
   const cw = Math.ceil(w / c);
   const ch = Math.ceil(h / c);
   const counts = new Uint16Array(cw * ch);
+  const addCounts = new Uint16Array(cw * ch);
+  const remCounts = new Uint16Array(cw * ch);
   let changedPixels = 0;
   for (let y = 0; y < h; y++) {
     const cy = ((y / c) | 0) * cw;
     for (let x = 0; x < w; x++) {
-      if (mask[y * w + x]) {
-        counts[cy + ((x / c) | 0)]++;
+      const m = mask[y * w + x];
+      if (m) {
+        const ci = cy + ((x / c) | 0);
+        counts[ci]++;
+        if (m & 1) addCounts[ci]++;
+        if (m & 2) remCounts[ci]++;
         changedPixels++;
       }
     }
@@ -214,7 +239,21 @@ export function diffPages(oldG: Uint8Array, newG: Uint8Array, w: number, h: numb
     gap = Math.ceil(gap * 1.6);
     boxes = clusterCells(hot, cw, ch, gap);
   }
-  const regions = mergeBoxes(boxes.map((b) => pad(b, 1, cw, ch))).map((b) => ({
+  const kindOf = (b: Box): ChangeKind => {
+    let add = 0;
+    let rem = 0;
+    for (let y = b.y0; y <= b.y1; y++)
+      for (let x = b.x0; x <= b.x1; x++) {
+        add += addCounts[y * cw + x];
+        rem += remCounts[y * cw + x];
+      }
+    const t = add + rem;
+    if (rem <= t * PURE) return 'added';
+    if (add <= t * PURE) return 'removed';
+    return 'modified';
+  };
+  const regions: DiffRegion[] = mergeBoxes(boxes.map((b) => pad(b, 1, cw, ch))).map((b) => ({
+    kind: kindOf(b),
     x: (b.x0 * c) / w,
     y: (b.y0 * c) / h,
     width: Math.min(w, (b.x1 + 1) * c) / w - (b.x0 * c) / w,
@@ -222,7 +261,15 @@ export function diffPages(oldG: Uint8Array, newG: Uint8Array, w: number, h: numb
   }));
   // Reading order: top to bottom, then right to left (Hebrew drawings).
   regions.sort((a, b) => (Math.abs(a.y - b.y) > 0.02 ? a.y - b.y : b.x - a.x));
-  return { regions, shift, changedPixels };
+  let overlay: Uint8Array | undefined;
+  if (o.withOverlay) {
+    overlay = new Uint8Array(w * h);
+    for (let i = 0; i < w * h; i++) {
+      const m = mask[i];
+      overlay[i] = m & 2 ? 3 : m & 1 ? 2 : newG[i] < INK ? 1 : 0;
+    }
+  }
+  return { regions, shift, changedPixels, overlay };
 }
 
 interface Box {
@@ -316,4 +363,102 @@ export function pairPages(oldPages: number, newPages: number): { both: number; a
   for (let p = both + 1; p <= newPages; p++) added.push(p);
   for (let p = both + 1; p <= oldPages; p++) removed.push(p);
   return { both, added, removed };
+}
+
+/**
+ * Page fingerprint for matching pages between versions: a coarse gray thumbnail
+ * (`size`×`size`, aspect ignored) of a gray page image.
+ */
+export function fingerprint(g: Uint8Array, w: number, h: number, size = 32): Uint8Array {
+  const out = new Uint8Array(size * size);
+  for (let y = 0; y < size; y++) {
+    const y0 = Math.floor((y * h) / size);
+    const y1 = Math.max(y0 + 1, Math.floor(((y + 1) * h) / size));
+    for (let x = 0; x < size; x++) {
+      const x0 = Math.floor((x * w) / size);
+      const x1 = Math.max(x0 + 1, Math.floor(((x + 1) * w) / size));
+      let s = 0;
+      for (let yy = y0; yy < y1; yy++) for (let xx = x0; xx < x1; xx++) s += g[yy * w + xx];
+      out[y * size + x] = s / ((y1 - y0) * (x1 - x0));
+    }
+  }
+  return out;
+}
+
+/** 0 (same) .. 1 (different): mean abs difference over cells where either page has ink, normalized by contrast. */
+export function fingerprintDistance(a: Uint8Array, b: Uint8Array): number {
+  let sum = 0;
+  let n = 0;
+  for (let i = 0; i < a.length; i++) {
+    if (a[i] > 252 && b[i] > 252) continue;
+    sum += Math.abs(a[i] - b[i]) / Math.max(8, 255 - Math.min(a[i], b[i]));
+    n++;
+  }
+  return n ? Math.min(1, sum / n) : 0;
+}
+
+export interface PagePairing {
+  /** [oldLocal, newLocal] pairs to diff, in order. */
+  pairs: [number, number][];
+  /** New pages with no old counterpart. */
+  added: number[];
+  /** Old pages with no new counterpart. */
+  removed: number[];
+}
+
+/**
+ * Matches pages of two versions in order, allowing inserted / deleted pages
+ * (sequence alignment on fingerprint distances; a gap costs `gap`).
+ * Pages are never reordered — drawing sets keep their order.
+ */
+export function matchPages(oldFp: Uint8Array[], newFp: Uint8Array[], gap = 0.3): PagePairing {
+  const n = oldFp.length;
+  const m = newFp.length;
+  const cost = Array.from({ length: n + 1 }, () => new Float64Array(m + 1));
+  const move = Array.from({ length: n + 1 }, () => new Uint8Array(m + 1)); // 1 diag, 2 up (old gap), 3 left (new gap)
+  for (let i = 1; i <= n; i++) {
+    cost[i][0] = i * gap;
+    move[i][0] = 2;
+  }
+  for (let j = 1; j <= m; j++) {
+    cost[0][j] = j * gap;
+    move[0][j] = 3;
+  }
+  for (let i = 1; i <= n; i++) {
+    for (let j = 1; j <= m; j++) {
+      const d = cost[i - 1][j - 1] + fingerprintDistance(oldFp[i - 1], newFp[j - 1]);
+      const u = cost[i - 1][j] + gap;
+      const l = cost[i][j - 1] + gap;
+      if (d <= u && d <= l) {
+        cost[i][j] = d;
+        move[i][j] = 1;
+      } else if (u <= l) {
+        cost[i][j] = u;
+        move[i][j] = 2;
+      } else {
+        cost[i][j] = l;
+        move[i][j] = 3;
+      }
+    }
+  }
+  const pairs: [number, number][] = [];
+  const added: number[] = [];
+  const removed: number[] = [];
+  let i = n;
+  let j = m;
+  while (i > 0 || j > 0) {
+    const mv = move[i][j];
+    if (mv === 1) {
+      pairs.push([i, j]);
+      i--;
+      j--;
+    } else if (mv === 2) {
+      removed.push(i);
+      i--;
+    } else {
+      added.push(j);
+      j--;
+    }
+  }
+  return { pairs: pairs.reverse(), added: added.reverse(), removed: removed.reverse() };
 }
