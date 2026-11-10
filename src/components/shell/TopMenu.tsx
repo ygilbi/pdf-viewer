@@ -26,6 +26,19 @@ import { cancelSaveAs, dismissSaveAs, saveAsMarked, useSaveAs } from '../../expo
 import { useCompactLayout } from './layout';
 import { TABBAR_H } from './FileTabBar';
 import { visibleTopMenu, type TopMenuItemId } from './topMenuItems';
+import { sendToGilboa } from '../SendToGilboaButton';
+import { kindOf } from '../../core/measurementEngine';
+
+/** Paper-plane icon for "שלח לגלבוע". */
+function IconSend() {
+  return (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M22 2 11 13" />
+      <path d="M22 2 15 22l-4-9-9-4 20-7z" />
+    </svg>
+  );
+}
+const TAKEOFF_KINDS = new Set(['area', 'deduct', 'length', 'count']);
 
 /** Bar height: slim on desktop, 44px touch targets (+ padding) on phones / touch. */
 export const TOPMENU_H = '2.5rem';
@@ -56,7 +69,7 @@ interface BarButtonProps {
   /** Shown in the native tooltip (title) after the label. */
   shortcut?: string;
   icon: ReactNode;
-  onClick(): void;
+  onClick(e?: { shiftKey?: boolean }): void;
   disabled?: boolean;
   active?: boolean;
   /** Show the label next to the icon (wide desktop only; phones are icons only). */
@@ -112,6 +125,8 @@ export function TopMenu({ onOpenFile }: { onOpenFile(file: File): void }) {
   const saving = useSaveAs((s) => s.status?.phase === 'running');
   const compact = useCompactLayout();
   const hasDoc = numPages > 0;
+  // Saved takeoff quantities (not markup, not temporary view-mode checks): what "שלח לגלבוע" sends.
+  const takeoffCount = useViewer((s) => s.measurements.reduce((n, x) => (!x.temp && TAKEOFF_KINDS.has(kindOf(x)) ? n + 1 : n), 0));
 
   const fileInput = useRef<HTMLInputElement>(null);
   const row = useRef<HTMLDivElement>(null);
@@ -240,6 +255,19 @@ export function TopMenu({ onOpenFile }: { onOpenFile(file: File): void }) {
         return <BarButton key={id} {...common} testId="menu-search" label="חיפוש" shortcut="F3" icon={<IconSearch />} showLabel disabled={!hasDoc} onClick={() => openSearch()} />;
       case 'export':
         return <BarButton key={id} {...common} testId="menu-export" label="ייצוא" shortcut="E" icon={<IconDownload />} showLabel disabled={!hasDoc} onClick={() => openExportDialog()} />;
+      case 'gilboa':
+        return (
+          <BarButton
+            key={id}
+            {...common}
+            testId="menu-gilboa"
+            label="שלח לגלבוע"
+            icon={<IconSend />}
+            showLabel
+            disabled={!hasDoc || takeoffCount === 0}
+            onClick={(e) => sendToGilboa(e)}
+          />
+        );
       case 'category':
         return (
           <div key={id} className="shrink-0" data-testid="menu-category">
