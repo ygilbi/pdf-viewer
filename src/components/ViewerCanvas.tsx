@@ -33,6 +33,7 @@ import { PageLayers } from './viewer/TileLayer';
 import { LINK_COLOR, MeasureOverlay, OVERLAY_WARN_COLOR } from './viewer/MeasureOverlay';
 import { emitZoom, registerViewer, takePendingFocus } from './viewer/commands';
 import { TextHighlights } from './text/TextHighlights';
+import { CompareHighlights } from '../compare/CompareHighlights';
 import { MarkupEditor, NoteBubbles, TextEditEditor } from './viewer/MarkupHtml';
 import { SignatureDialog } from './doc/SignatureDialog';
 import { useDocEdit } from '../state/docEditStore';
@@ -1824,6 +1825,7 @@ export default function ViewerCanvas() {
           />
         )}
         {size && <TextHighlights page={currentPage} />}
+        {size && <CompareHighlights page={currentPage} />}
         {size && <NoteBubbles notes={pageNotes} selectedId={selectedId} editingId={editingId} />}
         {editing && <MarkupEditor key={editing.id} m={editing} />}
         {pendingEdit && pendingEdit.page === currentPage && <TextEditEditor key={pendingEdit.id} m={pendingEdit} isNew />}

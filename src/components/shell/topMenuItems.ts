@@ -8,6 +8,7 @@ import { itemsTableAvailable } from '../../state/editMode';
 export type TopMenuItemId =
   | 'open'
   | 'saveAs'
+  | 'compare'
   | 'prevPage'
   | 'page'
   | 'nextPage'
@@ -35,7 +36,7 @@ export interface TopMenuGroup {
 }
 
 export const TOP_MENU_GROUPS: readonly TopMenuGroup[] = [
-  { id: 'file', label: 'קובץ', items: ['open', 'saveAs'] },
+  { id: 'file', label: 'קובץ', items: ['open', 'saveAs', 'compare'] },
   { id: 'pages', label: 'דפים', items: ['prevPage', 'page', 'nextPage'] },
   { id: 'zoom', label: 'זום', items: ['zoomOut', 'zoomLevel', 'zoomIn', 'fit'] },
   { id: 'search', label: 'חיפוש', items: ['search'] },
