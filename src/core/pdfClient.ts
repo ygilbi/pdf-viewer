@@ -201,10 +201,10 @@ class MainThreadRenderer {
   async getSnapGeometry(docId: string, localPage: number): Promise<SnapGeometry> {
     const d = this.docs.get(docId);
     if (!d) throw new Error('No document is open');
-    const [{ doc }, { pdfjs }, vs] = await Promise.all([d.ready, this.libP, import('./vectorSnap')]);
+    const [{ doc }, { pdfjs, rq }, vs] = await Promise.all([d.ready, this.libP, import('./vectorSnap')]);
     const t0 = performance.now();
     const page = await doc.getPage(localPage);
-    const opList = await page.getOperatorList({ annotationMode: pdfjs.AnnotationMode.DISABLE });
+    const opList = await rq.operatorListForGeometry(page);
     const r = vs.snapPointsFromOperatorList(opList, pdfjs.OPS as unknown as import('./vectorSnap').SnapOps, page.getViewport({ scale: 1 }).transform);
     return { ...r, ms: performance.now() - t0, extractMs: r.ms };
   }
@@ -235,12 +235,14 @@ class MainThreadRenderer {
       if (!ctx) throw new Error('Canvas 2D context unavailable');
       await rq.renderInto(page, ctx, plan, job.active, slices.forJob(() => job.priority));
       if (job.active.cancelled) throw rq.makeCancelError();
+      const ops = rq.displayOpCount(page);
+      if (ops !== undefined) pages.noteOps(job.localPage, ops);
       const bitmap = await createImageBitmap(canvas);
       if (job.active.cancelled) {
         bitmap.close();
         throw rq.makeCancelError();
       }
-      job.done.resolve({ bitmap, page: job.opts.page, scale: plan.scale, region: plan.region });
+      job.done.resolve({ bitmap, page: job.opts.page, scale: plan.scale, region: plan.region, ops });
     } catch (e) {
       job.done.reject(rq.isCancelError(e) ? abortError('Render cancelled') : e instanceof Error ? e : new Error(String(e)));
     } finally {
@@ -635,7 +637,7 @@ class PdfClientImpl implements WorkspaceClient {
           msg.bitmap.close(); // cancelled / superseded
           return;
         }
-        r.resolve({ bitmap: msg.bitmap, page: r.opts.page, scale: msg.scale, region: msg.region });
+        r.resolve({ bitmap: msg.bitmap, page: r.opts.page, scale: msg.scale, region: msg.region, ops: msg.ops });
         break;
       }
       case 'renderError': {

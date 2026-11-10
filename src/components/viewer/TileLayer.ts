@@ -113,6 +113,30 @@ export function rasterMemoryMB(): number {
 }
 if (typeof window !== 'undefined') (window as unknown as { __pvRasterMB?: () => number }).__pvRasterMB = rasterMemoryMB;
 
+/**
+ * Operator count from which a page is "heavy" (huge vector drawing, e.g. a 1.75M-op CAD strip:
+ * every render walks all operators for seconds and the parsed list alone is ~250 MB of worker
+ * heap). Typical drawings have 1k–100k ops. On a constrained device a heavy page gets a lean mode:
+ * no neighbour prefetch and no speculative renders (zoom-target pre-render / slow-pan renders,
+ * see ViewerCanvas) — only the settled view is rendered, one render at a time.
+ */
+export const HEAVY_OPS = 300_000;
+
+export interface HeavyPageInfo {
+  page: number;
+  ops: number;
+  /** Lean mode engaged (constrained-device profile). */
+  lean: boolean;
+}
+const heavyListeners = new Set<(info: HeavyPageInfo) => void>();
+/** Called once per document page detected as heavy (crash-report breadcrumbs). */
+export function subscribeHeavyPage(cb: (info: HeavyPageInfo) => void): () => void {
+  heavyListeners.add(cb);
+  return () => {
+    heavyListeners.delete(cb);
+  };
+}
+
 const PRIO_SHARP = 90;
 const PRIO_BASE = 80;
 const PRIO_HALO = 40;
@@ -250,6 +274,8 @@ export class PageLayers {
   private lastView: View | null = null;
   private useCounter = 0;
   private destroyed = false;
+  /** Operator counts of this document's pages, as reported by renders (heavy-page detection). */
+  private pageOps = new Map<number, number>();
   /** Called when a new sharp tile is shown (for tests / debugging). */
   onTile: ((t: { scale: number; region: Rect }) => void) | null = null;
 
@@ -271,6 +297,43 @@ export class PageLayers {
   /** 0 = nothing drawn, 2 = full base. */
   get baseQuality(): number {
     return this.baseLevel;
+  }
+
+  /**
+   * The shown page is heavy and the device constrained: render only settled views (no
+   * speculative zoom-target / slow-pan renders) and prefetch nothing.
+   */
+  get lean(): boolean {
+    return this.isLeanPage(this.page);
+  }
+
+  private isLeanPage(page: number): boolean {
+    return memProfile() === MOBILE_PROFILE && (this.pageOps.get(page) ?? 0) >= HEAVY_OPS;
+  }
+
+  /** Remember a page's operator count from a render result; announces heavy pages once. */
+  private noteOps(page: number, ops: number | undefined): void {
+    if (ops === undefined || this.pageOps.get(page) === ops) return;
+    const known = this.pageOps.has(page);
+    this.pageOps.set(page, ops);
+    if (known || ops < HEAVY_OPS) return;
+    const info: HeavyPageInfo = { page, ops, lean: this.isLeanPage(page) };
+    for (const cb of heavyListeners) {
+      try {
+        cb(info);
+      } catch {
+        /* diagnostics must not break rendering */
+      }
+    }
+    if (info.lean && page === this.page) {
+      // Drop neighbour prefetches started before we knew (each would parse another op list).
+      for (const [p, f] of [...this.baseInflight]) {
+        if (p !== page) {
+          f.task.cancel();
+          this.baseInflight.delete(p);
+        }
+      }
+    }
   }
 
   /**
@@ -300,6 +363,7 @@ export class PageLayers {
       this.docKey = docKey;
       this.baseCache.clear();
       this.cancelAllBase();
+      this.pageOps.clear();
     }
     this.sizes = sizes ?? [];
     this.cancelSharp();
@@ -414,6 +478,7 @@ export class PageLayers {
     task.promise.then(
       (r) => {
         if (this.inflight === entry) this.inflight = null;
+        this.noteOps(entry.page, r.ops);
         if (this.destroyed || r.page !== this.page || entry.page !== this.page) {
           r.bitmap.close();
           return;
@@ -507,6 +572,7 @@ export class PageLayers {
     task.promise.then(
       (r) => {
         if (this.halo === entry) this.halo = null;
+        this.noteOps(entry.page, r.ops);
         if (this.destroyed || r.page !== this.page) {
           r.bitmap.close();
           return;
@@ -531,6 +597,7 @@ export class PageLayers {
           r.bitmap.close();
           return;
         }
+        this.noteOps(page, r.ops);
         this.baseCache.set(r.page, { bitmap: r.bitmap }); // cache takes ownership
         if (r.page === this.page && this.baseLevel < 2) {
           this.drawBase(r.bitmap);
@@ -547,6 +614,7 @@ export class PageLayers {
   /** Low-priority work once the visible page's base is up: prefetch the neighbours' bases. */
   private startBackground(): void {
     const page = this.page;
+    if (this.lean) return; // heavy page on a phone: nothing in the background
     for (const p of [page + 1, page - 1].slice(0, memProfile().prefetchNeighbours)) {
       const sz = this.sizes[p - 1];
       if (!sz || this.baseInflight.has(p) || this.baseCache.has(p)) continue;

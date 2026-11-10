@@ -8,6 +8,7 @@
  */
 import type { PDFDocumentProxy, PDFPageProxy, RenderTask as PdfJsRenderTask } from 'pdfjs-dist';
 import type { Rect } from './types';
+import { trackTransform } from './ctxTransform';
 
 /** Prefix of an `error` message meaning "this environment cannot render here, use the fallback". */
 export const UNSUPPORTED_PREFIX = 'PDF_WORKER_UNSUPPORTED:';
@@ -212,13 +213,72 @@ export class PriorityYield {
 // Page LRU
 // ---------------------------------------------------------------------------
 
-/** LRU of PDFPageProxy; evicted pages get `cleanup()` to free operator lists / resources. */
+/**
+ * Upper bound for the operators of all pages whose operator lists stay cached (PageCache). A parsed
+ * operator list costs ~140 B/op of JS heap in the render worker; normal documents never get near
+ * this (typical pages have 1k–100k ops), but a few heavy pages (e.g. a 1.75M-op CAD strip ≈ 250 MB)
+ * would otherwise all stay resident.
+ */
+export const MAX_CACHED_OPS = 3_000_000;
+
+type IntentStateLike = { operatorList?: { fnArray: unknown[]; lastChunk: boolean }; renderTasks?: Set<unknown> };
+type PageInternals = {
+  _intentStates?: Map<string, IntentStateLike>;
+  _transport?: { getRenderingIntent?: (intent: string, annotationMode: number) => { cacheKey: string } };
+};
+
+/** pdf.js' cached, COMPLETE operator list of `page` for our render intent (display, annotations disabled), if any. */
+function displayOpList(page: PDFPageProxy): IntentStateLike['operatorList'] | undefined {
+  try {
+    const p = page as unknown as PageInternals;
+    const key = p._transport?.getRenderingIntent?.('display', 0 /* AnnotationMode.DISABLE */)?.cacheKey;
+    const list = key !== undefined ? p._intentStates?.get(key)?.operatorList : undefined;
+    return list?.lastChunk && Array.isArray(list.fnArray) ? list : undefined;
+  } catch {
+    return undefined; // pdf.js internals changed: callers fall back to the public API
+  }
+}
+
+/** Operator count of the page's rendered operator list (undefined until a render has built it). */
+export function displayOpCount(page: PDFPageProxy): number | undefined {
+  return displayOpList(page)?.fnArray.length;
+}
+
+/**
+ * The page's operator list for geometry extraction (snapping) WITHOUT keeping a second copy:
+ * `getOperatorList()` uses pdf.js' "oplist" intent, which is cached separately from the list the
+ * renders use — on a heavy page that is another ~250 MB. Reuses the render's list when it is
+ * complete; otherwise builds one and drops pdf.js' cached copy afterwards (callers cache the result).
+ */
+export async function operatorListForGeometry(page: PDFPageProxy): Promise<{ fnArray: number[]; argsArray: unknown[] }> {
+  const cached = displayOpList(page);
+  if (cached) return cached as unknown as { fnArray: number[]; argsArray: unknown[] };
+  const list = await page.getOperatorList({ annotationMode: 0 /* AnnotationMode.DISABLE (same as rendering) */ });
+  try {
+    const states = (page as unknown as PageInternals)._intentStates;
+    for (const [key, st] of states ?? []) {
+      if (st.operatorList === (list as unknown) && !st.renderTasks?.size) states!.delete(key);
+    }
+  } catch {
+    /* keep pdf.js' copy */
+  }
+  return list;
+}
+
+/**
+ * LRU of PDFPageProxy; evicted pages get `cleanup()` to free operator lists / resources. Besides
+ * the page count, the total size of the cached operator lists is bounded (MAX_CACHED_OPS; sizes
+ * reported via noteOps after a render), so a document with several heavy pages keeps only the
+ * most recent one(s) parsed.
+ */
 export class PageCache {
   private pages = new Map<number, Promise<PDFPageProxy>>();
+  private ops = new Map<number, number>();
 
   constructor(
     private readonly doc: PDFDocumentProxy,
     private readonly max = PAGE_CACHE_SIZE,
+    private readonly maxOps = MAX_CACHED_OPS,
   ) {}
 
   get(pageNumber: number): Promise<PDFPageProxy> {
@@ -231,17 +291,37 @@ export class PageCache {
     p = this.doc.getPage(pageNumber);
     p.catch(() => this.pages.delete(pageNumber));
     this.pages.set(pageNumber, p);
-    while (this.pages.size > this.max) {
-      const [oldNum, oldPage] = this.pages.entries().next().value as [number, Promise<PDFPageProxy>];
-      this.pages.delete(oldNum);
-      // cleanup() is a no-op (returns false) while renders are pending on the page.
-      oldPage.then((pg) => pg.cleanup()).catch(() => {});
-    }
+    this.trim();
     return p;
+  }
+
+  /** Record the operator count of a page's (now cached) operator list; may evict older pages. */
+  noteOps(pageNumber: number, ops: number): void {
+    if (!this.pages.has(pageNumber)) return;
+    this.ops.set(pageNumber, ops);
+    this.trim();
   }
 
   clear(): void {
     this.pages.clear();
+    this.ops.clear();
+  }
+
+  private totalOps(): number {
+    let n = 0;
+    for (const v of this.ops.values()) n += v;
+    return n;
+  }
+
+  private trim(): void {
+    // Never evict the most recently used page (the one being rendered).
+    while (this.pages.size > 1 && (this.pages.size > this.max || this.totalOps() > this.maxOps)) {
+      const [oldNum, oldPage] = this.pages.entries().next().value as [number, Promise<PDFPageProxy>];
+      this.pages.delete(oldNum);
+      this.ops.delete(oldNum);
+      // cleanup() is a no-op (returns false) while renders are pending on the page.
+      oldPage.then((pg) => pg.cleanup()).catch(() => {});
+    }
   }
 }
 
@@ -300,6 +380,8 @@ export async function renderInto(
   ctx.fillStyle = '#ffffff';
   ctx.fillRect(0, 0, plan.width, plan.height);
   if (active.cancelled) throw makeCancelError();
+  // getTransform() without a native DOMMatrix per path (see ctxTransform.ts). Fresh context per render.
+  trackTransform(ctx);
   const task = page.render({
     canvasContext: ctx as CanvasRenderingContext2D,
     viewport,

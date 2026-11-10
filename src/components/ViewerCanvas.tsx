@@ -362,7 +362,13 @@ export default function ViewerCanvas() {
       updateBand();
       clearTimeout(settleTimer);
       settleTimer = window.setTimeout(settle, SETTLE_MS);
-      if (target) {
+      if (layers.lean) {
+        // Heavy page on a phone: every render walks ~1M+ operators for seconds; render only the
+        // settled view (no speculative zoom-target / slow-pan renders that would be cancelled).
+        lastTargetKey = '';
+        panSample = null;
+        clearTimeout(targetTimer);
+      } else if (target) {
         // Start the sharp render for where the animation will END while it plays.
         // Rounded: the target pan is recomputed every frame (float noise must not reset the timer).
         const tk = `${target.zoom.toPrecision(6)}|${target.visible.x.toFixed(1)}|${target.visible.y.toFixed(1)}`;

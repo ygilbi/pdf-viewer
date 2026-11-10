@@ -16,7 +16,7 @@ import pdfjsWorkerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
 import type { Rect, WorkerRequest, WorkerResponse } from './types';
 import type { TextItem, TextWorkerRequest, TextWorkerResponse } from './types';
 import { toTextItems } from '../text/textGeometry';
-import { AnnotationMode, OPS } from 'pdfjs-dist';
+import { OPS } from 'pdfjs-dist';
 import type { SnapWorkerRequest, SnapWorkerResponse } from './types';
 import { snapPointsFromOperatorList, type SnapOps } from './vectorSnap';
 import {
@@ -25,9 +25,11 @@ import {
   RenderScheduler,
   UNSUPPORTED_PREFIX,
   describeLoadError,
+  displayOpCount,
   getAllPageSizes,
   isCancelError,
   makeCancelError,
+  operatorListForGeometry,
   planRender,
   renderInto,
   type ActiveRender,
@@ -273,8 +275,10 @@ async function runJob(job: Job): Promise<void> {
     if (!ctx) throw new Error(UNSUPPORTED_PREFIX + 'OffscreenCanvas 2D context is not available');
     await renderInto(page, ctx, plan, job.active, slices.forJob(() => job.priority));
     if (job.active.cancelled) throw makeCancelError();
+    const ops = displayOpCount(page);
+    if (ops !== undefined) pages.noteOps(job.page, ops);
     const bitmap = canvas.transferToImageBitmap();
-    post({ type: 'rendered', id: job.id, page: job.page, bitmap, scale: plan.scale, region: plan.region }, [bitmap]);
+    post({ type: 'rendered', id: job.id, page: job.page, bitmap, scale: plan.scale, region: plan.region, ops }, [bitmap]);
   } catch (e) {
     const cancelled = job.active.cancelled || isCancelError(e);
     post({
@@ -418,8 +422,8 @@ function pageSnapGeometry(d: DocState, pageNumber: number): Promise<SnapResult> 
       if (d.closed) throw makeCancelError();
       const page = await doc.getPage(pageNumber);
       const vt = page.getViewport({ scale: 1 }).transform;
-      // Same annotation mode as rendering (annotations are not drawn).
-      const opList = await page.getOperatorList({ annotationMode: AnnotationMode.DISABLE });
+      // The render's own operator list when it is built (no second copy; see operatorListForGeometry).
+      const opList = await operatorListForGeometry(page);
       if (d.closed) throw makeCancelError();
       const r = snapPointsFromOperatorList(opList, OPS as unknown as SnapOps, vt);
       return { ...r, ms: performance.now() - t0, extractMs: r.ms };

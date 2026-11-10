@@ -18,6 +18,7 @@
 import { useViewer } from '../state/store';
 import { useUi } from '../state/uiStore';
 import { subscribeZoom } from '../components/viewer/commands';
+import { subscribeHeavyPage } from '../components/viewer/TileLayer';
 import { RingBuffer } from './ring';
 import { HEARTBEAT_MS, LIVE_CHECK_MS, classifyMarker, isBenignError, isMarker, type AliveMarker, type DiagState, type Verdict } from './crash';
 import { fileLabel, scrubText, sessionDump, type Crumb, type CrumbValue, type SessionDump } from './report';
@@ -493,6 +494,9 @@ function installListeners(): void {
     state.zoom = z;
     if (started) zoomCrumb(z);
   });
+
+  // Heavy page (huge operator list) detected by the viewer; lean = phone lean mode engaged.
+  subscribeHeavyPage(({ page, ops, lean }) => crumb('heavy', { page, ops, lean }));
 }
 
 function safeJson(v: unknown): string {

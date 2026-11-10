@@ -2,10 +2,12 @@ import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 import { serviceWorkerPlugin } from './src/pwa/swPlugin';
 import { appVersionPlugin } from './src/pwa/appVersionPlugin';
+import { pdfjsPatchPlugin } from './src/core/pdfjsPatchPlugin';
 
 export default defineConfig({
-  plugins: [react(), serviceWorkerPlugin(), appVersionPlugin()],
-  worker: { format: 'es' },
+  plugins: [pdfjsPatchPlugin(), react(), serviceWorkerPlugin(), appVersionPlugin()],
+  // The render worker bundles pdf.js too: same display-layer patch there (see pdfjsPatchPlugin.ts).
+  worker: { format: 'es', plugins: () => [pdfjsPatchPlugin()] },
   // pdf.js CMaps / standard fonts are imported with ?inline (see renderQueue.ts)
   assetsInclude: ['**/*.bcmap', '**/*.pfb'],
   build: {

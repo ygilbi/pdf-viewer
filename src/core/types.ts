@@ -60,7 +60,8 @@ export type WorkerRequest =
 
 export type WorkerResponse =
   | { type: 'opened'; numPages: number; pageSizes: PageSize[]; docId?: string }
-  | { type: 'rendered'; id: number; page: number; bitmap: ImageBitmap; scale: number; region: Rect }
+  /** `ops`: operator count of the page's (cached) operator list, when known — heavy-page detection. */
+  | { type: 'rendered'; id: number; page: number; bitmap: ImageBitmap; scale: number; region: Rect; ops?: number }
   | { type: 'renderError'; id: number; message: string; cancelled?: boolean }
   | { type: 'error'; message: string; docId?: string };
 
@@ -73,6 +74,8 @@ export interface RenderResult {
   page: number;
   scale: number;
   region: Rect;
+  /** Number of pdf.js operators on the page (when known); ≥ HEAVY_OPS (viewer/TileLayer.ts) = heavy page. */
+  ops?: number;
 }
 
 export interface RenderTask {
