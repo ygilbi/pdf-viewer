@@ -17,6 +17,7 @@ import { afterFirstPaint } from '../../state/firstPaint';
 import { applyModeEvent, loadEditChrome } from './modeActions';
 import { BottomSlot, CleanDock } from './ModeDock';
 import { useCompactLayout } from './layout';
+import { CompareBar, CompareDialog } from '../../compare/ComparePanel';
 
 // Lazy chunks: none of these is needed to show the first page of a file.
 const EditChrome = lazy(loadEditChrome);
@@ -152,6 +153,8 @@ export function ViewerShell(_props: { onOpenFile(file: File): void }) {
         </Drawer>
       )}
       <SearchHost />
+      <CompareBar />
+      <CompareDialog />
       {exportOpen && (
         <Suspense fallback={null}>
           <ExportDialog />

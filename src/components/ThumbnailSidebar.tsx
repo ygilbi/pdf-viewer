@@ -5,6 +5,8 @@ import type { PageSize, WorkspaceDoc } from '../core/types';
 import { useFileQueue } from '../state/fileQueue';
 import { IconFilePdf, IconPanel, IconX } from './ui/icons';
 import { persistentMeasurements } from '../core/tempMeasurements';
+import { useShallow } from 'zustand/react/shallow';
+import { useCompare } from '../compare/compareStore';
 
 // ---------------------------------------------------------------------------
 // Layout constants
@@ -126,6 +128,8 @@ interface ThumbProps {
   ready: boolean;
   active: boolean;
   count: number;
+  /** Version-compare changes on this page (null = page not part of a compare). */
+  changes: number | null;
   calibrated: boolean;
   onSelect(page: number): void;
 }
@@ -141,6 +145,7 @@ const Thumb = memo(function Thumb({
   ready,
   active,
   count,
+  changes,
   calibrated,
   onSelect,
 }: ThumbProps) {
@@ -227,6 +232,18 @@ const Thumb = memo(function Thumb({
           <div className="absolute inset-0 flex items-center justify-center bg-slate-200">
             <div className="h-4 w-4 animate-spin rounded-full border-2 border-slate-400 border-t-transparent" />
           </div>
+        )}
+        {changes != null && (
+          <span
+            data-testid="thumb-changes"
+            className={
+              'absolute start-1 top-1 min-w-[1.25rem] rounded-full px-1 text-center text-[10px] font-bold leading-5 text-white ' +
+              (changes > 0 ? 'bg-pink-600 shadow-[0_0_8px_rgba(255,42,149,0.9)]' : 'bg-slate-500/80')
+            }
+            title={changes > 0 ? `${changes} שינויים בדף` : 'ללא שינויים'}
+          >
+            {changes > 0 ? changes : '✓'}
+          </span>
         )}
         {count > 0 && (
           <span
@@ -376,6 +393,7 @@ export default function ThumbnailSidebar({ onHide, headerActions }: SidebarProps
   const docs = useViewer((s) => s.docs);
   const currentPage = useViewer((s) => s.currentPage);
   const setPage = useViewer((s) => s.setPage);
+  const cmp = useCompare(useShallow((s) => ({ status: s.status, oldId: s.oldId, newId: s.newId, regions: s.regions, progress: s.progress })));
   const measurements = useViewer((s) => persistentMeasurements(s.measurements));
   const calibrations = useViewer((s) => s.calibrations);
   const queued = useFileQueue((s) => s.items);
@@ -552,6 +570,13 @@ export default function ThumbnailSidebar({ onHide, headerActions }: SidebarProps
     );
   }
 
+  const cmpChanges = (docId: string, local: number): number | null => {
+    if (cmp.status === 'idle' || (docId !== cmp.oldId && docId !== cmp.newId)) return null;
+    const n = cmp.regions[docId]?.[local]?.length ?? 0;
+    // Not compared yet (still running) → no badge.
+    if (!n && cmp.status === 'running' && local > cmp.progress.done) return null;
+    return n;
+  };
   const items = [];
   for (let i = range[0]; i <= range[1]; i++) {
     const page = i + 1;
@@ -571,6 +596,7 @@ export default function ThumbnailSidebar({ onHide, headerActions }: SidebarProps
         ready={ready}
         active={page === currentPage}
         count={counts.get(page) ?? 0}
+        changes={cmpChanges(own.doc.id, own.local)}
         calibrated={!!calibrations[page]}
         onSelect={setPage}
       />,

@@ -28,6 +28,8 @@ import { TABBAR_H } from './FileTabBar';
 import { visibleTopMenu, type TopMenuItemId } from './topMenuItems';
 import { sendToGilboa } from '../SendToGilboaButton';
 import { kindOf } from '../../core/measurementEngine';
+import { IconCompare } from '../../compare/ComparePanel';
+import { openCompareDialog, useCompare } from '../../compare/compareStore';
 
 /** Paper-plane icon for "שלח לגלבוע". */
 function IconSend() {
@@ -128,6 +130,7 @@ export function TopMenu({ onOpenFile }: { onOpenFile(file: File): void }) {
   // Saved takeoff quantities (not markup, not temporary view-mode checks): what "שלח לגלבוע" sends.
   const takeoffCount = useViewer((s) => s.measurements.reduce((n, x) => (!x.temp && TAKEOFF_KINDS.has(kindOf(x)) ? n + 1 : n), 0));
 
+  const comparing = useCompare((s) => s.status !== 'idle');
   const fileInput = useRef<HTMLInputElement>(null);
   const row = useRef<HTMLDivElement>(null);
 
@@ -178,6 +181,20 @@ export function TopMenu({ onOpenFile }: { onOpenFile(file: File): void }) {
             showLabel
             disabled={!hasDoc || saving}
             onClick={saveAsMarked}
+          />
+        );
+      case 'compare':
+        return (
+          <BarButton
+            key={id}
+            {...common}
+            testId="menu-compare"
+            label="השוואת גרסאות"
+            icon={<IconCompare />}
+            showLabel
+            active={comparing}
+            disabled={!hasDoc}
+            onClick={openCompareDialog}
           />
         );
       case 'prevPage':
