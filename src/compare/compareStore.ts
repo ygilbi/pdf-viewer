@@ -9,11 +9,13 @@ import type { ChangeKind, DiffRegion } from '../core/versionDiff';
 
 export type PageNote = 'added' | 'removed';
 /**
- * 'layers' (default, as in Autodesk Forma's 2D compare): both versions drawn one over the other, each
+ * 'yellow' (default): the new version only, its changes in yellow — added lines recoloured yellow,
+ * removed things marked with a yellow highlighter.
+ * 'layers' (as in Autodesk Forma's 2D compare): both versions drawn one over the other, each
  * in its own colour (ink in both = dark), each can be hidden, optional curtain.
  * 'marker': the page as is, with glowing boxes on the changed areas.
  */
-export type CompareMode = 'layers' | 'marker';
+export type CompareMode = 'yellow' | 'layers' | 'marker';
 
 /** Ink colours of the two versions (Forma style: one red, one blue). */
 export const VERSION_COLOR = { old: '#e0262f', new: '#1f5fe0' } as const;
@@ -84,7 +86,7 @@ export const useCompare = create<CompareState>(() => ({
   ...initialCompare,
   dialogOpen: false,
   runId: 0,
-  mode: 'layers',
+  mode: 'yellow',
   filter: { added: true, removed: true, modified: true },
   layers: { old: true, new: true },
   colors: true,

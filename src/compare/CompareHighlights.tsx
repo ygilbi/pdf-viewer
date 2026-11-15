@@ -38,7 +38,8 @@ export const CompareHighlights = memo(function CompareHighlights({ page }: { pag
   const regions = useMemo(() => (doc ? shownRegions(c, doc.id, local) : []), [c, doc, local]);
   const newLocal = role === 'new' ? local : role === 'old' ? c.pairOf[c.oldId!]?.[local] : undefined;
   const compared = !!note || (newLocal != null && !!c.diffed[newLocal]);
-  const boxes = c.mode === 'marker' || c.regionsOn;
+  // Boxes: marker mode; in the other modes only when asked ("סמן גם…"); yellow mode = new version only.
+  const boxes = c.mode === 'marker' || (c.regionsOn && (c.mode !== 'yellow' || role === 'new'));
 
   if (!doc || !size || !role || !c.visible) return null;
   const n = regions.length;

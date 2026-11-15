@@ -125,7 +125,7 @@ export function CompareDialog() {
           </button>
         </div>
         <p className="mb-3 text-xs leading-relaxed text-slate-400">
-          שתי הגרסאות יוצגו זו על זו — הקודמת באדום והחדשה בכחול (קווים זהים יוצאים כהים). אפשר להסתיר כל גרסה, לכבות צבעים ולגרור וילון. לכל דף יוצג מספר השינויים. הדפים מותאמים אוטומטית — גם אם נוספו או הוסרו דפים באמצע הסט.
+          השינויים יוצגו בצהוב על הגרסה החדשה: קו שנוסף נצבע בצהוב, ובמקום שבו משהו הוסר יופיע סימון מרקר צהוב. לכל דף יוצג מספר השינויים. (בפרטים ⚙ אפשר לעבור גם לשכבות צבע ווילון.) הדפים מותאמים אוטומטית — גם אם נוספו או הוסרו דפים באמצע הסט.
         </p>
         <label className="mb-1 block text-xs font-semibold text-slate-300">גרסה חדשה</label>
         {select(newId, setNewId, 'compare-new', oldId)}
@@ -310,6 +310,7 @@ export function CompareBar() {
           <IconX size={14} />
         </button>
       </div>
+      {mode === 'yellow' && visible && <YellowLegend compact={compact} onNew={activeId === newId} />}
       {mode === 'layers' && visible && <VersionsRow compact={compact} oldName={docs.find((d) => d.id === oldId)?.name ?? ''} newName={docs.find((d) => d.id === newId)?.name ?? ''} />}
       {panelOpen && <CompareDetails totals={totals} done={status === 'done'} />}
     </div>
@@ -382,6 +383,34 @@ function VersionsRow({ compact, oldName, newName }: { compact: boolean; oldName:
           <span className="h-3 w-3 animate-spin rounded-full border-2 border-slate-500 border-t-slate-200" aria-hidden="true" />
           {!compact && 'מחדד…'}
         </span>
+      )}
+    </div>
+  );
+}
+
+/** Yellow mode: what the colour means (and that it shows on the new version only). */
+function YellowLegend({ compact, onNew }: { compact: boolean; onNew: boolean }) {
+  const sharpening = useCompare((s) => s.sharpening);
+  return (
+    <div
+      dir="rtl"
+      data-testid="compare-yellow-legend"
+      className="flex max-w-full items-center gap-2.5 rounded-2xl border border-slate-600/70 bg-slate-900/90 px-3 py-1.5 text-xs text-slate-200 shadow-lg backdrop-blur"
+    >
+      {onNew ? (
+        <>
+          <span className="flex items-center gap-1.5 whitespace-nowrap">
+            <span className="h-[3px] w-5 rounded-full" style={{ background: 'rgb(255,196,0)' }} />
+            {compact ? 'נוסף' : 'קו צהוב = נוסף'}
+          </span>
+          <span className="flex items-center gap-1.5 whitespace-nowrap">
+            <span className="h-3 w-5 rounded-sm" style={{ background: 'rgba(255,226,0,0.5)' }} />
+            {compact ? 'הוסר' : 'סימון צהוב = הוסר'}
+          </span>
+          {sharpening && <span className="h-3 w-3 animate-spin rounded-full border-2 border-slate-500 border-t-slate-200" aria-label="מחדד" data-testid="compare-sharpening" />}
+        </>
+      ) : (
+        <span className="whitespace-nowrap text-slate-400">השינויים מוצגים על הגרסה החדשה בלבד</span>
       )}
     </div>
   );
@@ -479,6 +508,9 @@ function CompareDetails({ totals, done }: { totals: CompareTotals; done: boolean
         {done ? `סה״כ ${totals.changes} שינויים ב-${totals.pages} דפים` : 'ההשוואה עדיין רצה…'}
       </div>
       <div className="flex gap-1 rounded-lg bg-slate-800 p-0.5" role="radiogroup" aria-label="אופן הצגה">
+        <button type="button" role="radio" aria-checked={mode === 'yellow'} className={seg(mode === 'yellow')} onClick={() => useCompare.setState({ mode: 'yellow', visible: true, curtain: false })} data-testid="compare-mode-yellow">
+          שינויים בצהוב
+        </button>
         <button type="button" role="radio" aria-checked={mode === 'layers'} className={seg(mode === 'layers')} onClick={() => useCompare.setState({ mode: 'layers', visible: true })} data-testid="compare-mode-layers">
           שכבות צבע
         </button>
@@ -486,7 +518,7 @@ function CompareDetails({ totals, done }: { totals: CompareTotals; done: boolean
           סימון זוהר
         </button>
       </div>
-      {mode === 'layers' && (
+      {mode !== 'marker' && (
         <label className="mt-2 flex cursor-pointer items-center gap-2 text-xs text-slate-300">
           <input type="checkbox" checked={regionsOn} onChange={(e) => useCompare.setState({ regionsOn: e.target.checked })} className="accent-pink-500" data-testid="compare-regions-on" />
           סמן גם את אזורי השינוי במסגרת

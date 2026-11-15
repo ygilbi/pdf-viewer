@@ -35,6 +35,7 @@ import { emitSettled, emitZoom, registerViewer, takePendingFocus } from './viewe
 import { TextHighlights } from './text/TextHighlights';
 import { CompareHighlights } from '../compare/CompareHighlights';
 import { FormaLayers } from '../compare/FormaLayers';
+import { YellowChanges } from '../compare/YellowChanges';
 import { MarkupEditor, NoteBubbles, TextEditEditor } from './viewer/MarkupHtml';
 import { SignatureDialog } from './doc/SignatureDialog';
 import { useDocEdit } from '../state/docEditStore';
@@ -1832,6 +1833,7 @@ export default function ViewerCanvas() {
         )}
         {size && <TextHighlights page={currentPage} />}
         {size && <FormaLayers page={currentPage} />}
+        {size && <YellowChanges page={currentPage} />}
         {size && <CompareHighlights page={currentPage} />}
         {size && <NoteBubbles notes={pageNotes} selectedId={selectedId} editingId={editingId} />}
         {editing && <MarkupEditor key={editing.id} m={editing} />}

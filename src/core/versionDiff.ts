@@ -462,3 +462,123 @@ export function matchPages(oldFp: Uint8Array[], newFp: Uint8Array[], gap = 0.3):
   }
   return { pairs: pairs.reverse(), added: added.reverse(), removed: removed.reverse() };
 }
+
+// ---------------------------------------------------------------------------
+// Yellow change overlay (changes only, on the new version)
+// ---------------------------------------------------------------------------
+
+/** Yellow of the change overlay. */
+export const CHANGE_YELLOW: readonly [number, number, number] = [255, 196, 0];
+
+export interface YellowOptions {
+  /** Residual alignment searched (px of these images); 0 = none. */
+  maxShift?: number;
+  /** Radius (px) of the highlighter swath over removed ink. */
+  markRadius?: number;
+  /** Alpha (0..255) of the removed-area highlighter. */
+  markAlpha?: number;
+  threshold?: number;
+}
+
+export interface YellowOverlay {
+  /** w×h RGBA: transparent except added ink (opaque yellow) and removed areas (translucent yellow). */
+  rgba: Uint8ClampedArray;
+  addedPixels: number;
+  removedPixels: number;
+  shift: { dx: number; dy: number };
+}
+
+/** Drops isolated pixels (fewer than 2 set pixels in the 3×3 block around them, itself included). */
+function despeckle(m: Uint8Array, w: number, h: number): void {
+  const keep = new Uint8Array(m.length);
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const i = y * w + x;
+      if (!m[i]) continue;
+      let n = 0;
+      for (let yy = Math.max(0, y - 1); yy <= Math.min(h - 1, y + 1) && n < 2; yy++)
+        for (let xx = Math.max(0, x - 1); xx <= Math.min(w - 1, x + 1); xx++) if (m[yy * w + xx]) n++;
+      if (n >= 2) keep[i] = 1;
+    }
+  }
+  m.set(keep);
+}
+
+/** Square dilation by `r` (separable running window, O(w·h)). */
+export function dilate(m: Uint8Array, w: number, h: number, r: number): Uint8Array {
+  if (r <= 0) return m.slice();
+  const tmp = new Uint8Array(m.length);
+  for (let y = 0; y < h; y++) {
+    const row = y * w;
+    let count = 0;
+    for (let x = 0; x < Math.min(w, r); x++) count += m[row + x];
+    for (let x = 0; x < w; x++) {
+      if (x + r < w) count += m[row + x + r];
+      if (x - r - 1 >= 0) count -= m[row + x - r - 1];
+      tmp[row + x] = count > 0 ? 1 : 0;
+    }
+  }
+  const out = new Uint8Array(m.length);
+  for (let x = 0; x < w; x++) {
+    let count = 0;
+    for (let y = 0; y < Math.min(h, r); y++) count += tmp[y * w + x];
+    for (let y = 0; y < h; y++) {
+      if (y + r < h) count += tmp[(y + r) * w + x];
+      if (y - r - 1 >= 0) count -= tmp[(y - r - 1) * w + x];
+      out[y * w + x] = count > 0 ? 1 : 0;
+    }
+  }
+  return out;
+}
+
+/**
+ * Changes of the new version vs the old one, as an overlay for the new page: ink that is new
+ * becomes yellow; where ink was removed, the area gets a translucent yellow highlighter swath.
+ * Both images are the same region at the same size, already roughly aligned.
+ */
+export function yellowOverlay(oldG: Uint8Array, newG: Uint8Array, w: number, h: number, o: YellowOptions = {}): YellowOverlay {
+  const t = o.threshold ?? DEFAULTS.threshold;
+  const shift = o.maxShift ? estimateShift(oldG, newG, w, h, o.maxShift) : { dx: 0, dy: 0 };
+  const add = new Uint8Array(w * h);
+  unmatched(newG, oldG, w, h, shift.dx, shift.dy, t, add);
+  const remOld = new Uint8Array(w * h);
+  unmatched(oldG, newG, w, h, -shift.dx, -shift.dy, t, remOld);
+  // Removed ink, in new-page coordinates.
+  const rem = new Uint8Array(w * h);
+  for (let y = 0; y < h; y++) {
+    const ny = y - shift.dy;
+    if (ny < 0 || ny >= h) continue;
+    for (let x = 0; x < w; x++) {
+      if (!remOld[y * w + x]) continue;
+      const nx = x - shift.dx;
+      if (nx >= 0 && nx < w) rem[ny * w + nx] = 1;
+    }
+  }
+  despeckle(add, w, h);
+  despeckle(rem, w, h);
+  let addedPixels = 0;
+  let removedPixels = 0;
+  for (let i = 0; i < add.length; i++) {
+    addedPixels += add[i];
+    removedPixels += rem[i];
+  }
+  const addShown = dilate(add, w, h, 1);
+  const remShown = dilate(rem, w, h, o.markRadius ?? 4);
+  const rgba = new Uint8ClampedArray(w * h * 4);
+  const [r, g, b] = CHANGE_YELLOW;
+  const markAlpha = o.markAlpha ?? 120;
+  for (let i = 0, j = 0; i < add.length; i++, j += 4) {
+    if (addShown[i]) {
+      rgba[j] = r;
+      rgba[j + 1] = g;
+      rgba[j + 2] = b;
+      rgba[j + 3] = 255;
+    } else if (remShown[i]) {
+      rgba[j] = r;
+      rgba[j + 1] = g + 30;
+      rgba[j + 2] = b;
+      rgba[j + 3] = markAlpha;
+    }
+  }
+  return { rgba, addedPixels, removedPixels, shift };
+}

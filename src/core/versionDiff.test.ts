@@ -121,3 +121,29 @@ describe('versionDiff', () => {
     expect(pairPages(4, 2)).toEqual({ both: 2, added: [], removed: [3, 4] });
   });
 });
+
+describe('yellowOverlay (changes only, on the new version)', () => {
+  it('added ink is opaque yellow, removed ink gets a translucent swath, unchanged ink nothing', async () => {
+    const { yellowOverlay, dilate } = await import('./versionDiff');
+    const oldG = page([...BASE, [300, 50, 40, 20]]); // removed in new
+    const newG = page([...BASE, [60, 220, 50, 3]]); // added in new
+    const o = yellowOverlay(oldG, newG, W, H, { markRadius: 4 });
+    const a = (x: number, y: number) => o.rgba[(y * W + x) * 4 + 3];
+    expect(a(80, 221)).toBe(255); // added line
+    expect(a(320, 60)).toBeGreaterThan(0); // removed block area
+    expect(a(320, 60)).toBeLessThan(255);
+    expect(a(100, 10)).toBe(0); // frame in both
+    expect(a(200, 150)).toBe(0); // paper
+    expect(o.addedPixels).toBeGreaterThan(100);
+    expect(o.removedPixels).toBeGreaterThan(500);
+    // dilate
+    const m = new Uint8Array(25);
+    m[12] = 1;
+    expect([...dilate(m, 5, 5, 1)].reduce((s, v) => s + v, 0)).toBe(9);
+  });
+  it('identical pages → empty overlay', async () => {
+    const { yellowOverlay } = await import('./versionDiff');
+    const o = yellowOverlay(page(BASE), page(BASE), W, H, { maxShift: 8 });
+    expect(o.addedPixels + o.removedPixels).toBe(0);
+  });
+});

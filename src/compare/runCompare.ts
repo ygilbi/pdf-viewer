@@ -7,7 +7,7 @@
  * compare store.
  */
 import { getPdfClient } from '../core/pdfClient';
-import { diffImageSize, diffPages, fingerprint, matchPages, toGray, type DiffRegion, type PageDiff, type PagePairing } from '../core/versionDiff';
+import { diffImageSize, diffPages, fingerprint, matchPages, toGray, yellowOverlay, type DiffRegion, type PageDiff, type PagePairing, type YellowOptions, type YellowOverlay } from '../core/versionDiff';
 import type { WorkspaceDoc } from '../core/types';
 import { useViewer } from '../state/store';
 import { useCompare, initialCompare } from './compareStore';
@@ -23,18 +23,19 @@ const MATCH_PX = 160;
 let worker: Worker | null = null;
 let workerFailed = false;
 let seq = 0;
-const pending = new Map<number, { resolve(d: PageDiff): void; reject(e: Error): void }>();
+const pending = new Map<number, { resolve(d: never): void; reject(e: Error): void }>();
 
 function getWorker(): Worker | null {
   if (workerFailed) return null;
   if (worker) return worker;
   try {
     worker = new Worker(new URL('./diffWorker.ts', import.meta.url), { type: 'module', name: 'version-diff' });
-    worker.onmessage = (e: MessageEvent<{ id: number; diff?: PageDiff; error?: string }>) => {
+    worker.onmessage = (e: MessageEvent<{ id: number; diff?: PageDiff; yellow?: YellowOverlay; error?: string }>) => {
       const p = pending.get(e.data.id);
       if (!p) return;
       pending.delete(e.data.id);
-      if (e.data.diff) p.resolve(e.data.diff);
+      const r = e.data.diff ?? e.data.yellow;
+      if (r) p.resolve(r as never);
       else p.reject(new Error(e.data.error ?? 'diff failed'));
     };
     worker.onerror = () => {
@@ -57,7 +58,7 @@ async function diff(oldG: Uint8Array, newG: Uint8Array, w: number, h: number): P
     try {
       return await new Promise<PageDiff>((resolve, reject) => {
         const id = ++seq;
-        pending.set(id, { resolve, reject });
+        pending.set(id, { resolve: resolve as (d: never) => void, reject });
         const a = oldG.slice().buffer;
         const b = newG.slice().buffer;
         wk.postMessage({ id, oldG: a, newG: b, w, h }, [a, b]);
@@ -70,6 +71,26 @@ async function diff(oldG: Uint8Array, newG: Uint8Array, w: number, h: number): P
 }
 
 const abort = () => Object.assign(new Error('Aborted'), { name: 'AbortError' });
+
+/** Yellow change overlay of two aligned gray images (worker, main-thread fallback). The buffers are transferred. */
+export async function yellowInWorker(oldG: Uint8Array, newG: Uint8Array, w: number, h: number, opts: YellowOptions): Promise<YellowOverlay> {
+  const wk = getWorker();
+  if (wk) {
+    try {
+      return await new Promise<YellowOverlay>((resolve, reject) => {
+        const id = ++seq;
+        pending.set(id, { resolve: resolve as (d: never) => void, reject });
+        const a = oldG.buffer as ArrayBuffer;
+        const b = newG.buffer as ArrayBuffer;
+        wk.postMessage({ id, kind: 'yellow', oldG: a, newG: b, w, h, opts }, [a, b]);
+      });
+    } catch {
+      /* fall through */
+    }
+  }
+  if (!oldG.byteLength || !newG.byteLength) throw new Error('yellow overlay: buffers were transferred to a failed worker');
+  return yellowOverlay(oldG, newG, w, h, opts);
+}
 
 /** Renders a global page stretched to w×h and returns its gray pixels. */
 async function grayPage(globalPage: number, pageW: number, pageH: number, w: number, h: number, alive: () => boolean): Promise<Uint8Array> {

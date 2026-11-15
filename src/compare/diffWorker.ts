@@ -1,18 +1,25 @@
 /// <reference lib="webworker" />
 /**
- * Version-compare worker: runs the pixel diff (core/versionDiff) off the main thread.
- * Request:  { id, oldG, newG, w, h, withOverlay? }  (gray buffers, transferred)
- * Response: { id, diff } | { id, error }   (diff.overlay transferred back)
+ * Version-compare worker: runs the pixel work (core/versionDiff) off the main thread.
+ * Diff:    { id, oldG, newG, w, h }                      → { id, diff }
+ * Yellow:  { id, kind: 'yellow', oldG, newG, w, h, opts } → { id, yellow }  (rgba transferred)
+ * Errors:  { id, error }
  */
-import { diffPages } from '../core/versionDiff';
+import { diffPages, yellowOverlay, type YellowOptions } from '../core/versionDiff';
 
-self.onmessage = (e: MessageEvent<{ id: number; oldG: ArrayBuffer; newG: ArrayBuffer; w: number; h: number; withOverlay?: boolean }>) => {
-  const { id, oldG, newG, w, h, withOverlay } = e.data;
+type Req = { id: number; kind?: 'diff' | 'yellow'; oldG: ArrayBuffer; newG: ArrayBuffer; w: number; h: number; opts?: YellowOptions };
+
+self.onmessage = (e: MessageEvent<Req>) => {
+  const { id, kind, oldG, newG, w, h, opts } = e.data;
+  const post = (msg: unknown, transfer: Transferable[] = []) => (self as unknown as Worker).postMessage(msg, transfer);
   try {
-    const diff = diffPages(new Uint8Array(oldG), new Uint8Array(newG), w, h, { withOverlay });
-    const transfer = diff.overlay ? [diff.overlay.buffer as ArrayBuffer] : [];
-    (self as unknown as Worker).postMessage({ id, diff }, transfer);
+    if (kind === 'yellow') {
+      const yellow = yellowOverlay(new Uint8Array(oldG), new Uint8Array(newG), w, h, opts);
+      post({ id, yellow }, [yellow.rgba.buffer as ArrayBuffer]);
+    } else {
+      post({ id, diff: diffPages(new Uint8Array(oldG), new Uint8Array(newG), w, h) });
+    }
   } catch (err) {
-    (self as unknown as Worker).postMessage({ id, error: err instanceof Error ? err.message : String(err) });
+    post({ id, error: err instanceof Error ? err.message : String(err) });
   }
 };
