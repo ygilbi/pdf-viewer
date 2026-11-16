@@ -18,7 +18,6 @@ export type TopMenuItemId =
   | 'fit'
   | 'search'
   | 'export'
-  | 'gilboa'
   | 'category'
   | 'thumbs'
   | 'items'
@@ -40,7 +39,7 @@ export const TOP_MENU_GROUPS: readonly TopMenuGroup[] = [
   { id: 'pages', label: 'דפים', items: ['prevPage', 'page', 'nextPage'] },
   { id: 'zoom', label: 'זום', items: ['zoomOut', 'zoomLevel', 'zoomIn', 'fit'] },
   { id: 'search', label: 'חיפוש', items: ['search'] },
-  { id: 'export', label: 'ייצוא', items: ['export', 'gilboa'] },
+  { id: 'export', label: 'ייצוא', items: ['export'] },
   // Category of NEW measurements: no other control sets it, so it stays here — edit mode only.
   { id: 'category', label: 'קטגוריה', items: ['category'] },
   { id: 'view', label: 'תצוגה', items: ['thumbs', 'items', 'fullscreen'] },
@@ -56,7 +55,7 @@ export interface TopMenuContext {
 }
 
 /** Edit-mode-only entries: the items table panel and the category of new measurements. */
-const EDIT_ONLY: ReadonlySet<TopMenuItemId> = new Set(['items', 'category', 'gilboa']);
+const EDIT_ONLY: ReadonlySet<TopMenuItemId> = new Set(['items', 'category']);
 
 export function isTopMenuItemVisible(id: TopMenuItemId, ctx: TopMenuContext): boolean {
   // Same rule as the M key / the drawer (state/editMode): the items table is an edit-mode panel.
