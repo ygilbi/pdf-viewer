@@ -13,6 +13,8 @@ import { persistentMeasurements } from '../core/tempMeasurements';
 import { buildGilboaPayload, type GilboaPayload } from '../core/gilboaExport';
 import { ALOO_KIND_LABEL, buildAlooTsv, copyText } from '../core/alooClipboard';
 import { sendToAloo } from './SendToGilboaButton';
+import { useFileQueue } from '../state/fileQueue';
+import { getDesktop } from '../desktop/bridge';
 
 const KIND_OPTIONS: { id: CsvOptions['kinds'][number]; label: string }[] = [
   { id: 'area', label: 'שטחים' },
@@ -27,8 +29,6 @@ const PDF_CONTENT: { id: keyof PdfContentOptions; label: string; hint?: string }
   { id: 'markup', label: 'סימונים והערות', hint: 'מלבן, ענן, חץ, עט, מרקר, טקסט, נעצי הערה' },
   { id: 'items', label: 'טבלת פריטים', hint: 'שם פריט · קטגוריה · מערכת · גודל · כמות · מידע נוסף, עם סה״כ לכל קטגוריה' },
   { id: 'summary', label: 'טבלאות סיכום כמויות', hint: 'לפי עמוד ולפי קטגוריה, סה״כ, רשימת הערות' },
-  { id: 'calibration', label: 'קו כיול' },
-  { id: 'legend', label: 'מקרא קטגוריות' },
 ];
 
 type Dest = ExportFormat | 'aloo';
@@ -127,27 +127,37 @@ const linkBtn = 'rounded px-1.5 py-0.5 text-xs text-sky-300 hover:bg-slate-700 h
 const chipBtn =
   'rounded-full border border-slate-600 px-2.5 py-1 text-xs text-slate-200 hover:border-sky-500 hover:bg-slate-700 disabled:opacity-40';
 
-/** Export dialog (PDF / CSV): which pages / files, which content, one output file. */
 /**
- * "פתח" after an export: a PDF opens in a new tab (the browser's / desktop app's PDF viewer); Excel / CSV
- * can't be shown in a browser, so they are handed to the system again (download → opens in Excel; on
- * iPhone the system preview).
+ * "פתח" after an export. A PDF opens right here, as a new tab of the viewer (a new browser window is
+ * blocked in the desktop app and in installed PWAs, where it turned into a second download). Excel /
+ * CSV open with their Windows program in the desktop app (newer installers); a browser can only hand
+ * them over as a download.
  */
-function openExportedFile(blob: Blob, name: string): void {
-  const url = URL.createObjectURL(blob);
+async function openExportedFile(blob: Blob, name: string): Promise<'app' | 'system' | 'download'> {
   const isPdf = blob.type === 'application/pdf' || /\.pdf$/i.test(name);
-  let opened: Window | null = null;
-  if (isPdf) opened = window.open(url, '_blank');
-  if (!opened) {
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = name;
-    a.rel = 'noopener';
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
+  if (isPdf) {
+    useFileQueue.getState().addFiles([new File([blob], name, { type: 'application/pdf' })]);
+    return 'app';
   }
+  const d = getDesktop();
+  if (d?.openWithSystem) {
+    try {
+      await d.openWithSystem(name, await blob.arrayBuffer());
+      return 'system';
+    } catch (e) {
+      console.warn('[export] open with system failed, downloading', e);
+    }
+  }
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = name;
+  a.rel = 'noopener';
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
   window.setTimeout(() => URL.revokeObjectURL(url), 120_000);
+  return 'download';
 }
 
 export function ExportDialog() {
@@ -501,7 +511,6 @@ function ExportDialogBody() {
                     key={o.id}
                     checked={pdfOpts[o.id]}
                     testId={`export-pdf-${o.id}`}
-                    disabled={o.id === 'legend' && !pdfOpts.measurements && !pdfOpts.summary}
                     onChange={(v) => setPdfOpts({ ...pdfOpts, [o.id]: v })}
                   >
                     {o.label}
@@ -623,7 +632,11 @@ function ExportDialogBody() {
               {message.file && (
                 <button
                   type="button"
-                  onClick={() => openExportedFile(message.file!.blob, message.file!.name)}
+                  onClick={async () => {
+                    const how = await openExportedFile(message.file!.blob, message.file!.name);
+                    if (how === 'app') close(); // the exported PDF is now the open tab
+                  }}
+                  title={/\.pdf$/i.test(message.file.name) ? 'פותח את הקובץ בכרטיסייה חדשה' : 'פותח את הקובץ בתוכנה המתאימה'}
                   data-testid="export-open"
                   className="ms-2 inline-flex items-center gap-1 rounded bg-emerald-600 px-2.5 py-0.5 text-xs font-semibold text-white hover:bg-emerald-500"
                 >
@@ -736,7 +749,7 @@ function alooPayload(pages: Set<number>): GilboaPayload {
 }
 const alooItemsOn = (pages: Set<number>) => alooPayload(pages).measurements;
 
-const fmt = (v: number | null, unit: string) => (v == null ? '' : `${Math.round(v * 100) / 100} ${unit}`);
+const fmt = (v: number | null) => (v == null ? '' : (Math.round(v * 100) / 100).toFixed(2));
 
 /** ALOO: what will be copied (preview) and how to paste it. */
 function AlooPanel({ pages }: { pages: Set<number> }) {
@@ -745,6 +758,7 @@ function AlooPanel({ pages }: { pages: Set<number> }) {
   const items = alooItemsOn(pages);
   const byKind = items.reduce<Record<string, number>>((m, x) => ((m[x.kind] = (m[x.kind] ?? 0) + 1), m), {});
   const noSize = items.filter((x) => x.kind !== 'count' && x.areaM2 == null && x.lengthM == null).length;
+  const countNoSize = items.filter((x) => x.kind === 'count' && x.widthM == null).length;
   return (
     <>
       <Section
@@ -779,29 +793,23 @@ function AlooPanel({ pages }: { pages: Set<number> }) {
                   <tr>
                     <th className="px-2 py-1.5 text-start font-medium">סוג</th>
                     <th className="px-2 py-1.5 text-start font-medium">שם</th>
-                    <th className="px-2 py-1.5 text-start font-medium">קטגוריה</th>
-                    <th className="px-2 py-1.5 text-start font-medium">מידות / כמות</th>
+                    <th className="px-2 py-1.5 text-end font-medium">רוחב (מ׳)</th>
+                    <th className="px-2 py-1.5 text-end font-medium">גובה (מ׳)</th>
+                    <th className="px-2 py-1.5 text-end font-medium">שטח (מ״ר)</th>
+                    <th className="px-2 py-1.5 text-end font-medium">כמות</th>
                   </tr>
                 </thead>
-                <tbody>
+                <tbody className="tabular-nums">
                   {items.map((x, i) => (
-                    <tr key={i} className="border-t border-slate-700/70">
+                    <tr key={i} className="border-t border-slate-700/70" data-testid="aloo-row">
                       <td className="whitespace-nowrap px-2 py-1 text-slate-300">{ALOO_KIND_LABEL[x.kind]}</td>
-                      <td className="max-w-[9rem] truncate px-2 py-1 text-slate-100" dir="auto" title={x.label}>
+                      <td className="max-w-[8rem] truncate px-2 py-1 text-slate-100" dir="auto" title={x.category ? `${x.label} · ${x.category}` : x.label}>
                         {x.label}
                       </td>
-                      <td className="max-w-[7rem] truncate px-2 py-1 text-slate-400" dir="auto">
-                        {x.category || '—'}
-                      </td>
-                      <td className="whitespace-nowrap px-2 py-1 font-mono text-[11px] text-slate-300" dir="ltr">
-                        {x.kind === 'count'
-                          ? `× ${x.count}`
-                          : x.kind === 'length'
-                            ? fmt(x.lengthM, 'm') || '—'
-                            : x.widthM != null
-                              ? `${fmt(x.widthM, '')}× ${fmt(x.heightM, 'm')}`
-                              : '—'}
-                      </td>
+                      <td className="whitespace-nowrap px-2 py-1 text-end text-slate-200">{x.kind === 'length' ? fmt(x.lengthM) || '—' : fmt(x.widthM) || '—'}</td>
+                      <td className="whitespace-nowrap px-2 py-1 text-end text-slate-200">{fmt(x.heightM) || '—'}</td>
+                      <td className="whitespace-nowrap px-2 py-1 text-end text-slate-200">{fmt(x.areaM2) || '—'}</td>
+                      <td className="whitespace-nowrap px-2 py-1 text-end text-slate-200">{x.kind === 'count' ? x.count : 1}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -812,13 +820,18 @@ function AlooPanel({ pages }: { pages: Set<number> }) {
                 {noSize} פריטים בדפים שלא כוילו — יועתקו בלי מידות (כייל את הדף כדי לקבל מידות מדויקות).
               </p>
             )}
+            {countNoSize > 0 && (
+              <p className="text-[11px] text-amber-400" data-testid="aloo-count-nosize">
+                {countNoSize} פריטי ספירה בלי גודל — הוסף גודל (רוחב×גובה) בטבלת הפריטים כדי שיעברו עם מידות ושטח.
+              </p>
+            )}
           </>
         )}
       </Section>
       <Section step={3} title="איך מדביקים ב-ALOO">
         <ol className="flex list-decimal flex-col gap-1 ps-5 text-[13px] text-slate-300">
           <li>
-            לוחצים <b className="text-violet-200">ייצא ל-ALOO</b> — הפריטים מועתקים ללוח (עם מידות מדויקות).
+            לוחצים <b className="text-violet-200">ייצא ל-ALOO</b> — הפריטים מועתקים ללוח עם רוחב, גובה, שטח וכמות לכל פריט.
           </li>
           <li>ב-ALOO פותחים את הפרויקט ← ייבוא מדידות.</li>
           <li>

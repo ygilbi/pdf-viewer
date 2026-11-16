@@ -46,6 +46,8 @@ export interface PdfDesktopApi {
   saveAsChoose?(suggestedName: string): Promise<DesktopSaveTarget | null>;
   /** Writes the bytes to the path chosen with saveAsChoose. */
   saveAsWrite?(token: string, bytes: ArrayBuffer): Promise<void>;
+  /** Opens an exported file (xlsx / csv / pdf) with its Windows program (written to a temp folder). Optional: newer installers only. */
+  openWithSystem?(name: string, bytes: ArrayBuffer): Promise<void>;
 }
 
 export interface DesktopSaveTarget {

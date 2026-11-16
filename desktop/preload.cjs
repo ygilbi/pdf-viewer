@@ -64,6 +64,8 @@ contextBridge.exposeInMainWorld('pdfDesktop', {
       listeners.delete(cb);
     };
   },
+  /** Writes an exported file (xlsx / csv / pdf) to a temp folder and opens it with its Windows program. */
+  openWithSystem: (name, bytes) => ipcRenderer.invoke('pdf:open-with-system', String(name), bytes),
   /** Opens Settings › Apps › Default apps › PDF Viewer (Windows 10/11). */
   openDefaultAppsSettings: () => ipcRenderer.invoke('pdf:open-default-apps'),
   /** true / false from the user's .pdf UserChoice, null when unknown. */

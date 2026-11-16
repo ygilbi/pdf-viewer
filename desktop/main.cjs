@@ -482,6 +482,24 @@ ipcMain.handle('pdf:save-as-write', async (e, token, bytes) => {
   lastOpenDir = path.dirname(file);
 });
 
+/**
+ * "פתח" after an export: the file (Excel / CSV / PDF) is written to a temp folder and opened with
+ * the program Windows uses for it. Only these extensions, plain file names, bounded size.
+ */
+ipcMain.handle('pdf:open-with-system', async (e, name, bytes) => {
+  if (!fromApp(e)) throw new Error('not allowed');
+  const base = path.basename(String(name || '')).replace(/[\\/:*?"<>|\u0000-\u001f]+/g, '_').trim();
+  if (!/\.(xlsx|csv|pdf)$/i.test(base)) throw new Error('unsupported file type');
+  const u8 = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
+  if (!u8.byteLength || u8.byteLength > MAX_PDF_BYTES) throw new Error('bad file size');
+  const dir = path.join(app.getPath('temp'), 'pdf-viewer-exports', crypto.randomUUID());
+  await fs.promises.mkdir(dir, { recursive: true });
+  const file = path.join(dir, base);
+  await fs.promises.writeFile(file, u8);
+  const err = await shell.openPath(file);
+  if (err) throw new Error(err);
+});
+
 ipcMain.handle('pdf:open-default-apps', async () => {
   if (process.platform !== 'win32') return;
   await shell.openExternal(DEFAULT_APPS_URI);

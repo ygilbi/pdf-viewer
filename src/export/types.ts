@@ -26,7 +26,8 @@ export const DEFAULT_PDF_OPTIONS: PdfContentOptions = {
   drawings: true,
   measurements: true,
   markup: true,
-  calibration: true,
+  // Not offered in the export window (owner's choice): the calibration line and the category legend stay out.
+  calibration: false,
   // The owner's deliverable is "drawings with markings + the items table"; the generic quantity
   // summary stays available but is opt-in.
   items: true,

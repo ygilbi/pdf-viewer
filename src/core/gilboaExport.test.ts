@@ -33,4 +33,22 @@ describe('שלח לגלבוע', () => {
     expect(normalizeGilboaBase('http://evil.example.com')).toBeNull();
     expect(normalizeGilboaBase('')).toBeNull();
   });
+
+  it('counted items carry width, height and the area of one item (items-table size wins)', async () => {
+    const { buildGilboaPayload, parseSizeCm } = await import('./gilboaExport');
+    const pts = [{ x: 1, y: 1 }, { x: 2, y: 2 }, { x: 3, y: 3 }];
+    const p = buildGilboaPayload(
+      [
+        { id: 'c1', kind: 'count', label: 'ספירה 1', page: 1, points: pts, item: { width: 1.5, height: 1.4, code: 'W1' } } as never,
+        { id: 'c2', kind: 'count', label: 'דלת', page: 1, points: pts.slice(0, 1), sizeText: '90×210', itemName: 'D1' } as never,
+      ],
+      {},
+      [],
+      'a.pdf',
+    );
+    expect(p.measurements[0]).toMatchObject({ kind: 'count', label: 'W1', count: 3, widthM: 1.5, heightM: 1.4, areaM2: 2.1 });
+    expect(p.measurements[1]).toMatchObject({ label: 'D1', count: 1, widthM: 0.9, heightM: 2.1, areaM2: 1.89 });
+    expect(parseSizeCm('120 x 200')).toEqual({ w: 1.2, h: 2 });
+    expect(parseSizeCm('לא')).toBeNull();
+  });
 });
