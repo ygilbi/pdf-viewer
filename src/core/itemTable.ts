@@ -6,7 +6,6 @@ import {
   categoryName,
   computeNetAreas,
   formatDetails,
-  formatItemDims,
   itemOf,
   kindOf,
   polylineLengthMeters,
@@ -15,11 +14,12 @@ import {
 
 /**
  * טבלת פריטים — the owner's summary table: one row per item, grouped by category with a subtotal
- * per category. Columns (in this order): שם פריט · קטגוריה · מערכת · גודל · כמות · מ״ר · מידע נוסף.
+ * per category. Columns (in this order): שם פריט · קטגוריה · מערכת · רוחב · גובה · מ״ר · כמות · מידע נוסף.
+ * רוחב / גובה = one item's size in centimetres (a count group's item size, an area's bounding box).
  * מ״ר = the row's total area: a counted item's n × width × height, an area's net m² (lengths: none).
  * Every column except the category is free text; an empty field shows the automatic value.
  */
-export const ITEM_COLUMNS = ['שם פריט', 'קטגוריה', 'מערכת', 'גודל', 'כמות', 'מ״ר', 'מידע נוסף'] as const;
+export const ITEM_COLUMNS = ['שם פריט', 'קטגוריה', 'מערכת', 'רוחב (ס״מ)', 'גובה (ס״מ)', 'מ״ר', 'כמות', 'מידע נוסף'] as const;
 
 export type ItemUnit = 'יח׳' | 'מ״ר' | 'מ׳';
 
@@ -31,7 +31,12 @@ export interface ItemRow {
   categoryKey: string;
   categoryName: string;
   system: string;
-  size: string;
+  /** Width / height of one item, display text in cm (user text or automatic). */
+  width: string;
+  height: string;
+  /** The same in metres when numeric (null = unknown / free text). */
+  widthM: number | null;
+  heightM: number | null;
   /** Number used for subtotals (null = not measurable, e.g. uncalibrated page). */
   qty: number | null;
   unit: ItemUnit;
@@ -41,7 +46,7 @@ export interface ItemRow {
   m2: number | null;
   extra: string;
   /** Which cells hold user text (vs automatic values) — the editor shows automatic ones as hints. */
-  custom: { name: boolean; size: boolean; qty: boolean; extra: boolean };
+  custom: { name: boolean; width: boolean; height: boolean; qty: boolean; extra: boolean };
 }
 
 export interface ItemSubtotal {
@@ -85,8 +90,43 @@ export function parseQty(text: string): number | null {
   return Number.isFinite(v) ? v : null;
 }
 
+/** cm number → display text ("150", "92.5"). */
+const cmText = (meters: number) => String(Math.round(meters * 1000) / 10);
+
+/**
+ * The width / height the user typed for an item (cm text), or ''. Older saves have one "גודל"
+ * cell (sizeText "120×200"): it is split into the two values.
+ */
+export function itemSizeText(m: Pick<AreaMeasurement, 'widthText' | 'heightText' | 'sizeText'>): { w: string; h: string } {
+  const w = trim(m.widthText);
+  const h = trim(m.heightText);
+  if (w || h) return { w, h };
+  const legacy = trim(m.sizeText);
+  const x = /(\d+(?:[.,]\d+)?)\s*[x×X*]\s*(\d+(?:[.,]\d+)?)/.exec(legacy);
+  if (x) return { w: x[1], h: x[2] };
+  return { w: legacy, h: '' };
+}
+
+/** cm text → metres (null when not a positive number). */
+const cmToM = (t: string): number | null => {
+  const v = t ? parseQty(t) : null;
+  return v != null && v > 0 ? v / 100 : null;
+};
+
+/** Bounding box of a polygon in metres. */
+function bboxM(m: AreaMeasurement, ppm: number): { w: number; h: number } | null {
+  let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+  for (const p of m.points) {
+    x0 = Math.min(x0, p.x);
+    y0 = Math.min(y0, p.y);
+    x1 = Math.max(x1, p.x);
+    y1 = Math.max(y1, p.y);
+  }
+  return Number.isFinite(x0) ? { w: (x1 - x0) / ppm, h: (y1 - y0) / ppm } : null;
+}
+
 /** Bounding box of a polygon in CENTIMETRES (the size column is always cm): "400×940". */
-function bboxSize(m: AreaMeasurement, ppm: number): string {
+export function bboxSize(m: AreaMeasurement, ppm: number): string {
   let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
   for (const p of m.points) {
     x0 = Math.min(x0, p.x);
@@ -137,20 +177,24 @@ export function buildItemTable(
 
     let autoQty: number | null;
     let unit: ItemUnit;
-    let autoSize = '';
-    let extraM2 = 0; // counted items with measured dims also add their total area to the subtotal
+    let autoW: number | null = null; // metres
+    let autoH: number | null = null;
     if (kind === 'count') {
       autoQty = m.points.length;
       unit = 'יח׳';
       if (it) {
-        autoSize = `${formatItemDims(it, false)} (${fix2(it.width * it.height)} מ״ר)`;
-        extraM2 = it.width * it.height * m.points.length;
+        autoW = it.width;
+        autoH = it.height;
       }
     } else if (kind === 'area') {
       unit = 'מ״ר';
       const net = nets.get(m.id);
       autoQty = net ? Math.round(net.netM2 * 100) / 100 : null;
-      if (ppm) autoSize = bboxSize(m, ppm);
+      const bb = ppm ? bboxM(m, ppm) : null;
+      if (bb) {
+        autoW = bb.w;
+        autoH = bb.h;
+      }
     } else {
       unit = 'מ׳';
       autoQty = ppm ? Math.round(polylineLengthMeters(m.points, ppm) * 100) / 100 : null;
@@ -163,7 +207,11 @@ export function buildItemTable(
 
     const key = categoryKey(m);
     const userName = trim(m.itemName);
-    const userSize = trim(m.sizeText);
+    const typed = itemSizeText(m);
+    const widthM = typed.w ? cmToM(typed.w) : autoW;
+    const heightM = typed.h ? cmToM(typed.h) : autoH;
+    // A counted item with a size also adds its total area (n × w × h) to the m² column / subtotals.
+    const extraM2 = kind === 'count' && widthM && heightM ? widthM * heightM * m.points.length : 0;
     const userExtra = trim(m.extra);
     const row: ItemRow = {
       id: m.id,
@@ -173,13 +221,17 @@ export function buildItemTable(
       categoryKey: key,
       categoryName: key ? categoryName(key, categories) : UNCATEGORIZED_LABEL,
       system: trim(m.system),
-      size: userSize || autoSize,
+      // Automatic: an item's schedule size to 0.1 cm, a measured area's bounding box to whole cm.
+      width: typed.w || (autoW != null ? (kind === 'area' ? String(Math.round(autoW * 100)) : cmText(autoW)) : ''),
+      height: typed.h || (autoH != null ? (kind === 'area' ? String(Math.round(autoH * 100)) : cmText(autoH)) : ''),
+      widthM,
+      heightM,
       qty,
       unit,
       qtyText,
       m2: kind === 'count' ? (extraM2 ? extraM2 : null) : kind === 'area' ? qty : null,
       extra: userExtra || formatDetails(m),
-      custom: { name: !!userName, size: !!userSize, qty: !!userQty, extra: !!userExtra },
+      custom: { name: !!userName, width: !!typed.w, height: !!typed.h, qty: !!userQty, extra: !!userExtra },
     };
 
     let g = groups.get(key);
@@ -213,9 +265,9 @@ export function buildItemTable(
 export function itemTableRows(t: ItemTable): string[][] {
   const out: string[][] = [[...ITEM_COLUMNS]];
   for (const g of t.groups) {
-    for (const r of g.rows) out.push([r.name, r.categoryName, r.system, r.size, r.qtyText, formatM2(r.m2), r.extra]);
-    out.push([`סה״כ ${g.name}`, g.name, '', '', formatQtySubtotal(g.subtotal), formatM2(g.subtotal.m2), '']);
+    for (const r of g.rows) out.push([r.name, r.categoryName, r.system, r.width, r.height, formatM2(r.m2), r.qtyText, r.extra]);
+    out.push([`סה״כ ${g.name}`, g.name, '', '', '', formatM2(g.subtotal.m2), formatQtySubtotal(g.subtotal), '']);
   }
-  if (t.groups.length > 1) out.push(['סה״כ כללי', '', '', '', formatQtySubtotal(t.total), formatM2(t.total.m2), '']);
+  if (t.groups.length > 1) out.push(['סה״כ כללי', '', '', '', '', formatM2(t.total.m2), formatQtySubtotal(t.total), '']);
   return out;
 }

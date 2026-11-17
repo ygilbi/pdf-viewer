@@ -262,7 +262,7 @@ export function writeSummary(
 
 /**
  * טבלת פריטים — the owner's items table on its own A4 page(s): columns (right to left) שם פריט ·
- * קטגוריה · מערכת · גודל · כמות · מידע נוסף; each category's rows followed by a bold, tinted
+ * קטגוריה · מערכת · רוחב · גובה · מ״ר · כמות · מידע נוסף; each category's rows followed by a bold, tinted
  * subtotal row; a grand total when there is more than one category.
  */
 export function writeItems(doc: PDFDocument, fonts: FontPair, input: PdfBuildInput, table: ItemTable) {
@@ -278,15 +278,16 @@ export function writeItems(doc: PDFDocument, fonts: FontPair, input: PdfBuildInp
     return;
   }
 
-  const [cName, cCat, cSys, cSize, cQty, cM2, cExtra] = ITEM_COLUMNS;
+  const [cName, cCat, cSys, cW, cH, cM2, cQty, cExtra] = ITEM_COLUMNS;
   const cols: Col[] = [
-    { title: cName, width: 104 },
-    { title: cCat, width: 68 },
-    { title: cSys, width: 80 },
-    { title: cSize, width: 70, align: 'center', wrap: true, ltr: true },
-    { title: cQty, width: 52, align: 'center', wrap: true, ltr: true },
+    { title: cName, width: 100 },
+    { title: cCat, width: 64 },
+    { title: cSys, width: 74 },
+    { title: cW, width: 44, align: 'center', wrap: true, ltr: true },
+    { title: cH, width: 44, align: 'center', wrap: true, ltr: true },
     { title: cM2, width: 46, align: 'center', ltr: true },
-    { title: cExtra, width: W - 2 * M - 420 },
+    { title: cQty, width: 52, align: 'center', wrap: true, ltr: true },
+    { title: cExtra, width: W - 2 * M - 424 },
   ];
   const rows: Cell[][] = [];
   const kind: ('row' | 'sub' | 'grand')[] = [];
@@ -294,14 +295,14 @@ export function writeItems(doc: PDFDocument, fonts: FontPair, input: PdfBuildInp
   for (const g of table.groups) {
     const swatch = g.color ?? '#94a3b8';
     g.rows.forEach((r) => {
-      rows.push([{ t: r.name }, { t: r.categoryName, swatch }, { t: r.system }, { t: r.size }, { t: r.qtyText }, { t: formatM2(r.m2) }, { t: r.extra }]);
+      rows.push([{ t: r.name }, { t: r.categoryName, swatch }, { t: r.system }, { t: r.width }, { t: r.height }, { t: formatM2(r.m2) }, { t: r.qtyText }, { t: r.extra }]);
       kind.push('row');
     });
-    rows.push([{ t: `סה״כ ${g.name}`, bold: true }, { t: '' }, { t: '' }, { t: '' }, { t: lines(formatQtySubtotal(g.subtotal)), bold: true }, { t: formatM2(g.subtotal.m2), bold: true }, { t: '' }]);
+    rows.push([{ t: `סה״כ ${g.name}`, bold: true }, { t: '' }, { t: '' }, { t: '' }, { t: '' }, { t: formatM2(g.subtotal.m2), bold: true }, { t: lines(formatQtySubtotal(g.subtotal)), bold: true }, { t: '' }]);
     kind.push('sub');
   }
   if (table.groups.length > 1) {
-    rows.push([{ t: 'סה״כ כללי', bold: true }, { t: '' }, { t: '' }, { t: '' }, { t: lines(formatQtySubtotal(table.total)), bold: true }, { t: formatM2(table.total.m2), bold: true }, { t: '' }]);
+    rows.push([{ t: 'סה״כ כללי', bold: true }, { t: '' }, { t: '' }, { t: '' }, { t: '' }, { t: formatM2(table.total.m2), bold: true }, { t: lines(formatQtySubtotal(table.total)), bold: true }, { t: '' }]);
     kind.push('grand');
   }
   let zebra = 0;

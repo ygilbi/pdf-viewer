@@ -1,4 +1,5 @@
 import type { AreaMeasurement, Calibration, Category } from './types';
+import { itemSizeText } from './itemTable';
 import { categoryKey, categoryName, itemOf, kindOf, polygonAreaM2, polygonPerimeterMeters, polylineLengthMeters } from './measurementEngine';
 
 /**
@@ -88,7 +89,8 @@ export function buildGilboaPayload(
         out.areaM2 = r3(it.width * it.height);
       }
       // A size typed in the items table wins (it is what the estimator decided).
-      const typed = parseSizeCm(m.sizeText);
+      const t = itemSizeText(m);
+      const typed = parseSizeCm(t.w && t.h ? `${t.w}×${t.h}` : m.sizeText);
       if (typed && (kind === 'count' || kind === 'deduct' || kind === 'area')) {
         out.widthM = r3(typed.w);
         out.heightM = r3(typed.h);

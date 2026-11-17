@@ -346,9 +346,8 @@ describe('items table export', () => {
     };
     const out = await buildExportPdf(input);
     const doc = await PDFDocument.load(out);
-    // 1 drawing page + 3 items pages (42 rows + subtotals + total; counted items' sizes carry their unit
-    // area and their category subtotals an m² part too, so the rows are taller)
-    expect(doc.getPageCount()).toBe(4);
+    // 1 drawing page + 2 items pages (42 rows + subtotals + total; width / height are separate columns)
+    expect(doc.getPageCount()).toBe(3);
     expect(doc.getPage(1).getSize()).toEqual({ width: 595.28, height: 841.89 });
     const pd = await (await pdfjs()).getDocument({ data: out }).promise;
     const pageText = async (n: number) => (await (await pd.getPage(n)).getTextContent()).items.map((i: { str: string }) => i.str).join(' ');
@@ -356,23 +355,21 @@ describe('items table export', () => {
     const has = (text: string, logical: string) => text.includes(logical);
     const p2 = await pageText(2);
     const p3 = await pageText(3);
-    const p4 = await pageText(4);
-    for (const h of [...ITEM_COLUMNS, 'טבלת פריטים']) expect(has(p2, h)).toBe(true);
-    expect(has(p3, 'שם פריט') && has(p4, 'שם פריט')).toBe(true); // header repeated on the continuation pages
-    const all = p2 + p3 + p4;
+    for (const h of [...ITEM_COLUMNS.map((c) => c.replace(/ \(.*\)$/, '')), 'טבלת פריטים']) expect(has(p2, h)).toBe(true);
+    expect(has(p3, 'שם פריט')).toBe(true); // header repeated on the continuation page
+    const all = p2 + p3;
     expect(has(all, 'סה״כ דלתות')).toBe(true);
     expect(has(all, 'סה״כ כללי')).toBe(true);
     expect(has(all, 'CW-1') && has(all, 'קיר מסך סטיק')).toBe(true);
-    expect(has(p2, '120×150')).toBe(true); // dimensions stay width×height
-    expect(has(p2, '1.80')).toBe(true); // + the unit area (1.2 × 1.5 m²)
+    expect(has(p2, '120') && has(p2, '150')).toBe(true); // width and height in their own columns (cm)
     expect(all).toContain('…'); // the long note is truncated
     await pd.destroy();
 
     // Items + generic summary: items first.
     const both = await buildExportPdf({ ...input, options: { ...input.options, summary: true } });
     const pd2 = await (await pdfjs()).getDocument({ data: both }).promise;
-    expect(pd2.numPages).toBe(5);
-    const last = (await (await pd2.getPage(5)).getTextContent()).items.map((i: { str: string }) => i.str).join(' ');
+    expect(pd2.numPages).toBe(4);
+    const last = (await (await pd2.getPage(4)).getTextContent()).items.map((i: { str: string }) => i.str).join(' ');
     expect(has(last, 'סיכום כמויות')).toBe(true);
     await pd2.destroy();
   });
@@ -402,10 +399,10 @@ describe('items table export', () => {
     const lines = onlyItems.slice(1).trim().split('\r\n');
     expect(lines[0]).toBe(ITEM_COLUMNS.join(','));
     // m² column = the curtain wall (73.67) + the counted windows / doors' area: 13 × 1.2×1.5 = 23.40
-    expect(lines).toContain('סה״כ כללי,,,,13 יח׳ · 10.00 מ׳,97.07,');
+    expect(lines).toContain('סה״כ כללי,,,,,97.07,13 יח׳ · 10.00 מ׳,');
     expect(lines.some((l) => l.startsWith('סה״כ דלתות,'))).toBe(true);
     // the curtain wall's net area: 300×200 px ≈ 10.58×7.06 m = 74.67 m² minus the 1 m² opening
-    expect(lines.find((l) => l.startsWith('קיר מסך CW-1'))).toBe('קיר מסך CW-1,קיר מסך,קיר מסך סטיק,1058×706,73.67 מ״ר,73.67,');
+    expect(lines.find((l) => l.startsWith('קיר מסך CW-1'))).toBe('קיר מסך CW-1,קיר מסך,קיר מסך סטיק,1058,706,73.67,73.67 מ״ר,');
     // kind / category filters select items; deductions still apply
     const cwOnly = buildExportCsv(all, { 1: cal }, DEFAULT_CATEGORIES, [1], {
       ...DEFAULT_CSV_OPTIONS, items: true, rows: false, categoryTotals: false, totals: false, notes: false, kinds: ['area'],

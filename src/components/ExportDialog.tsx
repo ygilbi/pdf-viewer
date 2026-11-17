@@ -27,7 +27,7 @@ const PDF_CONTENT: { id: keyof PdfContentOptions; label: string; hint?: string }
   { id: 'drawings', label: 'דפי השרטוט', hint: 'התוכן המקורי (וקטורי, ללא המרה לתמונה)' },
   { id: 'measurements', label: 'מדידות על הדף', hint: 'שטחים, ניכויים, אורכים, ספירות ותוויות' },
   { id: 'markup', label: 'סימונים והערות', hint: 'מלבן, ענן, חץ, עט, מרקר, טקסט, נעצי הערה' },
-  { id: 'items', label: 'טבלת פריטים', hint: 'שם פריט · קטגוריה · מערכת · גודל · כמות · מידע נוסף, עם סה״כ לכל קטגוריה' },
+  { id: 'items', label: 'טבלת פריטים', hint: 'שם פריט · קטגוריה · מערכת · רוחב · גובה · מ״ר · כמות · מידע נוסף, עם סה״כ לכל קטגוריה' },
   { id: 'summary', label: 'טבלאות סיכום כמויות', hint: 'לפי עמוד ולפי קטגוריה, סה״כ, רשימת הערות' },
 ];
 
@@ -725,7 +725,7 @@ function XlsxSummary({ pages }: { pages: Set<number> }) {
     <Section title="תוכן קובץ ה־Excel">
       <ul className="flex list-disc flex-col gap-1.5 ps-5 text-sm text-slate-300">
         <li>
-          <b className="text-slate-100">טבלת פריטים</b> — שם פריט, קטגוריה, מערכת, גודל, כמות ויחידה, מידע נוסף; סה״כ לכל קטגוריה וסה״כ כללי
+          <b className="text-slate-100">טבלת פריטים</b> — שם פריט, קטגוריה, מערכת, רוחב, גובה, מ״ר, כמות ויחידה, מידע נוסף; סה״כ לכל קטגוריה וסה״כ כללי
         </li>
         <li>
           <b className="text-slate-100">מדידות</b> — כל המדידות (כמו ה־CSV) כולל מידות פריטים
@@ -822,7 +822,7 @@ function AlooPanel({ pages }: { pages: Set<number> }) {
             )}
             {countNoSize > 0 && (
               <p className="text-[11px] text-amber-400" data-testid="aloo-count-nosize">
-                {countNoSize} פריטי ספירה בלי גודל — הוסף גודל (רוחב×גובה) בטבלת הפריטים כדי שיעברו עם מידות ושטח.
+                {countNoSize} פריטי ספירה בלי רוחב וגובה — הוסף אותם בטבלת הפריטים כדי שיעברו עם מידות ושטח.
               </p>
             )}
           </>

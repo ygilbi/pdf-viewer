@@ -195,7 +195,11 @@ export interface AreaMeasurement {
   temp?: boolean;
   itemName?: string;
   system?: string;
+  /** Legacy single "גודל" cell ("120×200", cm) — read through itemTable.itemSizeCm; new edits use widthText / heightText. */
   sizeText?: string;
+  /** Items table: width / height typed by the user (centimetres, free text; empty = automatic). */
+  widthText?: string;
+  heightText?: string;
   qtyText?: string;
   extra?: string;
   /**

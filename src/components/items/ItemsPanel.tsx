@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { useViewer } from '../../state/store';
-import { buildItemTable, formatM2, formatQtySubtotal, isItem, type ItemRow, type ItemSubtotal } from '../../core/itemTable';
+import { buildItemTable, formatM2, formatQtySubtotal, isItem, itemSizeText, type ItemRow, type ItemSubtotal } from '../../core/itemTable';
 import { KIND_LABELS, kindOf, takeoffOnly } from '../../core/measurementEngine';
 import { MeasurementCategorySelect } from '../CategorySelect';
 import { startNewCountItem } from '../shell/CountFinishButton';
@@ -8,7 +8,7 @@ import { openExportDialog } from '../../export/exportUi';
 import type { AreaMeasurement } from '../../core/types';
 import { persistentMeasurements } from '../../core/tempMeasurements';
 
-type TextField = 'itemName' | 'system' | 'sizeText' | 'qtyText' | 'extra';
+type TextField = 'itemName' | 'system' | 'widthText' | 'heightText' | 'qtyText' | 'extra';
 
 function useWide(): boolean {
   const q = '(min-width: 768px)';
@@ -43,9 +43,13 @@ function Cell({
   multiline?: boolean;
   dir?: 'ltr' | 'rtl';
 }) {
+  const isDim = field === 'widthText' || field === 'heightText';
   const stored = useViewer((s) => {
     const x = s.measurements.find((y) => y.id === m);
-    return (x?.[field] as string | undefined) ?? '';
+    if (!x) return '';
+    // Width / height also read an older single "גודל" value ("120×200").
+    if (isDim) return itemSizeText(x)[field === 'widthText' ? 'w' : 'h'];
+    return (x[field] as string | undefined) ?? '';
   });
   const common = {
     value: stored,
@@ -54,13 +58,35 @@ function Cell({
     'aria-label': label,
     title: !custom && value ? `אוטומטי: ${value}` : label,
     'data-testid': `item-${field}`,
-    onChange: (e: { target: { value: string } }) => useViewer.getState().updateMeasurement(m, { [field]: e.target.value || undefined }),
+    onChange: (e: { target: { value: string } }) => {
+      const v = e.target.value || undefined;
+      const s = useViewer.getState();
+      if (!isDim) return s.updateMeasurement(m, { [field]: v });
+      // Width / height: store both (moving an older "גודל" value into the two fields).
+      const x = s.measurements.find((y) => y.id === m);
+      const cur = x ? itemSizeText(x) : { w: '', h: '' };
+      s.updateMeasurement(m, {
+        widthText: field === 'widthText' ? v : cur.w || undefined,
+        heightText: field === 'heightText' ? v : cur.h || undefined,
+        sizeText: undefined,
+      });
+    },
     onKeyDown: (e: React.KeyboardEvent) => e.stopPropagation(),
     className:
       'w-full min-w-0 rounded border border-transparent bg-slate-900/60 px-1.5 py-1 text-[13px] text-slate-100 placeholder:text-slate-500 hover:border-slate-600 focus:border-sky-500 focus:outline-none ' +
       className,
   };
   return multiline ? <textarea rows={1} {...common} style={{ resize: 'vertical' }} /> : <input type="text" {...common} />;
+}
+
+/** Small caption above a field (phone cards: a typed value hides the placeholder). */
+function Labeled({ text, children }: { text: string; children: ReactNode }) {
+  return (
+    <div className="min-w-0">
+      <div className="px-1 pb-0.5 text-[10px] font-medium text-slate-500">{text}</div>
+      {children}
+    </div>
+  );
 }
 
 /** "12 יח׳ · 45.20 מ״ר" for summary lines (quantity units, then the m² total). */
@@ -169,7 +195,7 @@ export default function ItemsPanel({ headerActions }: { onHide?: () => void; hea
           <table className="w-full border-collapse text-[13px]">
             <thead className="sticky top-0 z-10 bg-slate-900 text-[11px] text-slate-400">
               <tr>
-                {['שם פריט', 'קטגוריה', 'מערכת', 'גודל', 'כמות', 'מ״ר', 'מידע נוסף', ''].map((h, i) => (
+                {['שם פריט', 'קטגוריה', 'מערכת', 'רוחב (ס״מ)', 'גובה (ס״מ)', 'מ״ר', 'כמות', 'מידע נוסף', ''].map((h, i) => (
                   <th key={i} className="border-b border-slate-700 px-1.5 py-1 text-start font-semibold">
                     {h}
                   </th>
@@ -180,23 +206,24 @@ export default function ItemsPanel({ headerActions }: { onHide?: () => void; hea
               <tbody key={g.key} data-testid="items-group">
                 {g.rows.map((r) => (
                   <tr key={r.id} className="border-b border-slate-700/60 align-top" data-testid="items-row">
-                    <td className="w-[16%] p-1"><Cell m={r.id} field="itemName" value={r.name} custom={r.custom.name} label="שם פריט" /></td>
-                    <td className="w-[13%] p-1"><MeasurementCategorySelect id={r.id} value={r.categoryKey} /></td>
-                    <td className="w-[14%] p-1"><Cell m={r.id} field="system" value={r.system} custom={!!r.system} label="מערכת" /></td>
-                    <td className="w-[15%] p-1"><Cell m={r.id} field="sizeText" value={r.size} custom={r.custom.size} label="גודל" className="text-center" dir="ltr" /></td>
-                    <td className="w-[11%] p-1"><Cell m={r.id} field="qtyText" value={r.qtyText} custom={r.custom.qty} label="כמות" className="text-center" /></td>
+                    <td className="w-[15%] p-1"><Cell m={r.id} field="itemName" value={r.name} custom={r.custom.name} label="שם פריט" /></td>
+                    <td className="w-[12%] p-1"><MeasurementCategorySelect id={r.id} value={r.categoryKey} /></td>
+                    <td className="w-[12%] p-1"><Cell m={r.id} field="system" value={r.system} custom={!!r.system} label="מערכת" /></td>
+                    <td className="w-[8%] p-1"><Cell m={r.id} field="widthText" value={r.width} custom={r.custom.width} label="רוחב" className="text-center" dir="ltr" /></td>
+                    <td className="w-[8%] p-1"><Cell m={r.id} field="heightText" value={r.height} custom={r.custom.height} label="גובה" className="text-center" dir="ltr" /></td>
                     <td className="w-[8%] p-1 pt-2 text-center font-mono tabular-nums text-slate-300" data-testid="item-m2">{formatM2(r.m2) || '—'}</td>
+                    <td className="w-[10%] p-1"><Cell m={r.id} field="qtyText" value={r.qtyText} custom={r.custom.qty} label="כמות" className="text-center" /></td>
                     <td className="p-1"><Cell m={r.id} field="extra" value={r.extra} custom={r.custom.extra} label="מידע נוסף" multiline /></td>
                     <td className="w-px p-1"><RowActions r={r} /></td>
                   </tr>
                 ))}
                 <tr className="bg-slate-900/80 font-semibold text-sky-200" data-testid="items-subtotal">
-                  <td className="px-2 py-1.5" colSpan={4}>
+                  <td className="px-2 py-1.5" colSpan={5}>
                     <span className="me-1.5 inline-block h-2.5 w-2.5 rounded-full border border-slate-500 align-middle" style={{ background: g.color ?? 'transparent' }} />
                     סה״כ {g.name}
                   </td>
-                  <td className="px-2 py-1.5 text-center font-mono tabular-nums">{formatQtySubtotal(g.subtotal) || '—'}</td>
                   <td className="px-2 py-1.5 text-center font-mono tabular-nums" data-testid="subtotal-m2">{formatM2(g.subtotal.m2) || '—'}</td>
+                  <td className="px-2 py-1.5 text-center font-mono tabular-nums">{formatQtySubtotal(g.subtotal) || '—'}</td>
                   <td colSpan={2} />
                 </tr>
               </tbody>
@@ -212,11 +239,12 @@ export default function ItemsPanel({ headerActions }: { onHide?: () => void; hea
                       <Cell m={r.id} field="itemName" value={r.name} custom={r.custom.name} label="שם פריט" className="font-semibold" />
                       <RowActions r={r} />
                     </div>
-                    <div className="grid grid-cols-2 gap-1">
-                      <MeasurementCategorySelect id={r.id} value={r.categoryKey} />
-                      <Cell m={r.id} field="system" value={r.system} custom={!!r.system} label="מערכת" />
-                      <Cell m={r.id} field="sizeText" value={r.size} custom={r.custom.size} label="גודל" dir="ltr" />
-                      <Cell m={r.id} field="qtyText" value={r.qtyText} custom={r.custom.qty} label="כמות" />
+                    <div className="grid grid-cols-2 gap-x-1 gap-y-1.5">
+                      <Labeled text="קטגוריה"><MeasurementCategorySelect id={r.id} value={r.categoryKey} /></Labeled>
+                      <Labeled text="מערכת"><Cell m={r.id} field="system" value={r.system} custom={!!r.system} label="מערכת" /></Labeled>
+                      <Labeled text="רוחב (ס״מ)"><Cell m={r.id} field="widthText" value={r.width} custom={r.custom.width} label="רוחב (ס״מ)" dir="ltr" /></Labeled>
+                      <Labeled text="גובה (ס״מ)"><Cell m={r.id} field="heightText" value={r.height} custom={r.custom.height} label="גובה (ס״מ)" dir="ltr" /></Labeled>
+                      <Labeled text="כמות"><Cell m={r.id} field="qtyText" value={r.qtyText} custom={r.custom.qty} label="כמות" /></Labeled>
                     </div>
                     {r.m2 ? (
                       <div className="px-1 text-[12px] text-slate-400" data-testid="item-m2">
